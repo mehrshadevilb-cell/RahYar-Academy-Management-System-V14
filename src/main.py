@@ -1,8 +1,8 @@
 import asyncio
 import threading
-import uvicorn
 
 from fastapi import FastAPI
+import uvicorn
 
 from src.bot.bot import bot, dp, setup_handlers
 from src.core.config.settings import get_settings
@@ -22,7 +22,7 @@ app = FastAPI(
 async def health_check():
     return {
         "status": "running",
-        "service": "RahYar Telegram Bot"
+        "service": "RahYar Bot"
     }
 
 
@@ -40,41 +40,15 @@ async def start_bot():
 
     setup_handlers()
 
-    try:
-        await dp.start_polling(
-            bot,
-            allowed_updates=dp.resolve_used_update_types()
-        )
-
-    finally:
-        await bot.session.close()
-
-
-
-def run_bot_thread():
-
-    asyncio.run(
-        start_bot()
+    await dp.start_polling(
+        bot,
+        allowed_updates=dp.resolve_used_update_types()
     )
 
 
 
-def main():
+def run_web():
 
-    logger.info("Launching services...")
-
-
-    # Start telegram bot in background
-    bot_thread = threading.Thread(
-        target=run_bot_thread,
-        daemon=True
-    )
-
-    bot_thread.start()
-
-
-
-    # Start web server for Render
     uvicorn.run(
         app,
         host="0.0.0.0",
@@ -83,5 +57,23 @@ def main():
 
 
 
+async def main():
+
+    logger.info("Booting application...")
+
+
+    web_thread = threading.Thread(
+        target=run_web,
+        daemon=True
+    )
+
+    web_thread.start()
+
+
+    await start_bot()
+
+
+
 if __name__ == "__main__":
-    main()
+
+    asyncio.run(main())
