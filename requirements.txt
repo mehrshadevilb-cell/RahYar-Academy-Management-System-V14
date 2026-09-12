@@ -29,3 +29,5 @@ psycopg[binary]==3.2.10
 
 # Redis
 redis
+fastapi
+uvicorn
