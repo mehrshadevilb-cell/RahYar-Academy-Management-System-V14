@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String
+from sqlalchemy import DateTime, ForeignKey, BigInteger, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.database.base import Base
@@ -23,7 +23,7 @@ class Payment(Base):
     )
 
     amount: Mapped[int] = mapped_column(
-        Integer,
+        BigInteger,
     )
 
     status: Mapped[str] = mapped_column(
@@ -57,7 +57,7 @@ class Payment(Base):
     )
 
     discount_amount: Mapped[int] = mapped_column(
-        Integer,
+        BigInteger,
         default=0,
     )
 

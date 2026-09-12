@@ -65,10 +65,10 @@ def upgrade() -> None:
             """
             CREATE TABLE IF NOT EXISTS referrals (
                 id SERIAL PRIMARY KEY,
-                referrer_id INTEGER NOT NULL REFERENCES users(id),
-                referred_id INTEGER NOT NULL UNIQUE REFERENCES users(id),
+                referrer_id BigInteger NOT NULL REFERENCES users(id),
+                referred_id BigInteger NOT NULL UNIQUE REFERENCES users(id),
                 status referralstatus NOT NULL DEFAULT 'pending',
-                reward_discount_code_id INTEGER REFERENCES discount_codes(id),
+                reward_discount_code_id BigInteger REFERENCES discount_codes(id),
                 created_at TIMESTAMP NOT NULL,
                 rewarded_at TIMESTAMP
             )
@@ -84,17 +84,17 @@ def upgrade() -> None:
     else:
         op.create_table(
             "referrals",
-            sa.Column("id", sa.Integer(), primary_key=True, index=True),
+            sa.Column("id", sa.BigInteger(), primary_key=True, index=True),
             sa.Column(
                 "referrer_id",
-                sa.Integer(),
+                sa.BigInteger(),
                 sa.ForeignKey("users.id"),
                 nullable=False,
                 index=True,
             ),
             sa.Column(
                 "referred_id",
-                sa.Integer(),
+                sa.BigInteger(),
                 sa.ForeignKey("users.id"),
                 nullable=False,
                 unique=True,
@@ -107,7 +107,7 @@ def upgrade() -> None:
             ),
             sa.Column(
                 "reward_discount_code_id",
-                sa.Integer(),
+                sa.BigInteger(),
                 sa.ForeignKey("discount_codes.id"),
                 nullable=True,
             ),
