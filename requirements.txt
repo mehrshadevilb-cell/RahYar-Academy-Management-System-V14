@@ -31,3 +31,4 @@ psycopg[binary]==3.2.10
 redis
 fastapi
 uvicorn
+loguru==0.7.3
