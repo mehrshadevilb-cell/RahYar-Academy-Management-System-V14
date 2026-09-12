@@ -13,7 +13,6 @@ class UserRole(str, enum.Enum):
 
 
 class User(Base):
-
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(
