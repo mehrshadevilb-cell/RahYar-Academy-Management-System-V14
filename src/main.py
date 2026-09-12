@@ -1,68 +1,86 @@
 import asyncio
-import os
-from threading import Thread
-
-from fastapi import FastAPI
+import threading
 import uvicorn
 
-from core.logging.logger import logger
+from fastapi import FastAPI
+
+from src.bot.bot import bot, dp, setup_handlers
+from src.core.config.settings import get_settings
+from src.core.logging.logger import get_logger
+
+
+settings = get_settings()
+logger = get_logger("rahyar.main")
 
 
 app = FastAPI(
-    title="RahYar Academy Management System",
-    version="14.0"
+    title="RahYar Academy Management System"
 )
 
 
 @app.get("/")
-async def root():
+async def health_check():
     return {
         "status": "running",
-        "service": "RahYar Bot"
+        "service": "RahYar Telegram Bot"
     }
 
 
 @app.get("/health")
 async def health():
     return {
-        "status": "ok"
+        "ok": True
     }
 
-
-def run_web():
-    port = int(os.environ.get("PORT", 10000))
-
-    uvicorn.run(
-        app,
-        host="0.0.0.0",
-        port=port
-    )
 
 
 async def start_bot():
 
     logger.info("Starting RahYar Bot...")
 
-    from bot.bot import bot_start
+    setup_handlers()
 
-    await bot_start()
+    try:
+        await dp.start_polling(
+            bot,
+            allowed_updates=dp.resolve_used_update_types()
+        )
+
+    finally:
+        await bot.session.close()
+
+
+
+def run_bot_thread():
+
+    asyncio.run(
+        start_bot()
+    )
+
 
 
 def main():
 
-    # Render Web Service needs an open port
-    web_thread = Thread(
-        target=run_web,
+    logger.info("Launching services...")
+
+
+    # Start telegram bot in background
+    bot_thread = threading.Thread(
+        target=run_bot_thread,
         daemon=True
     )
 
-    web_thread.start()
+    bot_thread.start()
 
 
-    # Start Telegram Bot
-    asyncio.run(
-        start_bot()
+
+    # Start web server for Render
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=8000
     )
+
 
 
 if __name__ == "__main__":
