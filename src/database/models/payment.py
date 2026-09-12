@@ -1,69 +1,78 @@
 from datetime import datetime
+import enum
 
-from sqlalchemy import DateTime, ForeignKey, BigInteger, String
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import Boolean, DateTime, Enum, String, BigInteger
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.database.base import Base
 
 
-class Payment(Base):
-    __tablename__ = "payments"
+class UserRole(str, enum.Enum):
+    ADMIN = "admin"
+    STUDENT = "student"
+
+
+class User(Base):
+
+    __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(
+        BigInteger,
         primary_key=True,
         index=True,
     )
 
-    user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id"),
-    )
-
-    course_id: Mapped[int] = mapped_column(
-        ForeignKey("courses.id"),
-    )
-
-    amount: Mapped[int] = mapped_column(
-        BigInteger,
-    )
-
-    status: Mapped[str] = mapped_column(
-        String(30),
-        default="pending",
-    )
-
-    receipt_file_id: Mapped[str | None] = mapped_column(
-        String(255),
-    )
-
-    admin_notes: Mapped[str | None] = mapped_column(
-        String(500),
-    )
-
-    approved_by_id: Mapped[int | None] = mapped_column(
-    BigInteger,
-    ForeignKey("users.id"),
-    nullable=True,
-)
-
-    reviewed_at: Mapped[datetime | None] = mapped_column(
-        DateTime,
-    )
-
-    transaction_id: Mapped[str | None] = mapped_column(
+    full_name: Mapped[str] = mapped_column(
         String(100),
+        nullable=False,
     )
 
-    discount_code_id: Mapped[int | None] = mapped_column(
-        ForeignKey("discount_codes.id"),
+    phone: Mapped[str | None] = mapped_column(
+        String(20),
+        unique=True,
+        nullable=True,
+        index=True,
+    )
+
+    email: Mapped[str | None] = mapped_column(
+        String(100),
+        unique=True,
         nullable=True,
     )
 
-    discount_amount: Mapped[int] = mapped_column(
-        BigInteger,
-        default=0,
+    password_hash: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+
+    role: Mapped[UserRole] = mapped_column(
+        Enum(UserRole),
+        default=UserRole.STUDENT,
+    )
+
+    is_active: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
     )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         default=datetime.utcnow,
+    )
+
+    student_profile = relationship(
+        "StudentProfile",
+        back_populates="user",
+        uselist=False,
+    )
+
+    telegram_account = relationship(
+        "TelegramAccount",
+        back_populates="user",
+        uselist=False,
+    )
+
+    enrollments = relationship(
+        "Enrollment",
+        back_populates="user",
     )
