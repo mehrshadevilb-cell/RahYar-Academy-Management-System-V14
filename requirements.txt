@@ -24,8 +24,8 @@ typing_extensions==4.16.0
 yarl==1.24.2
 pytest==8.4.2
 
-# PostgreSQL
-psycopg2-binary
+# PostgreSQL production driver
+psycopg[binary]==3.2.10
 
 # Redis
 redis
