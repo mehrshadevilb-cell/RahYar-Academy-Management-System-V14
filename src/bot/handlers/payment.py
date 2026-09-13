@@ -21,6 +21,7 @@ from src.services.profile_service import ProfileService
 from src.services.license_service import LicenseService
 from src.services.artistyar_service import ArtistYarService
 from src.services.admin_log_service import AdminLogService
+from src.services.legacy_import_service import LegacyImportService
 from src.core.constants import admin_actions
 from src.core.config.settings import get_settings
 
@@ -42,6 +43,7 @@ artistyar_service = ArtistYarService()
 telegram_repository = TelegramRepository()
 license_repository = LicenseRepository()
 admin_log_service = AdminLogService()
+legacy_import_service = LegacyImportService()
 
 settings = get_settings()
 
@@ -212,10 +214,19 @@ async def registration_get_phone(message: Message, state: FSMContext, db):
     existing_owner = profile_service.get_profile_by_phone(db, phone)
 
     if existing_owner and existing_owner.id != user.id:
-        await message.answer(
-            "❌ این شماره قبلاً برای حساب دیگری ثبت شده. لطفاً شماره دیگری ارسال کنید:"
-        )
-        return
+
+        legacy_user = legacy_import_service.find_unlinked_by_phone(db, phone)
+
+        if legacy_user and legacy_user.id == existing_owner.id:
+            # This phone belongs to a pre-imported (pre-bot) student
+            # record that was never linked to a Telegram account -
+            # move their purchase history onto this live account.
+            legacy_import_service.merge_into_live_user(db, legacy_user, user)
+        else:
+            await message.answer(
+                "❌ این شماره قبلاً برای حساب دیگری ثبت شده. لطفاً شماره دیگری ارسال کنید:"
+            )
+            return
 
     profile_service.update_contact_info(
         db=db,
