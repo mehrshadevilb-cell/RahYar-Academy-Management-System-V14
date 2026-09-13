@@ -6,74 +6,46 @@ services:
     restart: unless-stopped
     env_file:
       - .env
-
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-
-    command: >
-      sh -c "
-      alembic upgrade head &&
-      uvicorn src.web:app --host 0.0.0.0 --port ${PORT:-10000} &
-      python -m src.main
-      "
-
-    ports:
-      - "${PORT:-10000}:10000"
-
+    command:
+  [
+    "sh",
+    "-c",
+    "alembic upgrade head && uvicorn src.web:app --host 0.0.0.0 --port ${PORT:-10000} & python -m src.main"
+  ]
 
   postgres:
     image: postgres:16
     container_name: rahyar_postgres
     restart: unless-stopped
-
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-rahyar}
       POSTGRES_USER: ${POSTGRES_USER:-rahyar}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rahyar_password_123}
-
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
     healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "pg_isready -U ${POSTGRES_USER:-rahyar} -d ${POSTGRES_DB:-rahyar}"
-        ]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
       timeout: 5s
       retries: 20
-
     volumes:
       - postgres_data:/var/lib/postgresql/data
-
 
   redis:
     image: redis:7
     container_name: rahyar_redis
     restart: unless-stopped
-
-    command:
-      [
-        "redis-server",
-        "--appendonly",
-        "yes"
-      ]
-
+    command: ["redis-server", "--appendonly", "yes"]
     healthcheck:
-      test:
-        [
-          "CMD",
-          "redis-cli",
-          "ping"
-        ]
+      test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 20
-
     volumes:
       - redis_data:/data
-
 
 volumes:
   postgres_data:
