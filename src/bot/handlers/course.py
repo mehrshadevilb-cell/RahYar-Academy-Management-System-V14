@@ -14,6 +14,24 @@ router = Router()
 course_service = CourseService()
 
 
+async def _send_course_card(target, course, text, keyboard):
+    """`target` is anything with .answer()/.answer_photo() - a Message
+    or a CallbackQuery's .message. Telegram photo captions are capped
+    at 1024 chars; these course cards are always well under that."""
+
+    if course.thumbnail:
+        await target.answer_photo(
+            photo=course.thumbnail,
+            caption=text,
+            reply_markup=keyboard,
+        )
+    else:
+        await target.answer(
+            text=text,
+            reply_markup=keyboard,
+        )
+
+
 
 @router.message(
     lambda message: message.text == "📚 دوره ها"
@@ -54,8 +72,9 @@ async def courses_handler(
             else "📢 کانال تلگرام"
         )
 
-        await message.answer(
-
+        await _send_course_card(
+            message,
+            course,
             text=f"""
 🎵 {course.title}
 
@@ -69,11 +88,9 @@ async def courses_handler(
 💳 قیمت:
 {price}
 """,
-
-            reply_markup=course_keyboard(
+            keyboard=course_keyboard(
                 course.id
-            )
-
+            ),
         )
 
 
@@ -125,8 +142,9 @@ async def course_detail(
 
 
 
-    await callback.message.answer(
-
+    await _send_course_card(
+        callback.message,
+        course,
         text=f"""
 🎓 جزئیات دوره
 
@@ -142,11 +160,9 @@ async def course_detail(
 💳 قیمت:
 {course.price:,} تومان
 """,
-
-        reply_markup=buy_keyboard(
+        keyboard=buy_keyboard(
             course.id
-        )
-
+        ),
     )
 
 

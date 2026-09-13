@@ -45,8 +45,13 @@ class PaymentService:
         self,
         db: Session,
         payment_id: int,
-        admin_id: int,
+        admin_telegram_id: int,
     ) -> Payment | None:
+        """`admin_telegram_id` is the raw Telegram user id of whoever
+        approved this (there's currently a single owner/admin, so this
+        is always settings.OWNER_ID in practice) - it is NOT a
+        users.id foreign key, and must never be stored in a column
+        declared as one."""
 
         payment = self.repository.get_by_id(db, payment_id)
 
@@ -54,7 +59,7 @@ class PaymentService:
             return None
 
         payment.status = "approved"
-        payment.approved_by_id = admin_id
+        payment.approved_by_id = admin_telegram_id
         payment.reviewed_at = datetime.utcnow()
 
         db.commit()
@@ -66,7 +71,7 @@ class PaymentService:
         self,
         db: Session,
         payment_id: int,
-        admin_id: int,
+        admin_telegram_id: int,
         reason: str | None = None,
     ) -> Payment | None:
 
@@ -76,7 +81,7 @@ class PaymentService:
             return None
 
         payment.status = "rejected"
-        payment.approved_by_id = admin_id
+        payment.approved_by_id = admin_telegram_id
         payment.reviewed_at = datetime.utcnow()
         payment.admin_notes = reason
 

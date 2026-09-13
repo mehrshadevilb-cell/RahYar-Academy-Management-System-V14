@@ -10,6 +10,8 @@ class AdminState(StatesGroup):
 
     waiting_new_price = State()
 
+    waiting_product_photo = State()
+
     waiting_new_card_number = State()
 
     waiting_new_card_holder = State()

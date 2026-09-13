@@ -53,6 +53,12 @@ def admin_product_detail_keyboard(course):
                     callback_data=f"admin_product_price_{course.id}",
                 ),
             ],
+            [
+                InlineKeyboardButton(
+                    text="📷 تغییر عکس دوره",
+                    callback_data=f"admin_product_photo_{course.id}",
+                ),
+            ],
             [integration_button],
             [
                 InlineKeyboardButton(text="⬅️ بازگشت", callback_data="admin_products"),

@@ -61,3 +61,20 @@ class ProfileRepository:
             .filter(User.phone == phone)
             .first()
         )
+
+
+    def update_contact_info(
+        self,
+        db: Session,
+        user,
+        full_name: str,
+        phone: str,
+    ):
+
+        user.full_name = full_name
+        user.phone = phone
+
+        db.commit()
+        db.refresh(user)
+
+        return user

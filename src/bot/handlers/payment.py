@@ -1,8 +1,11 @@
+import re
+
 from aiogram import Router, F, Bot
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from src.bot.states.payment_states import PaymentState
+from src.bot.states.registration import RegistrationState
 from src.bot.keyboards.payment_review_keyboard import payment_review_keyboard
 from src.bot.keyboards.license_retry_keyboard import license_retry_keyboard
 from src.bot.keyboards.artistyar_retry_keyboard import artistyar_retry_keyboard
@@ -42,6 +45,8 @@ admin_log_service = AdminLogService()
 
 settings = get_settings()
 
+PHONE_PATTERN = re.compile(r"^09\d{9}$")
+
 
 WINDOWS_DOWNLOAD_URL = "https://app.spotplayer.ir/assets/bin/spotplayer/setup.exe"
 MAC_DOWNLOAD_URL = "https://app.spotplayer.ir/assets/bin/spotplayer/setup.dmg"
@@ -73,6 +78,163 @@ def _payment_instructions_text(final_price: int, card, original_price: int | Non
 """
 
 
+async def _has_contact_info(user) -> bool:
+    return bool(user.full_name) and bool(user.phone)
+
+
+async def _begin_direct_purchase(target, state: FSMContext, db, course_id: int):
+    """The actual "show payment card, wait for receipt" step - shared by
+    the plain buy flow and by whatever flow resumes after collecting a
+    first-time buyer's contact info."""
+
+    course = course_service.get_course_by_id(db, course_id)
+
+    if not course:
+        await target.answer("دوره پیدا نشد.")
+        return
+
+    card = payment_card_service.get_active_card(db)
+
+    if not card:
+        await target.answer(
+            "⚠️ در حال حاضر امکان پرداخت وجود ندارد. "
+            "لطفاً با پشتیبانی تماس بگیرید."
+        )
+        return
+
+    # Reset any stale discount data from a previous attempt in this
+    # conversation - the plain "buy" path is always at full price.
+    await state.update_data(
+        course_id=course_id,
+        discount_code_id=None,
+        discount_amount=0,
+        final_amount=course.price,
+    )
+    await state.set_state(PaymentState.waiting_receipt)
+
+    await target.answer(text=_payment_instructions_text(course.price, card))
+
+
+async def _begin_discount_entry(target, state: FSMContext, db, course_id: int):
+
+    course = course_service.get_course_by_id(db, course_id)
+
+    if not course:
+        await target.answer("دوره پیدا نشد.")
+        return
+
+    await state.update_data(course_id=course_id)
+    await state.set_state(PaymentState.waiting_discount_code)
+
+    await target.answer("🎁 کد تخفیف خود را ارسال کنید:")
+
+
+async def _start_purchase_or_collect_contact_info(
+    callback: CallbackQuery,
+    state: FSMContext,
+    db,
+    course_id: int,
+    pending_action: str,
+):
+    """Common entry gate for both "💳 خرید دوره" and "🎁 دارم کد تخفیف":
+    a first-time buyer is asked for their name and phone number before
+    anything else, since neither was ever collected at /start. Returning
+    buyers (who already have both on file) skip straight through."""
+
+    course = course_service.get_course_by_id(db, course_id)
+
+    if not course:
+        await callback.answer("دوره پیدا نشد", show_alert=True)
+        return
+
+    user = profile_service.get_profile(db=db, telegram_id=str(callback.from_user.id))
+
+    if not user:
+        await callback.answer("❌ کاربر پیدا نشد. لطفاً ابتدا /start را بزنید.", show_alert=True)
+        return
+
+    if await _has_contact_info(user):
+
+        if pending_action == "discount":
+            await _begin_discount_entry(callback.message, state, db, course_id)
+        else:
+            await _begin_direct_purchase(callback.message, state, db, course_id)
+
+        await callback.answer()
+        return
+
+    await state.update_data(course_id=course_id, pending_purchase_action=pending_action)
+    await state.set_state(RegistrationState.full_name)
+
+    await callback.message.answer(
+        "برای ادامه‌ی خرید، لازمه چند تا اطلاعات ازتون بگیریم (فقط یک‌بار).\n\n"
+        "لطفاً نام و نام خانوادگی خودتون رو ارسال کنید:"
+    )
+
+    await callback.answer()
+
+
+@router.message(RegistrationState.full_name)
+async def registration_get_full_name(message: Message, state: FSMContext):
+
+    full_name = (message.text or "").strip()
+
+    if len(full_name) < 3:
+        await message.answer("❌ لطفاً نام کامل خودتون رو ارسال کنید:")
+        return
+
+    await state.update_data(full_name=full_name)
+    await state.set_state(RegistrationState.phone)
+
+    await message.answer("📱 شماره موبایل خودتون رو ارسال کنید (مثال: 09121234567):")
+
+
+@router.message(RegistrationState.phone)
+async def registration_get_phone(message: Message, state: FSMContext, db):
+
+    phone = (message.text or "").strip()
+
+    if not PHONE_PATTERN.match(phone):
+        await message.answer(
+            "❌ فرمت شماره موبایل درست نیست. به شکل 09121234567 ارسال کنید:"
+        )
+        return
+
+    data = await state.get_data()
+
+    user = profile_service.get_profile(db=db, telegram_id=str(message.from_user.id))
+
+    if not user:
+        await message.answer("❌ کاربر پیدا نشد. لطفاً ابتدا /start را بزنید.")
+        await state.clear()
+        return
+
+    existing_owner = profile_service.get_profile_by_phone(db, phone)
+
+    if existing_owner and existing_owner.id != user.id:
+        await message.answer(
+            "❌ این شماره قبلاً برای حساب دیگری ثبت شده. لطفاً شماره دیگری ارسال کنید:"
+        )
+        return
+
+    profile_service.update_contact_info(
+        db=db,
+        user=user,
+        full_name=data.get("full_name", user.full_name),
+        phone=phone,
+    )
+
+    course_id = data.get("course_id")
+    pending_action = data.get("pending_purchase_action")
+
+    await message.answer("✅ اطلاعات شما ثبت شد.")
+
+    if pending_action == "discount":
+        await _begin_discount_entry(message, state, db, course_id)
+    else:
+        await _begin_direct_purchase(message, state, db, course_id)
+
+
 @router.callback_query(F.data.startswith("buy_"))
 async def buy_course(
     callback: CallbackQuery,
@@ -87,39 +249,7 @@ async def buy_course(
 
     course_id = int(callback.data.replace("buy_", ""))
 
-    course = course_service.get_course_by_id(db, course_id)
-
-    if not course:
-        await callback.answer("دوره پیدا نشد", show_alert=True)
-        return
-
-    card = payment_card_service.get_active_card(db)
-
-    if not card:
-
-        await callback.message.answer(
-            "⚠️ در حال حاضر امکان پرداخت وجود ندارد. "
-            "لطفاً با پشتیبانی تماس بگیرید."
-        )
-
-        await callback.answer()
-        return
-
-    # Reset any stale discount data from a previous attempt in this
-    # conversation - the plain "buy" path is always at full price.
-    await state.update_data(
-        course_id=course_id,
-        discount_code_id=None,
-        discount_amount=0,
-        final_amount=course.price,
-    )
-    await state.set_state(PaymentState.waiting_receipt)
-
-    await callback.message.answer(
-        text=_payment_instructions_text(course.price, card)
-    )
-
-    await callback.answer()
+    await _start_purchase_or_collect_contact_info(callback, state, db, course_id, "buy")
 
 
 @router.callback_query(F.data.startswith("discount_"))
@@ -135,20 +265,7 @@ async def discount_code_start(
 
     course_id = int(callback.data.replace("discount_", ""))
 
-    course = course_service.get_course_by_id(db, course_id)
-
-    if not course:
-        await callback.answer("دوره پیدا نشد", show_alert=True)
-        return
-
-    await state.update_data(course_id=course_id)
-    await state.set_state(PaymentState.waiting_discount_code)
-
-    await callback.message.answer(
-        "🎁 کد تخفیف خود را ارسال کنید:"
-    )
-
-    await callback.answer()
+    await _start_purchase_or_collect_contact_info(callback, state, db, course_id, "discount")
 
 
 @router.message(PaymentState.waiting_discount_code)
@@ -459,7 +576,7 @@ async def approve_payment(
     payment = payment_service.approve(
         db=db,
         payment_id=payment_id,
-        admin_id=callback.from_user.id,
+        admin_telegram_id=callback.from_user.id,
     )
 
     course_for_log = course_service.get_course_by_id(db, payment.course_id)
@@ -681,7 +798,7 @@ async def reject_payment(
     payment = payment_service.reject(
         db=db,
         payment_id=payment_id,
-        admin_id=callback.from_user.id,
+        admin_telegram_id=callback.from_user.id,
     )
 
     if payment.discount_code_id:

@@ -82,3 +82,23 @@ class CourseService:
         db.refresh(course)
 
         return course
+
+
+    def update_thumbnail(
+        self,
+        db: Session,
+        course_id: int,
+        file_id: str,
+    ):
+
+        course = self.repository.get_by_id(db, course_id)
+
+        if not course:
+            return None
+
+        course.thumbnail = file_id
+
+        db.commit()
+        db.refresh(course)
+
+        return course

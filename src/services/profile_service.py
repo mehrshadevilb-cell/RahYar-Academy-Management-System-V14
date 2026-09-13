@@ -47,3 +47,19 @@ class ProfileService:
             db,
             phone,
         )
+
+
+    def update_contact_info(
+        self,
+        db: Session,
+        user,
+        full_name: str,
+        phone: str,
+    ):
+
+        return self.repository.update_contact_info(
+            db,
+            user,
+            full_name,
+            phone,
+        )

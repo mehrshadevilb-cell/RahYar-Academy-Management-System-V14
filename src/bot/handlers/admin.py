@@ -223,6 +223,78 @@ async def admin_product_price_set(
     )
 
 
+@router.callback_query(F.data.startswith("admin_product_photo_"))
+async def admin_product_photo_start(
+    callback: CallbackQuery,
+    state: FSMContext,
+    db,
+):
+
+    if not _is_owner(callback.from_user.id):
+        await callback.answer("⛔️ شما دسترسی ندارید.", show_alert=True)
+        return
+
+    course_id = int(callback.data.replace("admin_product_photo_", ""))
+    course = course_service.get_course_by_id(db, course_id)
+
+    if not course:
+        await callback.answer("محصول پیدا نشد", show_alert=True)
+        return
+
+    await state.update_data(course_id=course_id)
+    await state.set_state(AdminState.waiting_product_photo)
+
+    await callback.message.answer(
+        f"📷 عکس جدید برای «{course.title}» را ارسال کنید:"
+    )
+
+    await callback.answer()
+
+
+@router.message(AdminState.waiting_product_photo, F.photo)
+async def admin_product_photo_set(
+    message: Message,
+    state: FSMContext,
+    db,
+):
+
+    if not _is_owner(message.from_user.id):
+        return
+
+    data = await state.get_data()
+    course_id = data.get("course_id")
+
+    file_id = message.photo[-1].file_id
+
+    course = course_service.update_thumbnail(db, course_id, file_id)
+
+    await state.clear()
+
+    if not course:
+        await message.answer("❌ محصول پیدا نشد.")
+        return
+
+    admin_log_service.log(
+        db, message.from_user.id, admin_actions.PRODUCT_PHOTO_CHANGE,
+        f"عکس «{course.title}» تغییر کرد",
+    )
+
+    await message.answer_photo(
+        photo=file_id,
+        caption=f"✅ عکس «{course.title}» با موفقیت تغییر کرد.",
+        reply_markup=admin_back_button("admin_products"),
+    )
+
+
+@router.message(AdminState.waiting_product_photo)
+async def admin_product_photo_invalid(message: Message):
+
+    if not _is_owner(message.from_user.id):
+        return
+
+    await message.answer("❌ لطفاً یک عکس ارسال کنید (نه متن یا فایل دیگر).")
+
+
 # ---------------- Product integrations: SpotPlayer course ids ----------------
 
 @router.callback_query(F.data.startswith("admin_product_spotplayer_"))

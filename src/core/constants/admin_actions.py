@@ -6,6 +6,7 @@ column is just an indexed `String(50)`.
 
 PRODUCT_TOGGLE = "product_toggle"
 PRODUCT_PRICE_CHANGE = "product_price_change"
+PRODUCT_PHOTO_CHANGE = "product_photo_change"
 SPOTPLAYER_COURSE_ADD = "spotplayer_course_add"
 SPOTPLAYER_COURSE_TOGGLE = "spotplayer_course_toggle"
 CHANNEL_ADD = "channel_add"

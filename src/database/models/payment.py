@@ -40,7 +40,7 @@ class Payment(Base):
     )
 
     approved_by_id: Mapped[int | None] = mapped_column(
-        ForeignKey("users.id"),
+        BigInteger,
     )
 
     reviewed_at: Mapped[datetime | None] = mapped_column(
