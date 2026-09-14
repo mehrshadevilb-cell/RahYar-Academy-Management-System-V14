@@ -7,7 +7,6 @@ creates an ai/* branch, and never changes main automatically.
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import urllib.error
 import urllib.request
@@ -37,9 +36,7 @@ class AIAgentService:
             raise AIAgentError(f"AI_AGENT_REPO_PATH is not a git checkout: {self.repo}")
 
     def _git(self, *args: str) -> str:
-        result = subprocess.run(
-            ["git", *args], cwd=self.repo, text=True, capture_output=True, timeout=60
-        )
+        result = subprocess.run(["git", *args], cwd=self.repo, text=True, capture_output=True, timeout=60)
         if result.returncode:
             raise AIAgentError(result.stderr.strip() or result.stdout.strip())
         return result.stdout.strip()
@@ -69,10 +66,7 @@ class AIAgentService:
         request = urllib.request.Request(
             url,
             data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Authorization": f"Bearer {self.settings.AI_AGENT_API_KEY}",
-                "Content-Type": "application/json",
-            },
+            headers={"Authorization": f"Bearer {self.settings.AI_AGENT_API_KEY}", "Content-Type": "application/json"},
             method="POST",
         )
         try:
@@ -102,7 +96,7 @@ class AIAgentService:
 
     def _safe_path(self, relative: str) -> Path:
         path = Path(relative)
-        if path.is_absolute() or ".." in path.parts or path.parts[0] in self.PROTECTED:
+        if not path.parts or path.is_absolute() or ".." in path.parts or path.parts[0] in self.PROTECTED:
             raise AIAgentError(f"Protected or invalid path: {relative}")
         target = (self.repo / path).resolve()
         if self.repo not in target.parents and target != self.repo:
@@ -115,7 +109,7 @@ class AIAgentService:
         prompt = f"""{self._context()}\n\nTASK:\n{task}\n\nReturn ONLY valid JSON with this exact shape: {{\"summary\": string, \"files\": [{{\"path\": string, \"content\": string}}]}}. Include complete file contents, not diffs. Change only the minimum required files. Never include .env, secrets, credentials, or production data."""
         raw = self._request_model(prompt).strip()
         if raw.startswith("```"):
-            raw = raw.strip("`").split("\n", 1)[-1]
+            raw = raw.removeprefix("```").removeprefix("json").removesuffix("```").strip()
         try:
             plan = json.loads(raw)
         except json.JSONDecodeError as exc:
@@ -131,17 +125,11 @@ class AIAgentService:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content, encoding="utf-8")
 
-        compile_result = subprocess.run(
-            ["python", "-m", "compileall", "-q", "src", "tests"],
-            cwd=self.repo, text=True, capture_output=True, timeout=180,
-        )
+        compile_result = subprocess.run(["python", "-m", "compileall", "-q", "src", "tests"], cwd=self.repo, text=True, capture_output=True, timeout=180)
         if compile_result.returncode:
             return f"Branch: {branch}\nCompile failed; changes were NOT committed.\n{compile_result.stderr}"
 
-        test_result = subprocess.run(
-            ["python", "-m", "pytest", "-q"],
-            cwd=self.repo, text=True, capture_output=True, timeout=600,
-        )
+        test_result = subprocess.run(["python", "-m", "pytest", "-q"], cwd=self.repo, text=True, capture_output=True, timeout=600)
         if test_result.returncode:
             return f"Branch: {branch}\nTests failed; changes were NOT committed.\n{test_result.stdout[-5000:]}\n{test_result.stderr[-3000:]}"
 
