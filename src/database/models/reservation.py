@@ -8,6 +8,8 @@ from src.database.base import Base
 
 
 class ReservationStatus(str, enum.Enum):
+    WAITING_PAYMENT = "waiting_payment"
+    PAYMENT_SUBMITTED = "payment_submitted"
     PENDING = "pending"
     CONFIRMED = "confirmed"
     REJECTED = "rejected"
@@ -16,8 +18,6 @@ class ReservationStatus(str, enum.Enum):
 
 
 class Reservation(Base):
-    """A student's requested class session, subject to owner approval."""
-
     __tablename__ = "reservations"
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
@@ -26,20 +26,17 @@ class Reservation(Base):
         ForeignKey("online_enrollments.id"), nullable=False
     )
 
-    # Stored as free text: the academy uses the Jalali calendar, and
-    # this is exactly what the student typed (e.g. "1404-07-20"),
-    # not a Gregorian date - a real Date column would corrupt it.
     requested_date: Mapped[str] = mapped_column(String(20), nullable=False)
-
     requested_time: Mapped[str] = mapped_column(String(10), nullable=False)
 
     status: Mapped[ReservationStatus] = mapped_column(
-        Enum(ReservationStatus), default=ReservationStatus.PENDING
+        Enum(ReservationStatus), default=ReservationStatus.WAITING_PAYMENT
     )
+
+    payment_proof: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     admin_notes: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
-    # Idempotent reminder flags (same pattern as installments).
     reminder_1d_sent: Mapped[bool] = mapped_column(Boolean, default=False)
     reminder_due_sent: Mapped[bool] = mapped_column(Boolean, default=False)
 
