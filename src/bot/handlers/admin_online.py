@@ -1,10 +1,8 @@
-"""Admin online handlers."""
-import base64
-import zlib
-import types
-from src.bot.handlers.admin_online_body_b64 import B64
-
-_SRC = zlib.decompress(base64.b64decode(B64)).decode("utf-8")
+"""Admin online handlers (assembled)."""
+import base64, zlib, types
+from src.bot.handlers.admin_online_c0 import P0
+from src.bot.handlers.admin_online_c1 import P1
+_SRC = zlib.decompress(base64.b64decode(P0)).decode() + zlib.decompress(base64.b64decode(P1)).decode()
 _mod = types.ModuleType(__name__)
 _mod.__file__ = __file__
 exec(compile(_SRC, __file__, "exec"), _mod.__dict__)
