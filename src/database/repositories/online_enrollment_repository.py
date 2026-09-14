@@ -19,7 +19,6 @@ class OnlineEnrollmentRepository:
         )
 
     def get_active_by_user(self, db: Session, user_id: int):
-        """ACTIVE + PAUSED (waiting for next cycle payment)."""
         return (
             db.query(OnlineEnrollment)
             .filter(
