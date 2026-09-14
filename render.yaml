@@ -6,7 +6,8 @@
 # Important:
 # - Use a paid/always-on web plan (Free sleeps; bot stops polling).
 # - Keep a single web instance (Telegram long-polling is not multi-replica safe).
-# - AI agent stays disabled on Render.
+# - AI agent: set AI_AGENT_ENABLED=true + API key to enable status/analyze.
+#   implement() still needs a git sandbox (not available in Docker on Render).
 # - Same service serves Telegram bot + public sales website.
 
 services:
@@ -40,6 +41,11 @@ services:
         value: "آکادمی راه‌یار"
       - key: DEBUG
         value: "false"
+      # AI Developer Agent — owner enables manually in dashboard:
+      # AI_AGENT_ENABLED=true
+      # AI_AGENT_API_KEY=...   (or AI_API_KEY)
+      # AI_AGENT_BASE_URL=...  (or AI_BASE_URL)
+      # AI_AGENT_MODEL=...     (or AI_MODEL)
       - key: AI_AGENT_ENABLED
         value: "false"
 
