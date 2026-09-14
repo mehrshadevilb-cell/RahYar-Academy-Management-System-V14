@@ -2,7 +2,10 @@ from sqlalchemy.orm import Session
 
 from src.database.models.attendance import Attendance, AttendanceStatus
 from src.database.models.reservation import ReservationStatus
-from src.database.models.online_enrollment import PaymentModel, EnrollmentStatus
+from src.database.models.online_enrollment import (
+    EnrollmentStatus,
+    FREE_CANCELS_PER_TERM,
+)
 from src.database.repositories.attendance_repository import AttendanceRepository
 from src.services.installment_service import InstallmentService
 from src.services.online_enrollment_service import OnlineEnrollmentService
@@ -11,19 +14,35 @@ from src.services.online_enrollment_service import OnlineEnrollmentService
 class AttendanceService:
     """Records a reservation outcome exactly once.
 
-    Only PRESENT consumes a session. ABSENT and CANCELLED never consume one.
-    Re-clicking an attendance button is idempotent and cannot consume a second session.
+    Session consumption:
+    - PRESENT → always consumes 1 remaining session.
+    - ABSENT → does not consume.
+    - CANCELLED → first free cancel per term does not consume;
+      further cancels consume 1 session (count as charged absence).
 
-    When remaining_sessions hits 0:
-    - MONTHLY → PAUSED + next installment (pay for next 4 sessions)
-    - TERM → if more cycles remain: PAUSED + next installment;
-             otherwise ENDED (full term completed).
+    When remaining_sessions hits 0 after a consuming event:
+    - MONTHLY → PAUSED + next installment
+    - TERM → next cycle if remaining, else ENDED
     """
 
     def __init__(self):
         self.repository = AttendanceRepository()
         self.installment_service = InstallmentService()
         self.enrollment_service = OnlineEnrollmentService()
+
+    def _consume_session(self, db: Session, enrollment) -> bool:
+        """Decrement remaining_sessions; return True if cycle is now exhausted."""
+        enrollment.completed_sessions += 1
+        if enrollment.remaining_sessions > 0:
+            enrollment.remaining_sessions -= 1
+
+        if enrollment.remaining_sessions <= 0:
+            if self.enrollment_service.should_create_next_cycle(enrollment):
+                enrollment.status = EnrollmentStatus.PAUSED
+                self.installment_service.create_next_installment(db, enrollment)
+                return True
+            enrollment.status = EnrollmentStatus.ENDED
+        return False
 
     def mark_attendance(
         self, db: Session, enrollment, session_date, status: AttendanceStatus,
@@ -54,24 +73,30 @@ class AttendanceService:
             reservation.status = ReservationStatus.COMPLETED
 
         cycle_exhausted = False
+        # free_cancel | charged_cancel | None
+        cancel_outcome: str | None = None
 
         if status == AttendanceStatus.PRESENT:
-            enrollment.completed_sessions += 1
-            if enrollment.remaining_sessions > 0:
-                enrollment.remaining_sessions -= 1
-
-            if enrollment.remaining_sessions <= 0:
-                if self.enrollment_service.should_create_next_cycle(enrollment):
-                    enrollment.status = EnrollmentStatus.PAUSED
-                    cycle_exhausted = True
-                    self.installment_service.create_next_installment(db, enrollment)
-                else:
-                    enrollment.status = EnrollmentStatus.ENDED
-
+            cycle_exhausted = self._consume_session(db, enrollment)
             db.commit()
+
+        elif status == AttendanceStatus.CANCELLED:
+            used = enrollment.free_cancels_used or 0
+            if used < FREE_CANCELS_PER_TERM:
+                enrollment.free_cancels_used = used + 1
+                cancel_outcome = "free_cancel"
+                db.commit()
+            else:
+                # Extra cancel beyond the free allowance → counts as session used.
+                cycle_exhausted = self._consume_session(db, enrollment)
+                cancel_outcome = "charged_cancel"
+                db.commit()
+
         else:
+            # ABSENT: no session consumption
             db.commit()
 
         enrollment._cycle_exhausted = cycle_exhausted  # type: ignore[attr-defined]
+        enrollment._cancel_outcome = cancel_outcome  # type: ignore[attr-defined]
 
         return attendance

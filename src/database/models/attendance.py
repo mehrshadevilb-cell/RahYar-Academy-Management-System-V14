@@ -17,8 +17,11 @@ class Attendance(Base):
     """
     A recorded class session outcome.
 
-    Business rule (must never be violated): CANCELLED sessions never
-    count toward completed/remaining session counters - only PRESENT does.
+    Session consumption rules:
+    - PRESENT always consumes one remaining session.
+    - ABSENT does not consume a session (no-show without formal cancel).
+    - CANCELLED: the first free cancel per enrollment term does NOT consume;
+      any further cancel is treated like a charged absence and consumes one session.
     """
 
     __tablename__ = "attendances"

@@ -10,10 +10,9 @@ from src.database.base import Base
 class PaymentModel(str, enum.Enum):
     """How the student pays for online classes.
 
-    Classes meet once per week. Payment is never weekly:
-    - MONTHLY: one payment unlocks 4 sessions (about one month).
-    - TERM: 12 sessions over ~3 months, typically as 3 monthly installments
-      of 4 sessions each (or a single term price if paid upfront).
+    Classes meet once per week:
+    - MONTHLY: one payment unlocks 4 sessions (~1 month).
+    - TERM: 12 sessions over ~3 months (typically 3 installments of 4).
     """
 
     MONTHLY = "monthly"
@@ -24,6 +23,12 @@ class EnrollmentStatus(str, enum.Enum):
     ACTIVE = "active"
     PAUSED = "paused"
     ENDED = "ended"
+
+
+# How many free cancellations a student may use during one enrollment term
+# without consuming a paid session. Further cancellations count as absence
+# and consume remaining_sessions.
+FREE_CANCELS_PER_TERM = 1
 
 
 class OnlineEnrollment(Base):
@@ -51,6 +56,9 @@ class OnlineEnrollment(Base):
     completed_sessions: Mapped[int] = mapped_column(Integer, default=0)
 
     current_installment_number: Mapped[int] = mapped_column(Integer, default=0)
+
+    # Free cancellations already used in this enrollment (max FREE_CANCELS_PER_TERM).
+    free_cancels_used: Mapped[int] = mapped_column(Integer, default=0)
 
     status: Mapped[EnrollmentStatus] = mapped_column(
         Enum(EnrollmentStatus), default=EnrollmentStatus.ACTIVE

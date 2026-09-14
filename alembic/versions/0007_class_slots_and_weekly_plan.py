@@ -1,12 +1,11 @@
-"""class slots + reservation.class_slot_id
+"""class slots + free cancel counter + reservation.class_slot_id
 
 Revision ID: 0007
 Revises: 0006
 Create Date: 2026-09-14
 
-Payment remains monthly | term only (no weekly plan).
-Online classes meet weekly (1 session/week); billing is per 4 sessions (month)
-or 12 sessions / 3 installments (term).
+Payment: monthly (4 sessions) | term (12 sessions / ~3 months).
+Per enrollment term: 1 free cancel; further cancels consume a session.
 """
 
 from typing import Sequence, Union
@@ -46,8 +45,15 @@ def upgrade() -> None:
     )
     op.create_index("ix_reservations_class_slot_id", "reservations", ["class_slot_id"])
 
+    op.add_column(
+        "online_enrollments",
+        sa.Column("free_cancels_used", sa.Integer(), nullable=False, server_default="0"),
+    )
+
 
 def downgrade() -> None:
+    op.drop_column("online_enrollments", "free_cancels_used")
+
     op.drop_index("ix_reservations_class_slot_id", table_name="reservations")
     op.drop_column("reservations", "class_slot_id")
 
