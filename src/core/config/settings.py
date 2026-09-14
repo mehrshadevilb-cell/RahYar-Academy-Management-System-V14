@@ -6,9 +6,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 def normalize_database_url(url: str) -> str:
-    """
-    Make DATABASE_URL safe for SQLAlchemy 2 + psycopg3.
-    """
     if not url:
         return url
 
@@ -25,11 +22,6 @@ def normalize_database_url(url: str) -> str:
 
 
 def normalize_openai_compatible_base_url(url: str) -> str:
-    """Normalize gateway base URL for OpenAI-style /chat/completions.
-
-    Gateways expect .../v1 as the base so clients call {base}/chat/completions.
-    Owners often paste a bare host — append /v1 when needed.
-    """
     raw = (url or "").strip().rstrip("/")
     if not raw:
         return "https://api.openai.com/v1"
@@ -86,14 +78,19 @@ class Settings(BaseSettings):
     AI_AGENT_BASE_URL: str = "https://api.openai.com/v1"
     AI_AGENT_MODEL: str = "gpt-4o-mini"
     AI_AGENT_MAX_RETRIES: int = 2
-    AI_AGENT_TIMEOUT_SECONDS: int = 120
+    AI_AGENT_TIMEOUT_SECONDS: int = 180
 
     AI_API_KEY: str | None = None
     AI_BASE_URL: str | None = None
     AI_MODEL: str | None = None
 
-    # Student chat assistant (read-only). May reuse AI_* when chat-specific
-    # key/url/model are empty.
+    # Online write mode on Render: clone repo with a fine-grained PAT.
+    # Never auto-merges to main; opens PR on ai/* branches only.
+    AI_AGENT_WRITE_ENABLED: bool = False
+    AI_AGENT_WORK_DIR: str = "/tmp/rahyar-agent-repo"
+    GITHUB_TOKEN: str | None = None
+    GITHUB_REPO: str = "mehrshadevilb-cell/RahYar-Academy-Management-System-V14"
+
     CHAT_ASSISTANT_ENABLED: bool = False
     CHAT_ASSISTANT_API_KEY: str | None = None
     CHAT_ASSISTANT_BASE_URL: str = "https://api.openai.com/v1"
@@ -129,7 +126,6 @@ class Settings(BaseSettings):
 
     @property
     def effective_chat_api_key(self) -> str | None:
-        """Chat key, or shared AI key when CHAT_ASSISTANT_API_KEY is empty."""
         return (self.CHAT_ASSISTANT_API_KEY or self.effective_ai_api_key or "").strip() or None
 
     @property
@@ -150,6 +146,14 @@ class Settings(BaseSettings):
         if self.effective_ai_api_key:
             return self.effective_ai_model
         return chat_model or "gpt-4o-mini"
+
+    @property
+    def github_write_ready(self) -> bool:
+        return bool(
+            self.AI_AGENT_WRITE_ENABLED
+            and (self.GITHUB_TOKEN or "").strip()
+            and (self.GITHUB_REPO or "").strip()
+        )
 
     @property
     def bot_deep_link_base(self) -> str | None:
