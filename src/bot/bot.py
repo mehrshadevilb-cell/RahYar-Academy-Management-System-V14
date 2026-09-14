@@ -10,8 +10,8 @@ from src.bot.handlers import online_class, admin_online, admin_installments
 from src.bot.handlers import admin_discount, admin_logs, admin_broadcast, admin_reports
 from src.bot.handlers import admin_ai, referral, support, admin_support
 from src.bot.handlers import assignment, admin_assignments, progress
-from src.bot.handlers import admin_class_slots
 from src.bot.handlers import chat_assistant
+from src.bot.handlers import admin_class_slots
 from src.bot.middlewares.database import DatabaseMiddleware
 
 settings = get_settings()
