@@ -4,7 +4,10 @@ from aiogram.types import CallbackQuery
 from src.database.models.installment import InstallmentStatus
 from src.database.repositories.telegram_repository import TelegramRepository
 from src.services.installment_service import InstallmentService
-from src.services.online_enrollment_service import OnlineEnrollmentService
+from src.services.online_enrollment_service import (
+    OnlineEnrollmentService,
+    sessions_for_plan,
+)
 from src.services.profile_service import ProfileService
 from src.services.online_course_service import OnlineCourseService
 from src.bot.keyboards.admin_installments_keyboard import installment_review_keyboard
@@ -103,13 +106,17 @@ async def installment_mark_paid(callback: CallbackQuery, bot: Bot, db):
 
     installment_service.mark_paid(db, installment)
 
+    enrollment = online_enrollment_service.get_by_id(db, installment.enrollment_id)
+    granted = 0
+    if enrollment:
+        granted = sessions_for_plan(enrollment.online_course, enrollment.payment_model)
+        online_enrollment_service.credit_sessions_after_payment(db, enrollment)
+
     admin_log_service.log(
         db, callback.from_user.id, admin_actions.INSTALLMENT_MARK_PAID,
         f"قسط شماره {installment.installment_number} (#{installment.id}) "
-        f"به مبلغ {installment.amount:,} تومان پرداخت‌شده ثبت شد",
+        f"به مبلغ {installment.amount:,} تومان پرداخت‌شده؛ {granted} جلسه شارژ شد",
     )
-
-    enrollment = online_enrollment_service.get_by_id(db, installment.enrollment_id)
 
     if enrollment:
         telegram_account = telegram_repository.get_by_user_id(db, enrollment.user_id)
@@ -118,13 +125,15 @@ async def installment_mark_paid(callback: CallbackQuery, bot: Bot, db):
             await bot.send_message(
                 chat_id=telegram_account.telegram_id,
                 text=(
-                    f"✅ پرداخت قسط شماره {installment.installment_number} "
-                    f"شما ثبت و تایید شد."
+                    f"✅ پرداخت دوره شماره {installment.installment_number} تأیید شد.\n"
+                    f"{granted} جلسه برای شما شارژ شد.\n"
+                    f"جلسات قابل رزرو الان: {enrollment.remaining_sessions}\n\n"
+                    "از منوی «🎼 کلاس آنلاین» یک زمان آزاد رزرو کنید."
                 ),
             )
 
     await callback.message.edit_text(
-        callback.message.text + "\n\n✅ پرداخت ثبت شد."
+        callback.message.text + f"\n\n✅ پرداخت ثبت شد و {granted} جلسه شارژ شد."
     )
 
     await callback.answer("ثبت شد ✅")

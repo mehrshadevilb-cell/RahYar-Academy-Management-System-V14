@@ -10,6 +10,7 @@ from src.bot.handlers import online_class, admin_online, admin_installments
 from src.bot.handlers import admin_discount, admin_logs, admin_broadcast, admin_reports
 from src.bot.handlers import admin_ai, referral, support, admin_support
 from src.bot.handlers import assignment, admin_assignments, progress
+from src.bot.handlers import admin_class_slots
 from src.bot.handlers import chat_assistant
 from src.bot.middlewares.database import DatabaseMiddleware
 
@@ -59,7 +60,7 @@ def setup_handlers():
         start, course, profile, my_courses, payment, admin, online_class,
         admin_online, admin_installments, admin_discount, admin_logs,
         admin_broadcast, admin_reports, admin_ai, referral, support, admin_support,
-        assignment, admin_assignments, progress,
+        assignment, admin_assignments, progress, admin_class_slots,
         # chat_assistant MUST stay last: it's a catch-all for free text
         # that no other router recognized (see its module docstring).
         chat_assistant,
