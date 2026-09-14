@@ -50,6 +50,12 @@ def get_main_menu(role: UserRole | None = None):
             )
         ],
 
+        [
+            KeyboardButton(
+                text="🆘 پشتیبانی"
+            )
+        ],
+
     ]
 
     if role == UserRole.ADMIN:

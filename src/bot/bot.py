@@ -8,7 +8,7 @@ from src.core.logging.logger import get_logger
 from src.bot.handlers import start, course, profile, my_courses, payment, admin
 from src.bot.handlers import online_class, admin_online, admin_installments
 from src.bot.handlers import admin_discount, admin_logs, admin_broadcast, admin_reports
-from src.bot.handlers import admin_ai, referral
+from src.bot.handlers import admin_ai, referral, support, admin_support
 from src.bot.handlers import assignment, admin_assignments
 from src.bot.middlewares.database import DatabaseMiddleware
 
@@ -57,7 +57,7 @@ def setup_handlers():
     for module in (
         start, course, profile, my_courses, payment, admin, online_class,
         admin_online, admin_installments, admin_discount, admin_logs,
-        admin_broadcast, admin_reports, admin_ai, referral,
+        admin_broadcast, admin_reports, admin_ai, referral, support, admin_support,
         assignment, admin_assignments,
     ):
         dp.include_router(module.router)
