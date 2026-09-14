@@ -18,6 +18,9 @@ RahYar Academy is a Telegram-first LMS/CRM for the academy. The production syste
 `src/bot/handlers` -> `src/services` -> `src/database/repositories` -> `src/database/models`.
 Integrations live under `src/integrations`. Shared configuration, security, logging and utilities live under `src/core`.
 
+The production AI Developer Agent entrypoint is `src/services/ai_agent_service.py` + Telegram handlers in `src/bot/handlers/admin_ai.py`.
+Do not introduce a second parallel agent runtime under `src/ai_agent/`.
+
 ## Non-negotiable rules
 1. Never expose or hardcode secrets.
 2. Never edit `.env` through the AI agent.
@@ -41,12 +44,12 @@ Integrations live under `src/integrations`. Shared configuration, security, logg
 - Docker build/startup paths remain consistent.
 - Security-sensitive changes receive owner review.
 
-## Known audit findings at 2026-09-14
-- `docker-compose.yml` references `src.web:app`, while the current FastAPI app is defined in `src/main.py`.
-- Dockerfile and Compose currently use different startup strategies.
-- `pyproject.toml` declares an empty dependency list while `requirements.txt` is the operational dependency source.
-- CI runs pytest but does not run the documented compileall check.
-- Current test suite is primarily unit/business-rule coverage; live Telegram/API end-to-end coverage is still missing.
+## Known audit findings (updated 2026-09-14)
+- Resolved on `ai/agent-hardening`: Docker healthcheck for bot service; `pyproject.toml` dependency list aligned with runtime stack; CI already runs compileall + pytest.
+- Remaining: live Telegram/API end-to-end coverage is still missing (unit/business-rule suite only).
+- Remaining optional: AdminLog rows for AI agent runs.
 
 ## AI agent goal
 The AI Developer Agent may inspect code, diagnose failures, propose fixes/features, create isolated branches, edit source/tests/migrations, run checks, and prepare a reviewable change. Deployment remains an owner-approved operation.
+
+See `.ai-agent/policy.md` for the full security policy.

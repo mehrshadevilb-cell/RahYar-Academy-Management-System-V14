@@ -1,5 +1,5 @@
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -30,6 +30,13 @@ def test_safe_path_rejects_absolute(tmp_path):
         agent._safe_path("/etc/passwd")
 
 
+def test_safe_path_rejects_secrets_token(tmp_path):
+    agent = AIAgentService()
+    agent.repo = Path(tmp_path)
+    with pytest.raises(AIAgentError):
+        agent._safe_path("config/secrets.yaml")
+
+
 def test_parse_plan_accepts_fenced_json():
     agent = AIAgentService()
     raw = '```json\n{"summary": "ok", "files": [{"path": "a.py", "content": "x"}]}\n```'
@@ -51,6 +58,7 @@ def test_apply_files_writes_under_repo(tmp_path):
     assert written == ["src/demo.py"]
     assert (tmp_path / "src" / "demo.py").read_text(encoding="utf-8") == "print(1)\n"
 
+
 def test_apply_files_rejects_oversized(tmp_path):
     agent = AIAgentService()
     agent.repo = Path(tmp_path)
@@ -65,3 +73,14 @@ def test_implement_disabled_raises():
     agent.settings.AI_AGENT_ENABLED = False
     with pytest.raises(AIAgentError, match="disabled"):
         agent.implement("do something")
+
+
+def test_lock_blocks_second_acquire(tmp_path):
+    agent = AIAgentService()
+    agent.repo = Path(tmp_path)
+    agent._acquire_lock()
+    with pytest.raises(AIAgentError, match="already running"):
+        agent._acquire_lock()
+    agent._release_lock()
+    agent._acquire_lock()
+    agent._release_lock()
