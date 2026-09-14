@@ -42,10 +42,26 @@ def _ctx(request: Request, **extra):
     }
 
 
+def _safe_list_products(db: Session):
+    try:
+        return order_service.list_products(db)[:6]
+    except Exception:
+        logger.exception("Failed to list products for storefront home")
+        return []
+
+
+def _safe_list_classes(db: Session):
+    try:
+        return order_service.list_online_classes(db)[:6]
+    except Exception:
+        logger.exception("Failed to list online classes for storefront home")
+        return []
+
+
 @router.get("/", response_class=HTMLResponse)
 async def home(request: Request, db: Session = Depends(get_db)):
-    products = order_service.list_products(db)[:6]
-    classes = order_service.list_online_classes(db)[:6]
+    products = _safe_list_products(db)
+    classes = _safe_list_classes(db)
     return templates.TemplateResponse(
         "home.html",
         _ctx(request, products=products, classes=classes),
@@ -54,7 +70,11 @@ async def home(request: Request, db: Session = Depends(get_db)):
 
 @router.get("/products", response_class=HTMLResponse)
 async def products_list(request: Request, db: Session = Depends(get_db)):
-    products = order_service.list_products(db)
+    try:
+        products = order_service.list_products(db)
+    except Exception:
+        logger.exception("Failed to list products")
+        products = []
     return templates.TemplateResponse(
         "products.html",
         _ctx(request, products=products),
@@ -146,7 +166,11 @@ async def product_order(
 
 @router.get("/classes", response_class=HTMLResponse)
 async def classes_list(request: Request, db: Session = Depends(get_db)):
-    classes = order_service.list_online_classes(db)
+    try:
+        classes = order_service.list_online_classes(db)
+    except Exception:
+        logger.exception("Failed to list classes")
+        classes = []
     return templates.TemplateResponse(
         "classes.html",
         _ctx(request, classes=classes),

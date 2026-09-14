@@ -17,8 +17,8 @@
   {% for p in products %}
   <article class="card">
     <h3>{{ p.title }}</h3>
-    <div class="price">{{ "{:,}".format(p.price) }} تومان</div>
-    <p class="muted">{{ (p.description or "")[:140] }}{% if p.description and p.description|length > 140 %}…{% endif %}</p>
+    <div class="price">{% if p.price is not none %}{{ "{:,}".format(p.price) }} تومان{% else %}—{% endif %}</div>
+    <p class="muted">{{ (p.description or "")[:140] }}{% if p.description and (p.description|length) > 140 %}…{% endif %}</p>
     <a class="btn" href="/products/{{ p.id }}">جزئیات و خرید</a>
   </article>
   {% endfor %}
