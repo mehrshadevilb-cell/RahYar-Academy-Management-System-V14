@@ -30,6 +30,12 @@ def get_main_menu(role: UserRole | None = None):
             )
         ],
 
+        [
+            KeyboardButton(
+                text="📈 پیشرفت من"
+            )
+        ],
+
 
         [
             KeyboardButton(
