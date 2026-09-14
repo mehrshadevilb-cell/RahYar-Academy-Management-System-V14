@@ -27,15 +27,13 @@ def normalize_database_url(url: str) -> str:
 def normalize_openai_compatible_base_url(url: str) -> str:
     """Normalize gateway base URL for OpenAI-style /chat/completions.
 
-    AgentRouter and similar gateways expect .../v1 as the base so that
-    clients call {base}/chat/completions. Owners often paste the bare
-    host (https://agentrouter.org) — append /v1 automatically.
+    Gateways expect .../v1 as the base so clients call {base}/chat/completions.
+    Owners often paste a bare host — append /v1 when needed.
     """
     raw = (url or "").strip().rstrip("/")
     if not raw:
         return "https://api.openai.com/v1"
 
-    # Strip accidental endpoint suffixes the owner may have copied
     for suffix in (
         "/chat/completions",
         "/v1/chat/completions",
@@ -49,6 +47,9 @@ def normalize_openai_compatible_base_url(url: str) -> str:
         "agentrouter.org",
         "co.agentrouter.org",
         "www.agentrouter.org",
+        "api.orcarouter.ai",
+        "orcarouter.ai",
+        "www.orcarouter.ai",
     )
     if host in gateway_hosts and not raw.endswith("/v1"):
         raw = raw + "/v1"
@@ -79,8 +80,6 @@ class Settings(BaseSettings):
     SITE_TAGLINE: str = "آموزش حرفه‌ای موسیقی — دوره‌های دیجیتال و کلاس آنلاین"
 
     # AI Developer Agent
-    # Primary names: AI_AGENT_*
-    # Render-friendly aliases: AI_API_KEY, AI_BASE_URL, AI_MODEL
     AI_AGENT_ENABLED: bool = False
     AI_AGENT_REPO_PATH: str = "."
     AI_AGENT_API_KEY: str | None = None
@@ -89,16 +88,17 @@ class Settings(BaseSettings):
     AI_AGENT_MAX_RETRIES: int = 2
     AI_AGENT_TIMEOUT_SECONDS: int = 120
 
-    # Aliases accepted from Render / external dashboards (e.g. AgentRouter)
     AI_API_KEY: str | None = None
     AI_BASE_URL: str | None = None
     AI_MODEL: str | None = None
 
+    # Student chat assistant (read-only). May reuse AI_* when chat-specific
+    # key/url/model are empty.
     CHAT_ASSISTANT_ENABLED: bool = False
     CHAT_ASSISTANT_API_KEY: str | None = None
     CHAT_ASSISTANT_BASE_URL: str = "https://api.openai.com/v1"
     CHAT_ASSISTANT_MODEL: str = "gpt-4o-mini"
-    CHAT_ASSISTANT_TIMEOUT_SECONDS: int = 30
+    CHAT_ASSISTANT_TIMEOUT_SECONDS: int = 45
     CHAT_ASSISTANT_MAX_MESSAGES_PER_HOUR: int = 20
 
     model_config = SettingsConfigDict(
@@ -116,23 +116,40 @@ class Settings(BaseSettings):
 
     @property
     def effective_ai_api_key(self) -> str | None:
-        """API key for AI Developer Agent (AI_AGENT_API_KEY or AI_API_KEY)."""
         return (self.AI_AGENT_API_KEY or self.AI_API_KEY or "").strip() or None
 
     @property
     def effective_ai_base_url(self) -> str:
-        """Base URL for OpenAI-compatible chat/completions.
-
-        Prefer explicit AI_BASE_URL (Render alias) over AI_AGENT_BASE_URL so
-        owners can set only AI_API_KEY + AI_BASE_URL + AI_MODEL.
-        """
         raw = (self.AI_BASE_URL or self.AI_AGENT_BASE_URL or "https://api.openai.com/v1")
         return normalize_openai_compatible_base_url(raw)
 
     @property
     def effective_ai_model(self) -> str:
-        """Model id for AI Developer Agent (AI_MODEL alias preferred)."""
         return (self.AI_MODEL or self.AI_AGENT_MODEL or "gpt-4o-mini").strip()
+
+    @property
+    def effective_chat_api_key(self) -> str | None:
+        """Chat key, or shared AI key when CHAT_ASSISTANT_API_KEY is empty."""
+        return (self.CHAT_ASSISTANT_API_KEY or self.effective_ai_api_key or "").strip() or None
+
+    @property
+    def effective_chat_base_url(self) -> str:
+        chat = (self.CHAT_ASSISTANT_BASE_URL or "").strip()
+        default_openai = {"https://api.openai.com/v1", "https://api.openai.com", ""}
+        if chat.rstrip("/") not in default_openai:
+            return normalize_openai_compatible_base_url(chat)
+        if self.AI_BASE_URL or self.AI_AGENT_BASE_URL:
+            return self.effective_ai_base_url
+        return normalize_openai_compatible_base_url(chat or "https://api.openai.com/v1")
+
+    @property
+    def effective_chat_model(self) -> str:
+        chat_model = (self.CHAT_ASSISTANT_MODEL or "").strip()
+        if chat_model and chat_model != "gpt-4o-mini":
+            return chat_model
+        if self.effective_ai_api_key:
+            return self.effective_ai_model
+        return chat_model or "gpt-4o-mini"
 
     @property
     def bot_deep_link_base(self) -> str | None:

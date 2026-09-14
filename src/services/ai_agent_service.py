@@ -32,13 +32,22 @@ class AIAgentService:
     LOCK_NAME = ".ai-agent/run.lock"
     LOCK_STALE_SECONDS = 30 * 60
 
-    # AgentRouter (and similar) WAF often rejects generic Python clients.
-    # These headers match documented OpenAI-compatible client profiles.
     _AGENTROUTER_HEADERS = {
         "Originator": "codex_cli_rs",
         "Version": "0.101.0",
         "User-Agent": "codex_cli_rs/0.101.0 (Linux; x86_64) RahYar-AIAgent/1.0",
     }
+
+    KNOWN_FACTS = (
+        "KNOWN FACTS (do not claim these are missing without checking the inventory below):\n"
+        "- Alembic migrations exist under alembic/versions/ (0001 baseline through 0007+).\n"
+        "- Automated tests exist under tests/ and CI runs pytest.\n"
+        "- Payment is Iranian card-to-card: payment_cards stores academy destination "
+        "card number + holder for student transfers (not a PCI card gateway storing CVV).\n"
+        "- Student chat assistant is read-only (src/services/chat_assistant_service.py).\n"
+        "- AI Developer Agent write mode requires a git working tree; on Render only "
+        "status/analyze are available.\n"
+    )
 
     def __init__(self) -> None:
         self.settings = get_settings()
@@ -179,7 +188,7 @@ class AIAgentService:
             if exc.code in {403, 405} and self._is_agentrouter_host():
                 hint = (
                     " | try AI_BASE_URL=https://co.agentrouter.org/v1 "
-                    "or use OpenAI/OpenRouter key if WAF still blocks Render IPs"
+                    "or use OpenAI/OpenRouter/OrcaRouter if WAF still blocks Render IPs"
                 )
             return f"http_{exc.code} {body or exc.reason}{hint}"
         except Exception as exc:
@@ -196,6 +205,8 @@ class AIAgentService:
             f"repo={self.repo}",
             f"git_available={self._has_git()}",
             f"write_mode={'yes' if self._has_git() else 'no (status/analyze only)'}",
+            f"chat_assistant_enabled={self.settings.CHAT_ASSISTANT_ENABLED}",
+            f"chat_key_configured={bool(self.settings.effective_chat_api_key)}",
         ]
         if self._has_git():
             try:
@@ -223,26 +234,44 @@ class AIAgentService:
         lines.append(f"provider_ping={self._ping_provider()}")
         return "\n".join(lines)
 
+    def _list_tree(self, relative: str, *, limit: int = 200) -> str:
+        root = self.repo / relative
+        if not root.exists():
+            return f"{relative}/: (not present in this image)"
+        if root.is_file():
+            return relative
+        paths = sorted(
+            str(p.relative_to(self.repo))
+            for p in root.rglob("*")
+            if p.is_file()
+            and p.suffix in {".py", ".md", ".yml", ".yaml", ".html", ".txt"}
+        )
+        body = "\n".join(paths[:limit])
+        more = f"\n... ({len(paths) - limit} more)" if len(paths) > limit else ""
+        return f"### {relative}/ ({len(paths)} files)\n{body}{more}"
+
     def _context(self) -> str:
         context_file = self.repo / "AI_PROJECT_CONTEXT.md"
         context = context_file.read_text(encoding="utf-8") if context_file.exists() else ""
         policy_file = self.repo / ".ai-agent" / "policy.md"
         policy = policy_file.read_text(encoding="utf-8") if policy_file.exists() else ""
-        tracked = ""
+
         if self._has_git():
             try:
                 tracked = self._git("ls-files")
             except AIAgentError:
                 tracked = "(git ls-files unavailable)"
         else:
-            src = self.repo / "src"
-            if src.exists():
-                paths = sorted(str(p.relative_to(self.repo)) for p in src.rglob("*.py"))
-                tracked = "\n".join(paths[:400])
+            tracked = "\n\n".join(
+                self._list_tree(rel)
+                for rel in ("src", "tests", "alembic/versions", "docs", ".github/workflows")
+            )
+
         return (
+            f"{self.KNOWN_FACTS}\n"
             f"PROJECT CONTEXT:\n{context}\n\n"
             f"AGENT POLICY:\n{policy}\n\n"
-            f"TRACKED FILES:\n{tracked}"
+            f"REPOSITORY INVENTORY:\n{tracked}"
         )
 
     def _request_model(self, prompt: str) -> str:
@@ -255,7 +284,9 @@ class AIAgentService:
                     "content": (
                         "You are the RahYar senior software engineer. "
                         "Follow AI_PROJECT_CONTEXT.md and .ai-agent/policy.md exactly. "
-                        "Never suggest secrets. Return concise, actionable engineering output."
+                        "Use the repository inventory; do not invent missing folders "
+                        "that appear in the inventory. Never suggest secrets. "
+                        "Return concise, actionable engineering output."
                     ),
                 },
                 {"role": "user", "content": prompt},
@@ -319,6 +350,7 @@ TASK:
 {request}
 
 Do not modify files. Return findings grouped by severity, with exact paths and concrete remediation steps.
+If tests/ or alembic/versions/ appear in the inventory, do NOT report them as missing.
 Write the report primarily in Persian for the academy owner, keep file paths in English."""
             return self._request_model(prompt)
         finally:
