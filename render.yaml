@@ -7,6 +7,7 @@
 # - Use a paid/always-on web plan (Free sleeps; bot stops polling).
 # - Keep a single web instance (Telegram long-polling is not multi-replica safe).
 # - AI agent stays disabled on Render.
+# - Same service serves Telegram bot + public sales website.
 
 services:
   - type: web
@@ -18,6 +19,8 @@ services:
     # Dockerfile CMD already runs: alembic upgrade head && python -m src.main
     envVars:
       - key: BOT_TOKEN
+        sync: false
+      - key: BOT_USERNAME
         sync: false
       - key: OWNER_ID
         sync: false
@@ -33,19 +36,12 @@ services:
         sync: false
       - key: DEFAULT_CARD_HOLDER
         sync: false
+      - key: SITE_NAME
+        value: "آکادمی راه‌یار"
       - key: DEBUG
         value: "false"
       - key: AI_AGENT_ENABLED
         value: "false"
-      # Optional — only if Telegram is unreachable from the region:
-      # - key: PROXY_URL
-      #   sync: false
-      # Optional — when FSM/cache is wired to Redis:
-      # - key: REDIS_URL
-      #   fromService:
-      #     name: rahyar-redis
-      #     type: keyvalue
-      #     property: connectionString
 
 databases:
   - name: rahyar-db
