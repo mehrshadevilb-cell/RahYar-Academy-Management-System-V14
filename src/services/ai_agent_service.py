@@ -42,8 +42,8 @@ class AIAgentService:
         key = self.settings.effective_ai_api_key
         if not key:
             raise AIAgentError(
-                "AI API key is not configured. "
-                "Set AI_AGENT_API_KEY or AI_API_KEY in environment."
+                "کلید API تنظیم نشده است. "
+                "در Render مقدار AI_AGENT_API_KEY یا AI_API_KEY را بگذارید."
             )
         return key
 
@@ -56,16 +56,15 @@ class AIAgentService:
     def _check_enabled(self, *, require_git: bool = False) -> None:
         if not self.settings.AI_AGENT_ENABLED:
             raise AIAgentError(
-                "AI Developer Agent is disabled. "
-                "Set AI_AGENT_ENABLED=true in environment to activate."
+                "AI Developer Agent خاموش است. "
+                "AI_AGENT_ENABLED=true را در Environment بگذارید و Redeploy کنید."
             )
         self._api_key()
         if require_git and not self._has_git():
             raise AIAgentError(
-                "AI agent write mode needs a git checkout (AI_AGENT_REPO_PATH). "
-                "On Render the Docker image has no .git sandbox — "
-                "use status/analyze only, or run implement on a local/dev machine "
-                "with a full clone."
+                "حالت نوشتن کد (رفع باگ / Feature) نیاز به git checkout دارد. "
+                "روی Render فقط وضعیت و Audit فعال است. "
+                "برای implement روی سیستم محلی با clone کامل اجرا کنید."
             )
 
     def _git(self, *args: str) -> str:
@@ -95,8 +94,8 @@ class AIAgentService:
                 age = 0
             if age < self.LOCK_STALE_SECONDS:
                 raise AIAgentError(
-                    "Agent is already running. Wait for the current task to finish "
-                    "or clear a stale lock after 30 minutes."
+                    "Agent در حال اجرای یک Task دیگر است. "
+                    "صبر کنید یا پس از ۳۰ دقیقه lock کهنه پاک می‌شود."
                 )
             path.unlink(missing_ok=True)
         path.write_text(f"pid={os.getpid()}\nstarted={time.time()}\n", encoding="utf-8")
@@ -125,6 +124,44 @@ class AIAgentService:
             capture_output=True,
             timeout=60,
         )
+
+    def _provider_headers(self) -> dict[str, str]:
+        return {
+            "Authorization": f"Bearer {self._api_key()}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "RahYar-AIAgent/1.0",
+        }
+
+    def _ping_provider(self) -> str:
+        """Lightweight connectivity check (short prompt, short timeout)."""
+        url = self._base_url().rstrip("/") + "/chat/completions"
+        payload = {
+            "model": self._model(),
+            "messages": [{"role": "user", "content": "Reply with exactly: OK"}],
+            "max_tokens": 8,
+            "temperature": 0,
+        }
+        request = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers=self._provider_headers(),
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=min(30, self.settings.AI_AGENT_TIMEOUT_SECONDS)) as response:
+                data = json.loads(response.read().decode("utf-8"))
+            content = data["choices"][0]["message"]["content"]
+            return f"ok content={content!r}"
+        except urllib.error.HTTPError as exc:
+            body = ""
+            try:
+                body = exc.read().decode("utf-8", errors="replace")[:400]
+            except Exception:
+                pass
+            return f"http_{exc.code} {body or exc.reason}"
+        except Exception as exc:
+            return f"error {type(exc).__name__}: {exc}"
 
     def status(self) -> str:
         self._check_enabled(require_git=False)
@@ -158,8 +195,10 @@ class AIAgentService:
                 lines.append(f"git_error={exc}")
         else:
             lines.append(
-                "note=Docker/Render deploy has no .git; implement is disabled here."
+                "note=Docker/Render: فقط وضعیت و Audit؛ implement روی لوکال."
             )
+
+        lines.append(f"provider_ping={self._ping_provider()}")
         return "\n".join(lines)
 
     def _context(self) -> str:
@@ -174,7 +213,6 @@ class AIAgentService:
             except AIAgentError:
                 tracked = "(git ls-files unavailable)"
         else:
-            # Lightweight inventory from source tree when .git is missing
             src = self.repo / "src"
             if src.exists():
                 paths = sorted(str(p.relative_to(self.repo)) for p in src.rglob("*.py"))
@@ -205,10 +243,7 @@ class AIAgentService:
         request = urllib.request.Request(
             url,
             data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Authorization": f"Bearer {self._api_key()}",
-                "Content-Type": "application/json",
-            },
+            headers=self._provider_headers(),
             method="POST",
         )
         try:
@@ -216,12 +251,27 @@ class AIAgentService:
                 request, timeout=self.settings.AI_AGENT_TIMEOUT_SECONDS
             ) as response:
                 data = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            body = ""
+            try:
+                body = exc.read().decode("utf-8", errors="replace")[:800]
+            except Exception:
+                pass
+            raise AIAgentError(
+                f"AI provider HTTP {exc.code}: {body or exc.reason}\n"
+                f"url={url} model={self._model()}"
+            ) from exc
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-            raise AIAgentError(f"AI provider request failed: {exc}") from exc
+            raise AIAgentError(
+                f"AI provider request failed: {exc}\n"
+                f"url={url} model={self._model()}"
+            ) from exc
         try:
             return data["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as exc:
-            raise AIAgentError("AI provider returned an unexpected response.") from exc
+            raise AIAgentError(
+                f"AI provider returned an unexpected response: {str(data)[:400]}"
+            ) from exc
 
     def analyze(
         self,
@@ -246,7 +296,8 @@ CURRENT GIT STATUS:
 TASK:
 {request}
 
-Do not modify files. Return findings grouped by severity, with exact paths and concrete remediation steps."""
+Do not modify files. Return findings grouped by severity, with exact paths and concrete remediation steps.
+Write the report primarily in Persian for the academy owner, keep file paths in English."""
             return self._request_model(prompt)
         finally:
             self._release_lock()
