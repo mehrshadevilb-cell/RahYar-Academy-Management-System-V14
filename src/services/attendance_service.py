@@ -12,7 +12,7 @@ class AttendanceService:
 
     Only PRESENT consumes a session. ABSENT and CANCELLED never consume one.
     When WEEKLY/MONTHLY remaining sessions hit 0, enrollment is PAUSED and
-    the next payment cycle installment is created (student must pay again).
+    the next payment cycle installment is created.
     """
 
     def __init__(self):
@@ -27,16 +27,12 @@ class AttendanceService:
         status: AttendanceStatus,
         reservation_id: int | None = None,
         admin_note: str | None = None,
-    ) -> tuple[Attendance, bool]:
-        """Returns (attendance, cycle_exhausted) where cycle_exhausted means
-        a new installment was opened and the student should be notified."""
-
-        cycle_exhausted = False
+    ) -> Attendance:
 
         if reservation_id is not None:
             existing = self.repository.get_by_reservation_id(db, reservation_id)
             if existing:
-                return existing, False
+                return existing
 
             from src.database.repositories.reservation_repository import (
                 ReservationRepository,
@@ -72,7 +68,6 @@ class AttendanceService:
                 ):
                     enrollment.status = EnrollmentStatus.PAUSED
                     self.installment_service.create_next_installment(db, enrollment)
-                    cycle_exhausted = True
                 else:
                     enrollment.status = EnrollmentStatus.ENDED
 
@@ -80,4 +75,4 @@ class AttendanceService:
         else:
             db.commit()
 
-        return attendance, cycle_exhausted
+        return attendance
