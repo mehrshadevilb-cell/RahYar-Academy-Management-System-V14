@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}کلاس آنلاین | {{ site_name }}{% endblock %}
+{% block content %}
+<h1>کلاس‌های آنلاین</h1>
+<p class="muted">ثبت‌نام نهایی و رزرو جلسه در ربات / پنل مدیریت انجام می‌شود. از اینجا درخواست بفرستید.</p>
+{% if classes %}
+<div class="grid">
+  {% for c in classes %}
+  <article class="card">
+    <h3>{{ c.name }}</h3>
+    <p class="muted">مدرس: {{ c.teacher or "—" }} · مدت هر جلسه: {{ c.duration_minutes }} دقیقه</p>
+    {% if c.monthly_price %}<div>ماهانه: <span class="price">{{ "{:,}".format(c.monthly_price) }} تومان</span></div>{% endif %}
+    {% if c.term_price %}<div>ترمی: <span class="price">{{ "{:,}".format(c.term_price) }} تومان</span></div>{% endif %}
+    <a class="btn" href="/classes/{{ c.id }}">درخواست</a>
+  </article>
+  {% endfor %}
+</div>
+{% else %}
+<p class="muted">کلاسی فعال نیست.</p>
+{% endif %}
+{% endblock %}

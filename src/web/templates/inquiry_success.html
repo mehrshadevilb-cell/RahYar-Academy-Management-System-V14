@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}درخواست ثبت شد | {{ site_name }}{% endblock %}
+{% block content %}
+<div class="notice">
+  <h1 style="margin-top:0">درخواست کلاس ارسال شد</h1>
+  <p>کلاس: <strong>{{ course.name }}</strong></p>
+  <p>نام: {{ user.full_name }} · موبایل: {{ user.phone }}</p>
+  <p class="muted">آکادمی از طریق تلگرام/تماس پیگیری می‌کند. می‌توانید همین حالا در ربات ادامه دهید.</p>
+</div>
+<div class="btn-row">
+  {% if bot_class_link %}<a class="btn" href="{{ bot_class_link }}" target="_blank" rel="noopener">ادامه در ربات</a>{% endif %}
+  {% if bot_home %}<a class="btn secondary" href="{{ bot_home }}" target="_blank" rel="noopener">ربات راه‌یار</a>{% endif %}
+  <a class="btn secondary" href="/classes">لیست کلاس‌ها</a>
+</div>
+{% endblock %}

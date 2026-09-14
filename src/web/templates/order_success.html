@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}سفارش ثبت شد | {{ site_name }}{% endblock %}
+{% block content %}
+<div class="notice">
+  <h1 style="margin-top:0">سفارش شما ثبت شد</h1>
+  <p>محصول: <strong>{{ product.title }}</strong></p>
+  <p>شماره پرداخت: <strong>#{{ payment.id }}</strong> — مبلغ: <strong>{{ "{:,}".format(payment.amount) }} تومان</strong></p>
+  <p>هنرجو: {{ user.full_name }} ({{ user.phone }})</p>
+</div>
+{% if card %}
+<div class="card">
+  <strong>پرداخت کارت‌به‌کارت</strong>
+  <p>{{ card.card_number }} — {{ card.card_holder }}</p>
+  <p class="muted">پس از واریز، رسید را در ربات تلگرام ارسال کنید تا مالک تأیید کند. تا قبل از تأیید، دسترسی فعال نمی‌شود.</p>
+</div>
+{% endif %}
+<div class="btn-row">
+  {% if bot_buy_link %}<a class="btn" href="{{ bot_buy_link }}" target="_blank" rel="noopener">ارسال رسید در ربات</a>{% endif %}
+  {% if bot_home %}<a class="btn secondary" href="{{ bot_home }}" target="_blank" rel="noopener">ورود به ربات</a>{% endif %}
+  <a class="btn secondary" href="/products">بازگشت به دوره‌ها</a>
+</div>
+{% endblock %}
