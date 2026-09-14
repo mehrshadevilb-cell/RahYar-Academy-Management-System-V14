@@ -2,17 +2,8 @@
 
 Unlike AIAgentService (src/services/ai_agent_service.py), this service is
 strictly read-only: it never writes files, never touches git, and never
-executes code. It answers free-text questions from students - "how do I
-buy a course", "what does SpotPlayer mean", "where's my license" - and
-can point them at the right menu button, using the bot's real, current
-product catalog as grounding so it doesn't invent prices or courses that
-don't exist.
-
-It is deliberately a separate module from AIAgentService: mixing a
-"talks to any student, all day" surface with the AI Developer Agent's
-write/commit capability into one class would make the security-critical
-agent harder to reason about. Keeping them separate keeps each one's
-blast radius small and easy to audit independently.
+executes code. It answers free-text questions from students using the live
+product catalog as grounding.
 """
 
 from __future__ import annotations
@@ -22,6 +13,7 @@ import time
 import urllib.error
 import urllib.request
 from collections import defaultdict, deque
+from urllib.parse import urlparse
 
 from sqlalchemy.orm import Session
 
@@ -33,10 +25,6 @@ from src.services.online_course_service import OnlineCourseService
 MAX_USER_MESSAGE_CHARS = 1000
 MAX_REPLY_CHARS = 3500
 
-# The bot's own navigation, in the bot's own words. This is UI/menu
-# copy (like every other Persian string in the handlers), not business
-# data, so unlike prices/courses it is not meant to be admin-editable -
-# it changes only when the actual menu layout changes in code.
 BOT_GUIDE_FA = """
 راهنمای منوی اصلی ربات راه‌یار:
 - 📚 دوره ها: نمایش دوره‌های دیجیتال قابل خرید (راه‌یار، تئوری موسیقی، آرتیست‌یار).
@@ -77,21 +65,25 @@ class ChatAssistantError(RuntimeError):
 
 
 class ChatAssistantService:
+    _AGENTROUTER_HEADERS = {
+        "Originator": "codex_cli_rs",
+        "Version": "0.101.0",
+        "User-Agent": "codex_cli_rs/0.101.0 (Linux; x86_64) RahYar-Chat/1.0",
+    }
+
     def __init__(self) -> None:
         self.settings = get_settings()
         self.course_service = CourseService()
         self.online_course_service = OnlineCourseService()
-        # Per-process, per-user sliding window of recent message
-        # timestamps. A single bot instance is the deployment model
-        # here (see docs/DEPLOYMENT), so in-memory is sufficient and
-        # avoids adding a hard Redis dependency for this feature alone.
         self._recent_messages: dict[str, deque[float]] = defaultdict(deque)
 
     def _check_enabled(self) -> None:
         if not self.settings.CHAT_ASSISTANT_ENABLED:
             raise ChatAssistantError("Chat assistant is disabled in configuration.")
-        if not self.settings.CHAT_ASSISTANT_API_KEY:
-            raise ChatAssistantError("CHAT_ASSISTANT_API_KEY is not configured.")
+        if not self.settings.effective_chat_api_key:
+            raise ChatAssistantError(
+                "CHAT_ASSISTANT_API_KEY / AI_API_KEY is not configured."
+            )
 
     def _check_rate_limit(self, telegram_id: str) -> None:
         limit = self.settings.CHAT_ASSISTANT_MAX_MESSAGES_PER_HOUR
@@ -135,10 +127,24 @@ class ChatAssistantService:
             )
         return "\n".join(lines)
 
+    def _provider_headers(self) -> dict[str, str]:
+        key = self.settings.effective_chat_api_key or ""
+        headers = {
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "RahYar-ChatAssistant/1.0",
+        }
+        host = (urlparse(self.settings.effective_chat_base_url).hostname or "").lower()
+        if host.endswith("agentrouter.org"):
+            headers.update(self._AGENTROUTER_HEADERS)
+        return headers
+
     def _request_model(self, messages: list[dict]) -> str:
-        url = self.settings.CHAT_ASSISTANT_BASE_URL.rstrip("/") + "/chat/completions"
+        base = self.settings.effective_chat_base_url.rstrip("/")
+        url = base + "/chat/completions"
         payload = {
-            "model": self.settings.CHAT_ASSISTANT_MODEL,
+            "model": self.settings.effective_chat_model,
             "messages": messages,
             "temperature": 0.3,
             "max_tokens": 500,
@@ -146,10 +152,7 @@ class ChatAssistantService:
         request = urllib.request.Request(
             url,
             data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Authorization": f"Bearer {self.settings.CHAT_ASSISTANT_API_KEY}",
-                "Content-Type": "application/json",
-            },
+            headers=self._provider_headers(),
             method="POST",
         )
         try:
@@ -157,18 +160,27 @@ class ChatAssistantService:
                 request, timeout=self.settings.CHAT_ASSISTANT_TIMEOUT_SECONDS
             ) as response:
                 data = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            body = ""
+            try:
+                body = exc.read().decode("utf-8", errors="replace")[:400]
+            except Exception:
+                pass
+            raise ChatAssistantError(
+                f"Chat assistant provider HTTP {exc.code}: {body or exc.reason}"
+            ) from exc
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-            raise ChatAssistantError(f"Chat assistant provider request failed: {exc}") from exc
+            raise ChatAssistantError(
+                f"Chat assistant provider request failed: {exc}"
+            ) from exc
         try:
             return data["choices"][0]["message"]["content"].strip()
         except (KeyError, IndexError, TypeError) as exc:
-            raise ChatAssistantError("Chat assistant provider returned an unexpected response.") from exc
+            raise ChatAssistantError(
+                "Chat assistant provider returned an unexpected response."
+            ) from exc
 
     def answer(self, db: Session, telegram_id: str, user_message: str) -> str:
-        """Answer a free-text student question. Raises ChatAssistantError
-        (disabled, misconfigured, rate-limited, or provider failure) -
-        callers must catch this and show a friendly fallback; never let
-        it propagate as an unhandled exception to the Telegram layer."""
         self._check_enabled()
 
         text = (user_message or "").strip()
