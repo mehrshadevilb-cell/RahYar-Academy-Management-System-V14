@@ -48,8 +48,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 @app.api_route("/health", methods=["GET", "HEAD"])
 async def health():
-    if True:  # HEAD and GET
-        return JSONResponse({"ok": True})
+    return JSONResponse({"ok": True})
 
 
 @app.api_route("/", methods=["HEAD"])
@@ -154,13 +153,22 @@ async def start_bot():
 
     setup_handlers()
 
+    # Ensure long-polling is not blocked by a leftover webhook (or a previous
+    # deploy still draining). drop_pending_updates clears the queue once.
+    try:
+        await bot.delete_webhook(drop_pending_updates=True)
+        logger.info("Telegram webhook cleared; starting long-polling")
+    except Exception:
+        logger.exception("Failed to delete Telegram webhook; continuing to poll")
+
     installment_scheduler = InstallmentReminderScheduler(bot)
     installment_scheduler.start()
 
     try:
         await dp.start_polling(
             bot,
-            allowed_updates=dp.resolve_used_update_types()
+            allowed_updates=dp.resolve_used_update_types(),
+            handle_signals=False,
         )
     finally:
         await bot.session.close()
