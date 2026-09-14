@@ -2,6 +2,7 @@ import asyncio
 import os
 import threading
 import traceback
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
@@ -21,19 +22,29 @@ settings = get_settings()
 logger = get_logger("rahyar.main")
 
 
+def _build_id() -> str:
+    env_id = (os.getenv("RAHYAR_BUILD_ID") or "").strip()
+    if env_id:
+        return env_id
+    marker = Path("/tmp/rahyar-build-id.txt")
+    if marker.is_file():
+        return marker.read_text(encoding="utf-8").strip() or "unknown"
+    local = Path(__file__).resolve().parents[1] / "docker-build-id.txt"
+    if local.is_file():
+        return local.read_text(encoding="utf-8").strip() or "unknown"
+    return "unknown"
+
+
 app = FastAPI(
     title="RahYar Academy Management System",
     description="Telegram bot + public sales website sharing one database",
 )
 
-# Public Persian storefront (catalog + orders). Shares courses/payments/users
-# with the Telegram bot. Owner approval still happens only in Telegram.
 app.include_router(storefront_router)
 
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
-    """Log full traceback; never expose secrets to users."""
     logger.exception("Unhandled error on %s %s", request.method, request.url.path)
     return JSONResponse(
         status_code=500,
@@ -48,12 +59,11 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 @app.api_route("/health", methods=["GET", "HEAD"])
 async def health():
-    return JSONResponse({"ok": True})
+    return JSONResponse({"ok": True, "build": _build_id()})
 
 
 @app.api_route("/", methods=["HEAD"])
 async def head_root():
-    """Some edge probes send HEAD / instead of GET /health."""
     return Response(status_code=200)
 
 
@@ -64,17 +74,18 @@ async def api_status():
             "status": "running",
             "service": "RahYar Bot + Web",
             "site": settings.SITE_NAME,
+            "build": _build_id(),
+            "chat_assistant": settings.CHAT_ASSISTANT_ENABLED,
         }
     )
 
 
 @app.get("/api/debug-storefront")
 async def debug_storefront():
-    """Temporary diagnostics for storefront 500s. Safe: no secrets."""
     from src.database.session import SessionLocal
     from src.services.web_order_service import WebOrderService
 
-    out: dict = {"ok": True, "steps": []}
+    out: dict = {"ok": True, "build": _build_id(), "steps": []}
     db = SessionLocal()
     try:
         svc = WebOrderService()
@@ -109,7 +120,6 @@ async def debug_storefront():
                 }
             )
         try:
-            from pathlib import Path
             from fastapi.templating import Jinja2Templates
 
             tpl_dir = Path(__file__).resolve().parent / "web" / "templates"
@@ -142,19 +152,14 @@ async def debug_storefront():
 
 async def start_bot():
 
-    logger.info("Starting RahYar Bot...")
+    logger.info("Starting RahYar Bot... build=%s", _build_id())
 
-    # Schema changes are applied by Alembic (see docs/MIGRATIONS.md)
-    # before this process starts. Seeds are intentionally idempotent,
-    # so it's safe to always run them here.
     seed_default_card()
     seed_default_products()
     seed_default_online_courses()
 
     setup_handlers()
 
-    # Ensure long-polling is not blocked by a leftover webhook (or a previous
-    # deploy still draining). drop_pending_updates clears the queue once.
     try:
         await bot.delete_webhook(drop_pending_updates=True)
         logger.info("Telegram webhook cleared; starting long-polling")
@@ -175,33 +180,16 @@ async def start_bot():
 
 
 def run_web():
-
-    # Render (and most PaaS platforms) assign the port dynamically via
-    # the PORT env var and route traffic/health-checks to it - a
-    # hardcoded port here would make health checks fail intermittently.
     port = int(os.getenv("PORT", "8000"))
-
-    uvicorn.run(
-        app,
-        host="0.0.0.0",
-        port=port
-    )
+    uvicorn.run(app, host="0.0.0.0", port=port)
 
 
 async def main():
-
-    logger.info("Booting application...")
-
-    web_thread = threading.Thread(
-        target=run_web,
-        daemon=True
-    )
-
+    logger.info("Booting application... build=%s", _build_id())
+    web_thread = threading.Thread(target=run_web, daemon=True)
     web_thread.start()
-
     await start_bot()
 
 
 if __name__ == "__main__":
-
     asyncio.run(main())
