@@ -17,7 +17,6 @@ from src.services.reminder_scheduler import InstallmentReminderScheduler
 settings = get_settings()
 logger = get_logger("rahyar.main")
 
-
 app = FastAPI(
     title="RahYar Academy Management System"
 )
@@ -27,25 +26,22 @@ app = FastAPI(
 async def health_check():
     return {
         "status": "running",
-        "service": "RahYar Bot"
+        "service": "RahYar Bot",
+        "environment": os.getenv("ENVIRONMENT", "production")
     }
 
 
 @app.get("/health")
 async def health():
     return {
-        "ok": True
+        "ok": True,
+        "service": "rahyar",
     }
 
 
-
 async def start_bot():
-
     logger.info("Starting RahYar Bot...")
 
-    # Schema changes are applied by Alembic (see docs/MIGRATIONS.md)
-    # before this process starts. Seeds are intentionally idempotent,
-    # so it's safe to always run them here.
     seed_default_card()
     seed_default_products()
     seed_default_online_courses()
@@ -64,12 +60,7 @@ async def start_bot():
         await bot.session.close()
 
 
-
 def run_web():
-
-    # Render (and most PaaS platforms) assign the port dynamically via
-    # the PORT env var and route traffic/health-checks to it - a
-    # hardcoded port here would make health checks fail intermittently.
     port = int(os.getenv("PORT", "8000"))
 
     uvicorn.run(
@@ -79,24 +70,17 @@ def run_web():
     )
 
 
-
 async def main():
-
     logger.info("Booting application...")
-
 
     web_thread = threading.Thread(
         target=run_web,
         daemon=True
     )
-
     web_thread.start()
-
 
     await start_bot()
 
 
-
 if __name__ == "__main__":
-
     asyncio.run(main())
