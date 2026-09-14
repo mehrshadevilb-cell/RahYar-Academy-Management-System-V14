@@ -1,7 +1,5 @@
-from pathlib import Path
+"""Online-class admin handlers (thin re-export)."""
 
-# Full implementation loaded from sibling module to keep this entry thin.
-from src.bot.handlers import admin_online_body as _body
+from src.bot.handlers.admin_online_body import router  # noqa: F401
 
-globals().update({k: v for k, v in vars(_body).items() if not k.startswith("_") or k == "router"})
-router = _body.router
+__all__ = ["router"]
