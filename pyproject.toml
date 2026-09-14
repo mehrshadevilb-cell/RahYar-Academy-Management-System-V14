@@ -4,12 +4,28 @@ version = "0.1.0"
 description = "RahYar Academy Telegram LMS and CRM System"
 requires-python = ">=3.13"
 
-dependencies = []
+# Operational dependency source of truth remains requirements.txt.
+# Keep this list aligned when adding runtime packages.
+dependencies = [
+    "SQLAlchemy==2.0.51",
+    "aiogram==3.29.1",
+    "pydantic==2.13.4",
+    "pydantic-settings==2.14.2",
+    "alembic==1.14.1",
+    "python-dotenv==1.2.2",
+    "psycopg[binary]==3.2.10",
+    "redis",
+    "fastapi",
+    "uvicorn",
+    "loguru==0.7.3",
+    "pytest==8.4.2",
+]
 
 [tool.ruff]
 line-length = 100
 
 [tool.pytest.ini_options]
 pythonpath = [
-    "src"
+    ".",
+    "src",
 ]

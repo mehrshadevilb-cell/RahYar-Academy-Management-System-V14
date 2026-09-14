@@ -1,7 +1,7 @@
 # RahYar Academy Management System
 
 ## Status
-Active development — v8 online-class workflow hardening completed.
+Active development — AI Developer Agent hardening in progress on `ai/agent-hardening`.
 
 ## Completed
 - Telegram bot boots with role-aware main menu and owner admin panel.
@@ -70,6 +70,17 @@ Active development — v8 online-class workflow hardening completed.
 - CI: a GitHub Actions workflow (`.github/workflows/tests.yml`) now
   runs `pytest` automatically on every push/PR to main.
 
+## AI Developer Agent (foundation + hardening)
+- Owner-only Telegram controls under admin menu → 🧠 AI Developer Agent.
+- Service layer: `AIAgentService` (disabled unless `AI_AGENT_ENABLED=true`).
+- Creates isolated `ai/*` branches; never writes to main automatically.
+- Path sandbox: rejects `.env`, absolute paths, parent traversal, oversized files.
+- Compile + pytest gate before commit; failed attempts roll back the worktree.
+- Bounded retries via `AI_AGENT_MAX_RETRIES`.
+- Distinct prompts for fix vs feature tasks.
+- Policy/context docs: `.ai-agent/policy.md`, `AI_PROJECT_CONTEXT.md`.
+- Unit tests for path safety, JSON plan parsing, file apply, disabled state.
+
 ## Post-deployment fixes (first real production run, on Render + Postgres)
 - **Critical bug fixed:** `payments.approved_by_id` was declared as a
   foreign key to `users.id`, but `PaymentService.approve()/reject()`
@@ -105,6 +116,7 @@ Active development — v8 online-class workflow hardening completed.
 - Broader integration/e2e tests against a live bot instance (the CI
   workflow runs the existing unit/business-rule suite automatically,
   but nothing exercises the real Telegram API end-to-end yet).
+- Optional: AdminLog entries for AI agent runs; concurrent-run lock.
 
 ## Run checks
 ```bash
