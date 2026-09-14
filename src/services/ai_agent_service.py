@@ -311,7 +311,7 @@ class AIAgentService:
             except Exception:
                 pass
             raise AIAgentError(
-                f"AI provider HTTP {exc.code}: {body or exp.reason}\n"
+                f"AI provider HTTP {exc.code}: {body or exc.reason}\n"
                 f"url={url} model={self._model()}"
             ) from exc
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
