@@ -40,7 +40,7 @@ TIME_PATTERN = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 
 def _plan_fa(payment_model) -> str:
     value = payment_model.value if hasattr(payment_model, "value") else str(payment_model)
-    return {"weekly": "هفتگی", "monthly": "ماهانه", "term": "ترمی"}.get(value, value)
+    return {"monthly": "ماهانه (۴ جلسه)", "term": "ترمی (۱۲ جلسه)"}.get(value, value)
 
 
 def _enrollment_keyboard(enrollment_id: int, status_value: str):
@@ -126,7 +126,7 @@ async def slot_cancel(callback: CallbackQuery, state: FSMContext):
 
 
 @router.callback_query(F.data.startswith("reserve_menu_"))
-async def reservation_menu(callback: CallbackQuery, db):
+async def reservation_menu(callback: CallbackQuery, state: FSMContext, db):
     enrollment_id = int(callback.data.replace("reserve_menu_", ""))
 
     enrollment = online_enrollment_service.get_by_id(db, enrollment_id)
@@ -148,25 +148,19 @@ async def reservation_menu(callback: CallbackQuery, db):
             reply_markup=student_open_slots_keyboard(slots, enrollment_id),
         )
     else:
-        # Fallback to free calendar when owner has not published slots yet.
-        await state_set_calendar(callback, enrollment_id)
+        await state.update_data(enrollment_id=enrollment_id)
+        await state.set_state(ReservationState.waiting_date)
+        jy, jm, _ = today_jalali()
+        await callback.message.answer(
+            "📅 تاریخ مورد نظر را از تقویم زیر انتخاب کنید:",
+            reply_markup=jalali_calendar_keyboard(enrollment_id, jy, jm),
+        )
 
     await callback.answer()
 
 
-async def state_set_calendar(callback: CallbackQuery, enrollment_id: int):
-    from aiogram.fsm.context import FSMContext
-    # Used only when no slots; caller should have already validated ownership.
-    jy, jm, _ = today_jalali()
-    await callback.message.answer(
-        "📅 تاریخ مورد نظر را از تقویم زیر انتخاب کنید:",
-        reply_markup=jalali_calendar_keyboard(enrollment_id, jy, jm),
-    )
-
-
 @router.callback_query(F.data.startswith("slot_pick_"))
 async def slot_pick(callback: CallbackQuery, bot: Bot, db):
-    # slot_pick_{enrollment_id}_{slot_id}
     parts = callback.data.replace("slot_pick_", "").split("_")
     if len(parts) != 2:
         await callback.answer("داده نامعتبر", show_alert=True)
@@ -218,7 +212,6 @@ async def slot_pick(callback: CallbackQuery, bot: Bot, db):
 
 @router.callback_query(F.data.startswith("reserve_"))
 async def reservation_start(callback: CallbackQuery, state: FSMContext, db):
-    # reserve_{enrollment_id} — free calendar path
     if callback.data.startswith("reserve_menu_"):
         return
 
@@ -358,13 +351,12 @@ async def reservation_get_time(message: Message, state: FSMContext, bot: Bot, db
 
     await bot.send_message(
         chat_id=settings.OWNER_ID,
-        text=f"""
-📅 درخواست رزرو جدید
-
-🎼 کلاس: {enrollment.online_course.name}
-👤 هنرجو: {student.full_name if student else enrollment.user_id}
-📆 تاریخ: {requested_date}
-⏰ ساعت: {text}
-""",
+        text=(
+            f"📅 درخواست رزرو جدید\n\n"
+            f"🎼 کلاس: {enrollment.online_course.name}\n"
+            f"👤 هنرجو: {student.full_name if student else enrollment.user_id}\n"
+            f"📆 تاریخ: {requested_date}\n"
+            f"⏰ ساعت: {text}"
+        ),
         reply_markup=reservation_review_keyboard(reservation.id),
     )
