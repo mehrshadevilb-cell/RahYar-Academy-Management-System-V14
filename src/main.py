@@ -3,6 +3,7 @@ import os
 import threading
 
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 import uvicorn
 
 from src.bot.bot import bot, dp, setup_handlers
@@ -12,6 +13,7 @@ from src.database.seed_payment_card import seed_default_card
 from src.database.seed_products import seed_default_products
 from src.database.seed_online_courses import seed_default_online_courses
 from src.services.reminder_scheduler import InstallmentReminderScheduler
+from src.web.router import router as storefront_router
 
 
 settings = get_settings()
@@ -19,24 +21,29 @@ logger = get_logger("rahyar.main")
 
 
 app = FastAPI(
-    title="RahYar Academy Management System"
+    title="RahYar Academy Management System",
+    description="Telegram bot + public sales website sharing one database",
 )
 
-
-@app.get("/")
-async def health_check():
-    return {
-        "status": "running",
-        "service": "RahYar Bot"
-    }
+# Public Persian storefront (catalog + orders). Shares courses/payments/users
+# with the Telegram bot. Owner approval still happens only in Telegram.
+app.include_router(storefront_router)
 
 
 @app.get("/health")
 async def health():
-    return {
-        "ok": True
-    }
+    return {"ok": True}
 
+
+@app.get("/api/status")
+async def api_status():
+    return JSONResponse(
+        {
+            "status": "running",
+            "service": "RahYar Bot + Web",
+            "site": settings.SITE_NAME,
+        }
+    )
 
 
 async def start_bot():
@@ -64,7 +71,6 @@ async def start_bot():
         await bot.session.close()
 
 
-
 def run_web():
 
     # Render (and most PaaS platforms) assign the port dynamically via
@@ -79,11 +85,9 @@ def run_web():
     )
 
 
-
 async def main():
 
     logger.info("Booting application...")
-
 
     web_thread = threading.Thread(
         target=run_web,
@@ -92,9 +96,7 @@ async def main():
 
     web_thread.start()
 
-
     await start_bot()
-
 
 
 if __name__ == "__main__":
