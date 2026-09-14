@@ -6,7 +6,7 @@ COPY requirements.txt .
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-ARG CACHE_BUST=20260915-pg-enum-labels-v7
+ARG CACHE_BUST=20260915-chat-audit-v8
 COPY . .
 
 CMD ["sh", "-c", "alembic upgrade head && python -m src.main"]
