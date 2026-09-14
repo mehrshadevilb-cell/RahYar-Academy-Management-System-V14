@@ -30,8 +30,9 @@ def admin_main_menu():
             ],
             [
                 InlineKeyboardButton(text="🆘 پشتیبانی", callback_data="admin_support"),
-                InlineKeyboardButton(text="🧠 AI Developer Agent", callback_data="admin_ai"),
+                InlineKeyboardButton(text="📝 تکالیف", callback_data="admin_assignments"),
             ],
+            [InlineKeyboardButton(text="🧠 AI Developer Agent", callback_data="admin_ai")],
         ]
     )
 
