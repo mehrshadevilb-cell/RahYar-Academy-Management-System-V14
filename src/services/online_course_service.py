@@ -9,21 +9,17 @@ class OnlineCourseService:
     Admin CRUD for the online-class catalog (Arrangement, Mixing, Piano,
     etc). This only manages the course *template* - price, teacher,
     duration, session counts. Changing these values never retroactively
-    changes an already-active `OnlineEnrollment` (its remaining_sessions
-    and pricing were copied at enrollment time), which is intentional:
-    a student mid-term should not be affected by a price/session change
-    made after they enrolled.
+    changes an already-active OnlineEnrollment.
     """
 
-    # Whitelisted, typed fields an admin is allowed to edit. Keeping this
-    # explicit (rather than setattr on any field name) prevents a UI bug
-    # from ever writing to an unintended column.
     EDITABLE_FIELDS = {
         "name": str,
         "teacher": str,
         "duration_minutes": int,
+        "weekly_price": int,
         "monthly_price": int,
         "term_price": int,
+        "weekly_sessions": int,
         "monthly_sessions": int,
         "term_sessions": int,
     }
@@ -50,6 +46,8 @@ class OnlineCourseService:
         term_price: int | None,
         monthly_sessions: int,
         term_sessions: int,
+        weekly_price: int | None = None,
+        weekly_sessions: int = 1,
     ) -> OnlineCourse:
         return self.repository.create(
             db,
@@ -57,8 +55,10 @@ class OnlineCourseService:
                 name=name,
                 teacher=teacher,
                 duration_minutes=duration_minutes,
+                weekly_price=weekly_price,
                 monthly_price=monthly_price,
                 term_price=term_price,
+                weekly_sessions=weekly_sessions,
                 monthly_sessions=monthly_sessions,
                 term_sessions=term_sessions,
             ),
