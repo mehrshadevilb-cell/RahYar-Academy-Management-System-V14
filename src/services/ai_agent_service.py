@@ -1,23 +1,24 @@
 """Safe, bounded AI developer agent for owner-controlled maintenance.
 
-The agent is deliberately disabled by default. It operates on a local checkout,
-creates an ai/* branch, and never changes main automatically.
+Creates ai/* branches only. Never merges to main automatically.
 
-On Render (Docker image without .git), status and analyze still work when
-AI_AGENT_ENABLED=true and an API key is set. implement() requires a real
-git working tree and will refuse otherwise.
+Write modes:
+- Local: AI_AGENT_REPO_PATH points at a git checkout
+- Online (Render): AI_AGENT_WRITE_ENABLED + GITHUB_TOKEN + GITHUB_REPO
+  clones into AI_AGENT_WORK_DIR, commits, pushes, opens a PR
 """
 
 from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from src.core.config.settings import get_settings
 
@@ -39,14 +40,12 @@ class AIAgentService:
     }
 
     KNOWN_FACTS = (
-        "KNOWN FACTS (do not claim these are missing without checking the inventory below):\n"
-        "- Alembic migrations exist under alembic/versions/ (0001 baseline through 0007+).\n"
-        "- Automated tests exist under tests/ and CI runs pytest.\n"
-        "- Payment is Iranian card-to-card: payment_cards stores academy destination "
-        "card number + holder for student transfers (not a PCI card gateway storing CVV).\n"
-        "- Student chat assistant is read-only (src/services/chat_assistant_service.py).\n"
-        "- AI Developer Agent write mode requires a git working tree; on Render only "
-        "status/analyze are available.\n"
+        "KNOWN FACTS:\n"
+        "- Alembic migrations under alembic/versions/.\n"
+        "- tests/ exists; CI runs pytest.\n"
+        "- Card-to-card payment stores academy destination card (not PCI CVV).\n"
+        "- Chat assistant is read-only.\n"
+        "- Agent never pushes/merges to main; only ai/* + optional PR.\n"
     )
 
     def __init__(self) -> None:
@@ -60,8 +59,7 @@ class AIAgentService:
         key = self.settings.effective_ai_api_key
         if not key:
             raise AIAgentError(
-                "کلید API تنظیم نشده است. "
-                "در Render مقدار AI_AGENT_API_KEY یا AI_API_KEY را بگذارید."
+                "کلید API تنظیم نشده است. AI_AGENT_API_KEY یا AI_API_KEY را بگذارید."
             )
         return key
 
@@ -71,21 +69,26 @@ class AIAgentService:
     def _model(self) -> str:
         return self.settings.effective_ai_model
 
+    def _write_capable(self) -> bool:
+        return self._has_git() or self.settings.github_write_ready
+
     def _check_enabled(self, *, require_git: bool = False) -> None:
         if not self.settings.AI_AGENT_ENABLED:
             raise AIAgentError(
-                "AI Developer Agent خاموش است. "
-                "AI_AGENT_ENABLED=true را در Environment بگذارید و Redeploy کنید."
+                "AI Developer Agent خاموش است. AI_AGENT_ENABLED=true بگذارید."
             )
         self._api_key()
-        if require_git and not self._has_git():
+        if require_git and not self._write_capable():
             raise AIAgentError(
-                "حالت نوشتن کد (رفع باگ / Feature) نیاز به git checkout دارد. "
-                "روی Render فقط وضعیت و Audit فعال است. "
-                "برای implement روی سیستم محلی با clone کامل اجرا کنید."
+                "حالت نوشتن کد نیاز به git دارد.\n"
+                "روی Render این‌ها را ست کنید:\n"
+                "AI_AGENT_WRITE_ENABLED=true\n"
+                "GITHUB_TOKEN=<fine-grained PAT با contents:write + pull_requests:write>\n"
+                "GITHUB_REPO=mehrshadevilb-cell/RahYar-Academy-Management-System-V14\n"
+                "سپس Redeploy."
             )
 
-    def _git(self, *args: str) -> str:
+    def _git(self, *args: str, timeout: int = 120) -> str:
         if not self._has_git():
             raise AIAgentError("Git working tree is not available.")
         result = subprocess.run(
@@ -93,7 +96,7 @@ class AIAgentService:
             cwd=self.repo,
             text=True,
             capture_output=True,
-            timeout=60,
+            timeout=timeout,
         )
         if result.returncode:
             raise AIAgentError(result.stderr.strip() or result.stdout.strip())
@@ -111,10 +114,7 @@ class AIAgentService:
             except OSError:
                 age = 0
             if age < self.LOCK_STALE_SECONDS:
-                raise AIAgentError(
-                    "Agent در حال اجرای یک Task دیگر است. "
-                    "صبر کنید یا پس از ۳۰ دقیقه lock کهنه پاک می‌شود."
-                )
+                raise AIAgentError("Agent در حال اجرای Task دیگری است. صبر کنید.")
             path.unlink(missing_ok=True)
         path.write_text(f"pid={os.getpid()}\nstarted={time.time()}\n", encoding="utf-8")
 
@@ -141,6 +141,100 @@ class AIAgentService:
             capture_output=True,
             timeout=60,
         )
+
+    def _ensure_git_workspace(self) -> None:
+        """Use local git, or clone into work dir when online write is enabled."""
+        if self._has_git():
+            return
+        if not self.settings.github_write_ready:
+            raise AIAgentError("Git workspace unavailable and online write is not configured.")
+
+        work = Path(self.settings.AI_AGENT_WORK_DIR).resolve()
+        token = (self.settings.GITHUB_TOKEN or "").strip()
+        repo_slug = (self.settings.GITHUB_REPO or "").strip().strip("/")
+        if "/" not in repo_slug:
+            raise AIAgentError("GITHUB_REPO must look like owner/name")
+
+        # Authenticated clone URL — token must never be logged.
+        clone_url = f"https://x-access-token:{quote(token, safe='')}@github.com/{repo_slug}.git"
+
+        if work.exists() and (work / ".git").exists():
+            self.repo = work
+            try:
+                self._git("remote", "set-url", "origin", clone_url)
+                self._git("fetch", "origin", "main", timeout=180)
+                self._git("checkout", "main")
+                self._git("reset", "--hard", "origin/main")
+            except AIAgentError:
+                shutil.rmtree(work, ignore_errors=True)
+            else:
+                return
+
+        if work.exists():
+            shutil.rmtree(work, ignore_errors=True)
+        work.parent.mkdir(parents=True, exist_ok=True)
+
+        result = subprocess.run(
+            [
+                "git",
+                "clone",
+                "--depth",
+                "50",
+                "--branch",
+                "main",
+                clone_url,
+                str(work),
+            ],
+            text=True,
+            capture_output=True,
+            timeout=300,
+        )
+        if result.returncode:
+            # Strip token if git echoed the URL in stderr.
+            err = (result.stderr or result.stdout or "clone failed").replace(token, "***")
+            raise AIAgentError(f"git clone failed: {err[:800]}")
+
+        self.repo = work
+        self._git("config", "user.email", "ai-agent@rahyar.local")
+        self._git("config", "user.name", "RahYar AI Agent")
+
+    def _push_and_open_pr(self, branch: str, title: str, body: str) -> str:
+        if not self.settings.github_write_ready:
+            return "(local commit only — set AI_AGENT_WRITE_ENABLED to push PR)"
+
+        self._git("push", "-u", "origin", branch, timeout=180)
+
+        token = (self.settings.GITHUB_TOKEN or "").strip()
+        repo_slug = (self.settings.GITHUB_REPO or "").strip()
+        payload = json.dumps(
+            {"title": title[:200], "head": branch, "base": "main", "body": body[:4000]}
+        ).encode("utf-8")
+        req = urllib.request.Request(
+            f"https://api.github.com/repos/{repo_slug}/pulls",
+            data=payload,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github+json",
+                "Content-Type": "application/json",
+                "User-Agent": "RahYar-AIAgent",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=60) as response:
+                data = json.loads(response.read().decode("utf-8"))
+            return data.get("html_url") or f"PR created on {branch}"
+        except urllib.error.HTTPError as exc:
+            raw = ""
+            try:
+                raw = exc.read().decode("utf-8", errors="replace")[:500]
+            except Exception:
+                pass
+            # 422 often means PR already exists for the branch.
+            if exc.code == 422:
+                return f"branch pushed; PR may already exist for {branch} ({raw[:200]})"
+            raise AIAgentError(f"GitHub PR API HTTP {exc.code}: {raw}") from exc
 
     def _is_agentrouter_host(self) -> bool:
         host = (urlparse(self._base_url()).hostname or "").lower()
@@ -184,18 +278,13 @@ class AIAgentService:
                 body = exc.read().decode("utf-8", errors="replace")[:400]
             except Exception:
                 pass
-            hint = ""
-            if exc.code in {403, 405} and self._is_agentrouter_host():
-                hint = (
-                    " | try AI_BASE_URL=https://co.agentrouter.org/v1 "
-                    "or use OpenAI/OpenRouter/OrcaRouter if WAF still blocks Render IPs"
-                )
-            return f"http_{exc.code} {body or exc.reason}{hint}"
+            return f"http_{exc.code} {body or exc.reason}"
         except Exception as exc:
             return f"error {type(exc).__name__}: {exc}"
 
     def status(self) -> str:
         self._check_enabled(require_git=False)
+        write = self._write_capable()
         lines = [
             f"enabled={self.settings.AI_AGENT_ENABLED}",
             f"api_key_configured={bool(self.settings.effective_ai_api_key)}",
@@ -204,42 +293,37 @@ class AIAgentService:
             f"max_retries={self.settings.AI_AGENT_MAX_RETRIES}",
             f"repo={self.repo}",
             f"git_available={self._has_git()}",
-            f"write_mode={'yes' if self._has_git() else 'no (status/analyze only)'}",
+            f"github_write_ready={self.settings.github_write_ready}",
+            f"write_mode={'yes' if write else 'no (status/analyze only)'}",
             f"chat_assistant_enabled={self.settings.CHAT_ASSISTANT_ENABLED}",
             f"chat_key_configured={bool(self.settings.effective_chat_api_key)}",
         ]
         if self._has_git():
             try:
-                branch = self._git("branch", "--show-current")
-                dirty = self._git("status", "--porcelain")
-                head = self._git("rev-parse", "--short", "HEAD")
-                lock = self._lock_path().exists()
                 lines.extend(
                     [
-                        f"branch={branch}",
-                        f"head={head}",
-                        f"clean={not bool(dirty)}",
-                        f"locked={lock}",
+                        f"branch={self._git('branch', '--show-current')}",
+                        f"head={self._git('rev-parse', '--short', 'HEAD')}",
+                        f"locked={self._lock_path().exists()}",
                     ]
                 )
-                if dirty:
-                    lines.append(f"dirty_files={len(dirty.splitlines())}")
             except AIAgentError as exc:
                 lines.append(f"git_error={exc}")
+        elif self.settings.github_write_ready:
+            lines.append(
+                "note=Online write: clone on demand to AI_AGENT_WORK_DIR, push ai/* + PR"
+            )
         else:
             lines.append(
-                "note=Docker/Render: فقط وضعیت و Audit؛ implement روی لوکال."
+                "note=برای نوشتن کد: AI_AGENT_WRITE_ENABLED + GITHUB_TOKEN + GITHUB_REPO"
             )
-
         lines.append(f"provider_ping={self._ping_provider()}")
         return "\n".join(lines)
 
     def _list_tree(self, relative: str, *, limit: int = 200) -> str:
         root = self.repo / relative
         if not root.exists():
-            return f"{relative}/: (not present in this image)"
-        if root.is_file():
-            return relative
+            return f"{relative}/: (not present)"
         paths = sorted(
             str(p.relative_to(self.repo))
             for p in root.rglob("*")
@@ -283,10 +367,8 @@ class AIAgentService:
                     "role": "system",
                     "content": (
                         "You are the RahYar senior software engineer. "
-                        "Follow AI_PROJECT_CONTEXT.md and .ai-agent/policy.md exactly. "
-                        "Use the repository inventory; do not invent missing folders "
-                        "that appear in the inventory. Never suggest secrets. "
-                        "Return concise, actionable engineering output."
+                        "Follow project architecture. Never include secrets. "
+                        "Return concise engineering output."
                     ),
                 },
                 {"role": "user", "content": prompt},
@@ -311,20 +393,14 @@ class AIAgentService:
             except Exception:
                 pass
             raise AIAgentError(
-                f"AI provider HTTP {exc.code}: {body or exc.reason}\n"
-                f"url={url} model={self._model()}"
+                f"AI provider HTTP {exc.code}: {body or exc.reason}\nurl={url}"
             ) from exc
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-            raise AIAgentError(
-                f"AI provider request failed: {exc}\n"
-                f"url={url} model={self._model()}"
-            ) from exc
+            raise AIAgentError(f"AI provider request failed: {exc}") from exc
         try:
             return data["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as exc:
-            raise AIAgentError(
-                f"AI provider returned an unexpected response: {str(data)[:400]}"
-            ) from exc
+            raise AIAgentError("AI provider returned an unexpected response.") from exc
 
     def analyze(
         self,
@@ -344,14 +420,14 @@ class AIAgentService:
             prompt = f"""{self._context()}
 
 CURRENT GIT STATUS:
-{status or '(no git — advisory mode on deployed image)'}
+{status or '(advisory mode)'}
 
 TASK:
 {request}
 
-Do not modify files. Return findings grouped by severity, with exact paths and concrete remediation steps.
-If tests/ or alembic/versions/ appear in the inventory, do NOT report them as missing.
-Write the report primarily in Persian for the academy owner, keep file paths in English."""
+Do not modify files. Group findings by severity with paths and remediation.
+If tests/ or alembic/versions/ appear in inventory, do NOT report them missing.
+Write primarily in Persian; keep paths in English."""
             return self._request_model(prompt)
         finally:
             self._release_lock()
@@ -361,7 +437,7 @@ Write the report primarily in Persian for the academy owner, keep file paths in 
         if current.startswith("ai/"):
             return current
         slug = "".join(ch.lower() if ch.isalnum() else "-" for ch in purpose).strip("-")[:45]
-        branch = f"ai/{slug or 'maintenance'}"
+        branch = f"ai/{slug or 'maintenance'}-{int(time.time()) % 100000}"
         self._git("switch", "-c", branch)
         return branch
 
@@ -430,6 +506,7 @@ Write the report primarily in Persian for the academy owner, keep file paths in 
 
     def implement(self, task: str, task_type: str = "feature") -> str:
         self._check_enabled(require_git=True)
+        self._ensure_git_workspace()
         self._acquire_lock()
         try:
             branch = self._ensure_branch(task)
@@ -438,9 +515,9 @@ Write the report primarily in Persian for the academy owner, keep file paths in 
                 task_type = "feature"
 
             intent = (
-                "Fix the described bug with the smallest safe change. Preserve existing behavior elsewhere."
+                "Fix the described bug with the smallest safe change."
                 if task_type == "fix"
-                else "Implement the described feature with the smallest clean change that fits the architecture."
+                else "Implement the feature with the smallest clean change."
             )
 
             max_retries = max(0, int(self.settings.AI_AGENT_MAX_RETRIES))
@@ -451,8 +528,7 @@ Write the report primarily in Persian for the academy owner, keep file paths in 
                 if last_error:
                     feedback = (
                         f"\n\nPREVIOUS ATTEMPT FAILED (attempt {attempt}/{max_retries}):\n"
-                        f"{last_error}\n"
-                        "Produce a corrected JSON plan that fixes the failure."
+                        f"{last_error}\nProduce a corrected JSON plan."
                     )
 
                 prompt = f"""{self._context()}
@@ -464,13 +540,11 @@ TASK:
 {task}
 {feedback}
 
-Return ONLY valid JSON with this exact shape:
+Return ONLY valid JSON:
 {{"summary": string, "files": [{{"path": string, "content": string}}]}}
 
-Include complete file contents, not diffs.
-Change only the minimum required files.
-Never include .env, secrets, credentials, or production data.
-Never push to main."""
+Complete file contents, not diffs. Minimum files.
+Never include .env/secrets. Never target main."""
 
                 try:
                     raw = self._request_model(prompt)
@@ -480,11 +554,7 @@ Never push to main."""
                     last_error = str(exc)
                     self._reset_worktree()
                     if attempt >= max_retries:
-                        return (
-                            f"Branch: {branch}\n"
-                            f"Attempts: {attempt + 1}\n"
-                            f"Failed after retries.\n{last_error}"
-                        )
+                        return f"Branch: {branch}\nFailed after retries.\n{last_error}"
                     continue
 
                 ok, check_msg = self._run_checks()
@@ -494,20 +564,38 @@ Never push to main."""
                     if attempt >= max_retries:
                         return (
                             f"Branch: {branch}\n"
-                            f"Attempts: {attempt + 1}\n"
-                            f"Checks failed; changes were NOT committed.\n{check_msg}"
+                            f"Checks failed; not committed.\n{check_msg}"
                         )
                     continue
 
                 self._git("add", "--", *written)
                 self._git("commit", "-m", f"ai({task_type}): {task[:60]}")
+                head = self._git("rev-parse", "--short", "HEAD")
+                pr_info = ""
+                try:
+                    pr_info = self._push_and_open_pr(
+                        branch,
+                        title=f"ai({task_type}): {task[:72]}",
+                        body=(
+                            f"Automated AI agent change.\n\n"
+                            f"**Task:** {task}\n\n"
+                            f"**Summary:** {plan.get('summary', '')}\n\n"
+                            f"**Files:** {', '.join(written)}\n\n"
+                            "Owner must review before merge to main."
+                        ),
+                    )
+                except AIAgentError as exc:
+                    pr_info = f"commit ok; push/PR failed: {exc}"
+
                 return (
                     f"Branch: {branch}\n"
                     f"Attempts: {attempt + 1}\n"
                     f"Tests: PASS\n"
-                    f"Committed: {self._git('rev-parse', '--short', 'HEAD')}\n"
+                    f"Committed: {head}\n"
                     f"Files: {', '.join(written)}\n"
-                    f"Summary: {plan.get('summary', 'completed')}"
+                    f"PR: {pr_info}\n"
+                    f"Summary: {plan.get('summary', 'completed')}\n"
+                    f"⚠️ merge به main فقط با تأیید شما"
                 )
 
             return f"Branch: {branch}\nFailed after retries.\n{last_error}"
