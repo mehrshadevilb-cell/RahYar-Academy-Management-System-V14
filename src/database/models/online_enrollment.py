@@ -8,13 +8,20 @@ from src.database.base import Base
 
 
 class PaymentModel(str, enum.Enum):
+    """
+    WEEKLY  → after each paid cycle, credit 1 session
+    MONTHLY → after each paid cycle, credit monthly_sessions (usually 4)
+    TERM    → one-shot credit of term_sessions
+    """
+
+    WEEKLY = "weekly"
     MONTHLY = "monthly"
     TERM = "term"
 
 
 class EnrollmentStatus(str, enum.Enum):
     ACTIVE = "active"
-    PAUSED = "paused"
+    PAUSED = "paused"  # waiting for next cycle payment
     ENDED = "ended"
 
 

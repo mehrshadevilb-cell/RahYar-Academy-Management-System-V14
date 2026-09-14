@@ -1,20 +1,18 @@
 from sqlalchemy.orm import Session
 
 from src.database.models.attendance import Attendance, AttendanceStatus
+from src.database.models.online_enrollment import EnrollmentStatus, PaymentModel
 from src.database.models.reservation import ReservationStatus
-from src.database.models.online_enrollment import PaymentModel, EnrollmentStatus
 from src.database.repositories.attendance_repository import AttendanceRepository
 from src.services.installment_service import InstallmentService
-
-
-SESSIONS_PER_INSTALLMENT_CYCLE = 4
 
 
 class AttendanceService:
     """Records a reservation outcome exactly once.
 
     Only PRESENT consumes a session. ABSENT and CANCELLED never consume one.
-    Re-clicking an attendance button is idempotent and cannot consume a second session.
+    When WEEKLY/MONTHLY remaining sessions hit 0, enrollment is PAUSED and
+    the next payment cycle installment is created (student must pay again).
     """
 
     def __init__(self):
@@ -22,15 +20,28 @@ class AttendanceService:
         self.installment_service = InstallmentService()
 
     def mark_attendance(
-        self, db: Session, enrollment, session_date, status: AttendanceStatus,
-        reservation_id: int | None = None, admin_note: str | None = None,
-    ) -> Attendance:
+        self,
+        db: Session,
+        enrollment,
+        session_date,
+        status: AttendanceStatus,
+        reservation_id: int | None = None,
+        admin_note: str | None = None,
+    ) -> tuple[Attendance, bool]:
+        """Returns (attendance, cycle_exhausted) where cycle_exhausted means
+        a new installment was opened and the student should be notified."""
+
+        cycle_exhausted = False
+
         if reservation_id is not None:
             existing = self.repository.get_by_reservation_id(db, reservation_id)
             if existing:
-                return existing
+                return existing, False
 
-            from src.database.repositories.reservation_repository import ReservationRepository
+            from src.database.repositories.reservation_repository import (
+                ReservationRepository,
+            )
+
             reservation = ReservationRepository().get_by_id(db, reservation_id)
             if not reservation or reservation.status != ReservationStatus.CONFIRMED:
                 raise ValueError("فقط رزرو تاییدشده می‌تواند حضور و غیاب شود.")
@@ -53,19 +64,20 @@ class AttendanceService:
             enrollment.completed_sessions += 1
             if enrollment.remaining_sessions > 0:
                 enrollment.remaining_sessions -= 1
+
             if enrollment.remaining_sessions <= 0:
-                enrollment.status = EnrollmentStatus.ENDED
+                if enrollment.payment_model in (
+                    PaymentModel.MONTHLY,
+                    PaymentModel.WEEKLY,
+                ):
+                    enrollment.status = EnrollmentStatus.PAUSED
+                    self.installment_service.create_next_installment(db, enrollment)
+                    cycle_exhausted = True
+                else:
+                    enrollment.status = EnrollmentStatus.ENDED
 
             db.commit()
-
-            if (
-                enrollment.payment_model == PaymentModel.MONTHLY
-                and enrollment.completed_sessions % SESSIONS_PER_INSTALLMENT_CYCLE == 0
-                and enrollment.status != EnrollmentStatus.ENDED
-            ):
-                self.installment_service.create_next_installment(db, enrollment)
-
         else:
             db.commit()
 
-        return attendance
+        return attendance, cycle_exhausted
