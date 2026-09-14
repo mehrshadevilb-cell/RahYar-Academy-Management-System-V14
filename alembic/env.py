@@ -6,9 +6,6 @@ from sqlalchemy import engine_from_config, pool
 from src.core.config.settings import get_settings
 from src.database.base import Base
 
-# Import every model so Base.metadata is fully populated before Alembic
-# compares it against the database - mirrors src/database/init_db.py,
-# which must be kept in sync with this list.
 from src.database.models.user import User  # noqa: F401
 from src.database.models.telegram_account import TelegramAccount  # noqa: F401
 from src.database.models.course import Course  # noqa: F401
@@ -28,7 +25,6 @@ from src.database.models.installment import Installment  # noqa: F401
 from src.database.models.discount_code import DiscountCode  # noqa: F401
 from src.database.models.admin_log import AdminLog  # noqa: F401
 from src.database.models.referral import Referral  # noqa: F401
-from src.database.models.support_request import SupportRequest  # noqa: F401
 from src.database.models.assignment import Assignment, AssignmentSubmission  # noqa: F401
 
 config = context.config
