@@ -2,7 +2,7 @@ name: Tests
 
 on:
   push:
-    branches: ["main", "master"]
+    branches: ["main", "master", "ai/audit-and-fix-production-readiness"]
   pull_request:
     branches: ["main", "master"]
 
@@ -29,3 +29,6 @@ jobs:
 
       - name: Run tests
         run: pytest -q
+
+      - name: Validate Docker build
+        run: docker build -t rahyar-test .
