@@ -1,9 +1,10 @@
 import asyncio
 import os
 import threading
+import traceback
 
-from fastapi import FastAPI
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse, JSONResponse
 import uvicorn
 
 from src.bot.bot import bot, dp, setup_handlers
@@ -30,6 +31,21 @@ app = FastAPI(
 app.include_router(storefront_router)
 
 
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """Log full traceback; never expose secrets to users."""
+    logger.exception("Unhandled error on %s %s", request.method, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": "Internal Server Error",
+            "path": request.url.path,
+            "error_type": type(exc).__name__,
+            "error": str(exc)[:500],
+        },
+    )
+
+
 @app.get("/health")
 async def health():
     return {"ok": True}
@@ -44,6 +60,83 @@ async def api_status():
             "site": settings.SITE_NAME,
         }
     )
+
+
+@app.get("/api/debug-storefront")
+async def debug_storefront():
+    """Temporary diagnostics for storefront 500s. Safe: no secrets."""
+    from src.database.session import SessionLocal
+    from src.services.web_order_service import WebOrderService
+
+    out: dict = {"ok": True, "steps": []}
+    db = SessionLocal()
+    try:
+        svc = WebOrderService()
+        try:
+            products = svc.list_products(db)
+            out["steps"].append(
+                {"list_products": "ok", "count": len(products)}
+            )
+        except Exception as exc:
+            out["ok"] = False
+            out["steps"].append(
+                {
+                    "list_products": "fail",
+                    "error_type": type(exc).__name__,
+                    "error": str(exc)[:400],
+                    "trace": traceback.format_exc()[-800:],
+                }
+            )
+        try:
+            classes = svc.list_online_classes(db)
+            out["steps"].append(
+                {"list_online_classes": "ok", "count": len(classes)}
+            )
+        except Exception as exc:
+            out["ok"] = False
+            out["steps"].append(
+                {
+                    "list_online_classes": "fail",
+                    "error_type": type(exc).__name__,
+                    "error": str(exc)[:400],
+                    "trace": traceback.format_exc()[-800:],
+                }
+            )
+        try:
+            from pathlib import Path
+            from fastapi.templating import Jinja2Templates
+
+            tpl_dir = Path(__file__).resolve().parent / "web" / "templates"
+            out["steps"].append(
+                {
+                    "templates_dir": str(tpl_dir),
+                    "exists": tpl_dir.is_dir(),
+                    "files": sorted(p.name for p in tpl_dir.glob("*.html"))
+                    if tpl_dir.is_dir()
+                    else [],
+                }
+            )
+            templates = Jinja2Templates(directory=str(tpl_dir))
+            # Smoke-render home with empty lists (no DB objects).
+            class _Req:
+                scope = {"type": "http", "headers": []}
+
+            # Minimal request-like object is hard; just check get_template.
+            templates.env.get_template("home.html")
+            templates.env.get_template("base.html")
+            out["steps"].append({"jinja_home": "ok"})
+        except Exception as exc:
+            out["ok"] = False
+            out["steps"].append(
+                {
+                    "jinja": "fail",
+                    "error_type": type(exc).__name__,
+                    "error": str(exc)[:400],
+                }
+            )
+    finally:
+        db.close()
+    return JSONResponse(out)
 
 
 async def start_bot():

@@ -60,12 +60,29 @@ def _safe_list_classes(db: Session):
 
 @router.get("/", response_class=HTMLResponse)
 async def home(request: Request, db: Session = Depends(get_db)):
-    products = _safe_list_products(db)
-    classes = _safe_list_classes(db)
-    return templates.TemplateResponse(
-        "home.html",
-        _ctx(request, products=products, classes=classes),
-    )
+    try:
+        products = _safe_list_products(db)
+        classes = _safe_list_classes(db)
+        return templates.TemplateResponse(
+            "home.html",
+            _ctx(request, products=products, classes=classes),
+        )
+    except Exception:
+        logger.exception("Storefront home failed; serving minimal fallback")
+        bot_link = _bot_link() or "#"
+        html = f"""<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head><meta charset="utf-8"/><title>{settings.SITE_NAME}</title>
+<style>body{{font-family:Tahoma,sans-serif;background:#0f1419;color:#f2f5f8;padding:2rem;line-height:1.8}}
+a{{color:#3d9cf0}}</style></head>
+<body>
+<h1>{settings.SITE_NAME}</h1>
+<p>{settings.SITE_TAGLINE}</p>
+<p><a href="/products">دوره‌ها</a> · <a href="/classes">کلاس آنلاین</a>
+· <a href="{bot_link}" target="_blank" rel="noopener">ربات تلگرام</a></p>
+<p style="color:#9aa8b8">فهرست موقتاً در دسترس نیست؛ از ربات استفاده کنید.</p>
+</body></html>"""
+        return HTMLResponse(content=html, status_code=200)
 
 
 @router.get("/products", response_class=HTMLResponse)
@@ -75,10 +92,18 @@ async def products_list(request: Request, db: Session = Depends(get_db)):
     except Exception:
         logger.exception("Failed to list products")
         products = []
-    return templates.TemplateResponse(
-        "products.html",
-        _ctx(request, products=products),
-    )
+    try:
+        return templates.TemplateResponse(
+            "products.html",
+            _ctx(request, products=products),
+        )
+    except Exception:
+        logger.exception("products template failed")
+        return HTMLResponse(
+            "<html dir=rtl><body><h1>دوره‌ها</h1><p>موقتاً در دسترس نیست.</p>"
+            "<p><a href=/>خانه</a></p></body></html>",
+            status_code=200,
+        )
 
 
 @router.get("/products/{product_id}", response_class=HTMLResponse)
@@ -171,10 +196,18 @@ async def classes_list(request: Request, db: Session = Depends(get_db)):
     except Exception:
         logger.exception("Failed to list classes")
         classes = []
-    return templates.TemplateResponse(
-        "classes.html",
-        _ctx(request, classes=classes),
-    )
+    try:
+        return templates.TemplateResponse(
+            "classes.html",
+            _ctx(request, classes=classes),
+        )
+    except Exception:
+        logger.exception("classes template failed")
+        return HTMLResponse(
+            "<html dir=rtl><body><h1>کلاس آنلاین</h1><p>موقتاً در دسترس نیست.</p>"
+            "<p><a href=/>خانه</a></p></body></html>",
+            status_code=200,
+        )
 
 
 @router.get("/classes/{course_id}", response_class=HTMLResponse)
