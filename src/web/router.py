@@ -42,6 +42,22 @@ def _ctx(request: Request, **extra):
     }
 
 
+def _render(
+    request: Request,
+    name: str,
+    *,
+    status_code: int = 200,
+    **extra,
+) -> HTMLResponse:
+    """Starlette 0.37+ expects TemplateResponse(request, name, context)."""
+    return templates.TemplateResponse(
+        request,
+        name,
+        _ctx(request, **extra),
+        status_code=status_code,
+    )
+
+
 def _safe_list_products(db: Session):
     try:
         return order_service.list_products(db)[:6]
@@ -63,10 +79,7 @@ async def home(request: Request, db: Session = Depends(get_db)):
     try:
         products = _safe_list_products(db)
         classes = _safe_list_classes(db)
-        return templates.TemplateResponse(
-            "home.html",
-            _ctx(request, products=products, classes=classes),
-        )
+        return _render(request, "home.html", products=products, classes=classes)
     except Exception:
         logger.exception("Storefront home failed; serving minimal fallback")
         bot_link = _bot_link() or "#"
@@ -93,10 +106,7 @@ async def products_list(request: Request, db: Session = Depends(get_db)):
         logger.exception("Failed to list products")
         products = []
     try:
-        return templates.TemplateResponse(
-            "products.html",
-            _ctx(request, products=products),
-        )
+        return _render(request, "products.html", products=products)
     except Exception:
         logger.exception("products template failed")
         return HTMLResponse(
@@ -112,20 +122,19 @@ async def product_detail(
 ):
     product = order_service.get_product(db, product_id)
     if not product:
-        return templates.TemplateResponse(
+        return _render(
+            request,
             "error.html",
-            _ctx(request, message="محصول پیدا نشد یا غیرفعال است."),
             status_code=404,
+            message="محصول پیدا نشد یا غیرفعال است.",
         )
     card = order_service.get_active_card(db)
-    return templates.TemplateResponse(
+    return _render(
+        request,
         "product_detail.html",
-        _ctx(
-            request,
-            product=product,
-            card=card,
-            bot_buy_link=_bot_link(f"buy_{product.id}"),
-        ),
+        product=product,
+        card=card,
+        bot_buy_link=_bot_link(f"buy_{product.id}"),
     )
 
 
@@ -152,10 +161,11 @@ async def product_order(
             "invalid_name": "نام را کامل وارد کنید.",
             "product_unavailable": "محصول در دسترس نیست.",
         }
-        return templates.TemplateResponse(
+        return _render(
+            request,
             "error.html",
-            _ctx(request, message=mapping.get(str(exc), "ثبت سفارش ناموفق بود.")),
             status_code=400,
+            message=mapping.get(str(exc), "ثبت سفارش ناموفق بود."),
         )
 
     if settings.OWNER_ID:
@@ -175,17 +185,15 @@ async def product_order(
         except Exception:
             logger.exception("Failed to notify owner about web order %s", payment.id)
 
-    return templates.TemplateResponse(
+    return _render(
+        request,
         "order_success.html",
-        _ctx(
-            request,
-            product=product,
-            payment=payment,
-            user=user,
-            card=order_service.get_active_card(db),
-            bot_buy_link=_bot_link(f"buy_{product.id}"),
-            bot_home=_bot_link(),
-        ),
+        product=product,
+        payment=payment,
+        user=user,
+        card=order_service.get_active_card(db),
+        bot_buy_link=_bot_link(f"buy_{product.id}"),
+        bot_home=_bot_link(),
     )
 
 
@@ -197,10 +205,7 @@ async def classes_list(request: Request, db: Session = Depends(get_db)):
         logger.exception("Failed to list classes")
         classes = []
     try:
-        return templates.TemplateResponse(
-            "classes.html",
-            _ctx(request, classes=classes),
-        )
+        return _render(request, "classes.html", classes=classes)
     except Exception:
         logger.exception("classes template failed")
         return HTMLResponse(
@@ -216,18 +221,17 @@ async def class_detail(
 ):
     course = order_service.get_online_class(db, course_id)
     if not course:
-        return templates.TemplateResponse(
-            "error.html",
-            _ctx(request, message="کلاس پیدا نشد یا غیرفعال است."),
-            status_code=404,
-        )
-    return templates.TemplateResponse(
-        "class_detail.html",
-        _ctx(
+        return _render(
             request,
-            course=course,
-            bot_class_link=_bot_link(f"class_{course.id}"),
-        ),
+            "error.html",
+            status_code=404,
+            message="کلاس پیدا نشد یا غیرفعال است.",
+        )
+    return _render(
+        request,
+        "class_detail.html",
+        course=course,
+        bot_class_link=_bot_link(f"class_{course.id}"),
     )
 
 
@@ -242,10 +246,11 @@ async def class_inquiry(
 ):
     course = order_service.get_online_class(db, course_id)
     if not course:
-        return templates.TemplateResponse(
+        return _render(
+            request,
             "error.html",
-            _ctx(request, message="کلاس پیدا نشد."),
             status_code=404,
+            message="کلاس پیدا نشد.",
         )
 
     try:
@@ -255,10 +260,11 @@ async def class_inquiry(
             "invalid_phone": "شماره موبایل معتبر نیست (مثال: 09121234567).",
             "invalid_name": "نام را کامل وارد کنید.",
         }
-        return templates.TemplateResponse(
+        return _render(
+            request,
             "error.html",
-            _ctx(request, message=mapping.get(str(exc), "ثبت درخواست ناموفق بود.")),
             status_code=400,
+            message=mapping.get(str(exc), "ثبت درخواست ناموفق بود."),
         )
 
     if settings.OWNER_ID:
@@ -277,15 +283,13 @@ async def class_inquiry(
         except Exception:
             logger.exception("Failed to notify owner about class inquiry")
 
-    return templates.TemplateResponse(
+    return _render(
+        request,
         "inquiry_success.html",
-        _ctx(
-            request,
-            course=course,
-            user=user,
-            bot_class_link=_bot_link(f"class_{course.id}"),
-            bot_home=_bot_link(),
-        ),
+        course=course,
+        user=user,
+        bot_class_link=_bot_link(f"class_{course.id}"),
+        bot_home=_bot_link(),
     )
 
 
