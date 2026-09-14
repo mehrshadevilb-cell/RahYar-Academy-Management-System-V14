@@ -3,6 +3,7 @@ import logging
 from datetime import date, timedelta
 
 from aiogram import Bot
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
 from src.core.config.settings import get_settings
 from src.core.utils.jalali import format_jalali_date, gregorian_to_jalali
@@ -165,11 +166,24 @@ class InstallmentReminderScheduler:
                 logger.exception("Failed to notify owner about overdue installments")
 
     async def _send_class_reminders(self, db) -> None:
-        today = date.today()
-        today_j = _jalali_str_for_gregorian(today)
-        tomorrow_j = _jalali_str_for_gregorian(today + timedelta(days=1))
+        """Class reminders must not break installment cycle on schema drift."""
+        try:
+            today = date.today()
+            today_j = _jalali_str_for_gregorian(today)
+            tomorrow_j = _jalali_str_for_gregorian(today + timedelta(days=1))
 
-        confirmed = self.reservation_repository.get_confirmed_upcoming(db)
+            confirmed = self.reservation_repository.get_confirmed_upcoming(db)
+        except (ProgrammingError, SQLAlchemyError):
+            logger.exception(
+                "Class reminder query failed (schema/DB); "
+                "installment reminders continue. Run alembic upgrade head."
+            )
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            return
+
         for reservation in confirmed:
             if reservation.status != ReservationStatus.CONFIRMED:
                 continue
