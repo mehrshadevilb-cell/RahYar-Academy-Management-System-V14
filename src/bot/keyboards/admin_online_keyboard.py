@@ -79,12 +79,18 @@ def admin_online_course_detail_keyboard(course):
                 InlineKeyboardButton(text="✏️ مدت جلسه", callback_data=f"admin_oc_edit_duration_minutes_{course.id}"),
             ],
             [
+                InlineKeyboardButton(text="✏️ قیمت هفتگی", callback_data=f"admin_oc_edit_weekly_price_{course.id}"),
                 InlineKeyboardButton(text="✏️ قیمت ماهانه", callback_data=f"admin_oc_edit_monthly_price_{course.id}"),
+            ],
+            [
                 InlineKeyboardButton(text="✏️ قیمت ترمی", callback_data=f"admin_oc_edit_term_price_{course.id}"),
             ],
             [
-                InlineKeyboardButton(text="✏️ تعداد جلسات ماهانه", callback_data=f"admin_oc_edit_monthly_sessions_{course.id}"),
-                InlineKeyboardButton(text="✏️ تعداد جلسات ترم", callback_data=f"admin_oc_edit_term_sessions_{course.id}"),
+                InlineKeyboardButton(text="✏️ جلسات هفتگی", callback_data=f"admin_oc_edit_weekly_sessions_{course.id}"),
+                InlineKeyboardButton(text="✏️ جلسات ماهانه", callback_data=f"admin_oc_edit_monthly_sessions_{course.id}"),
+            ],
+            [
+                InlineKeyboardButton(text="✏️ جلسات ترم", callback_data=f"admin_oc_edit_term_sessions_{course.id}"),
             ],
             [
                 InlineKeyboardButton(text=toggle_text, callback_data=f"admin_oc_toggle_{course.id}"),

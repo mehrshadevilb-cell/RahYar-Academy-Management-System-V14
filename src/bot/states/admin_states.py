@@ -24,6 +24,10 @@ class AdminState(StatesGroup):
     waiting_online_course_term_sessions = State()
     waiting_online_course_field_edit = State()
 
+    # --- Class slots ---
+    waiting_slot_date = State()
+    waiting_slot_time = State()
+
     # --- Discount codes ---
     waiting_discount_code_text = State()
     waiting_discount_code_type = State()
