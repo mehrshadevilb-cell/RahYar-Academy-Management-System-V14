@@ -46,17 +46,17 @@ class Settings(BaseSettings):
     SITE_TAGLINE: str = "آموزش حرفه‌ای موسیقی — دوره‌های دیجیتال و کلاس آنلاین"
 
     # AI Developer Agent
+    # Primary names: AI_AGENT_*
+    # Render-friendly aliases: AI_API_KEY, AI_BASE_URL, AI_MODEL
     AI_AGENT_ENABLED: bool = False
     AI_AGENT_REPO_PATH: str = "."
     AI_AGENT_API_KEY: str | None = None
     AI_AGENT_BASE_URL: str = "https://api.openai.com/v1"
-    AI_AGENT_MODEL: str = "gpt-5.6"
+    AI_AGENT_MODEL: str = "gpt-4o-mini"
     AI_AGENT_MAX_RETRIES: int = 2
     AI_AGENT_TIMEOUT_SECONDS: int = 120
 
-    # Simple aliases for external providers
-    # Allows Render ENV names:
-    # AI_API_KEY, AI_BASE_URL, AI_MODEL
+    # Aliases accepted from Render / external dashboards
     AI_API_KEY: str | None = None
     AI_BASE_URL: str | None = None
     AI_MODEL: str | None = None
@@ -64,7 +64,7 @@ class Settings(BaseSettings):
     CHAT_ASSISTANT_ENABLED: bool = False
     CHAT_ASSISTANT_API_KEY: str | None = None
     CHAT_ASSISTANT_BASE_URL: str = "https://api.openai.com/v1"
-    CHAT_ASSISTANT_MODEL: str = "gpt-5.6"
+    CHAT_ASSISTANT_MODEL: str = "gpt-4o-mini"
     CHAT_ASSISTANT_TIMEOUT_SECONDS: int = 30
     CHAT_ASSISTANT_MAX_MESSAGES_PER_HOUR: int = 20
 
@@ -83,15 +83,26 @@ class Settings(BaseSettings):
 
     @property
     def effective_ai_api_key(self) -> str | None:
-        return self.AI_AGENT_API_KEY or self.AI_API_KEY
+        """API key for AI Developer Agent (AI_AGENT_API_KEY or AI_API_KEY)."""
+        return (self.AI_AGENT_API_KEY or self.AI_API_KEY or "").strip() or None
 
     @property
     def effective_ai_base_url(self) -> str:
-        return self.AI_AGENT_BASE_URL if self.AI_AGENT_API_KEY else (self.AI_BASE_URL or self.AI_AGENT_BASE_URL)
+        """Base URL for OpenAI-compatible chat/completions."""
+        if self.AI_AGENT_API_KEY and self.AI_AGENT_BASE_URL:
+            return self.AI_AGENT_BASE_URL.rstrip("/")
+        if self.AI_BASE_URL:
+            return self.AI_BASE_URL.rstrip("/")
+        return (self.AI_AGENT_BASE_URL or "https://api.openai.com/v1").rstrip("/")
 
     @property
     def effective_ai_model(self) -> str:
-        return self.AI_AGENT_MODEL if self.AI_AGENT_API_KEY else (self.AI_MODEL or self.AI_AGENT_MODEL)
+        """Model id for AI Developer Agent."""
+        if self.AI_AGENT_API_KEY and self.AI_AGENT_MODEL:
+            return self.AI_AGENT_MODEL
+        if self.AI_MODEL:
+            return self.AI_MODEL
+        return self.AI_AGENT_MODEL or "gpt-4o-mini"
 
     @property
     def bot_deep_link_base(self) -> str | None:
