@@ -10,7 +10,7 @@ class OnlineCourse(Base):
     """
     A live/private online class type (e.g. Arrangement, Mixing, Piano,
     Theory, Harmony, Ear Training) - distinct from the digital SpotPlayer
-    products in `courses`. Priced separately for monthly vs term students.
+    products in `courses`. Priced separately for weekly / monthly / term.
     """
 
     __tablename__ = "online_courses"
@@ -23,9 +23,13 @@ class OnlineCourse(Base):
 
     duration_minutes: Mapped[int] = mapped_column(Integer, default=60)
 
+    weekly_price: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     monthly_price: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     term_price: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    weekly_sessions: Mapped[int] = mapped_column(Integer, default=1)
 
     monthly_sessions: Mapped[int] = mapped_column(Integer, default=4)
 
@@ -36,3 +40,5 @@ class OnlineCourse(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     enrollments = relationship("OnlineEnrollment", back_populates="online_course")
+
+    class_slots = relationship("ClassSlot", back_populates="online_course")
