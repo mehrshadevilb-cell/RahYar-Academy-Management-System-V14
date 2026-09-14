@@ -19,22 +19,17 @@ def admin_online_courses_keyboard(courses):
 
 
 def payment_model_keyboard(user_id: int, course_id: int):
+    """Only monthly (4 sessions per payment) and term (12 sessions / 3 installments)."""
 
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="هفتگی (۱ جلسه)",
-                    callback_data=f"admin_online_plan_{user_id}_{course_id}_weekly",
-                ),
-            ],
             [
                 InlineKeyboardButton(
                     text="ماهانه (۴ جلسه)",
                     callback_data=f"admin_online_plan_{user_id}_{course_id}_monthly",
                 ),
                 InlineKeyboardButton(
-                    text="ترمی",
+                    text="ترمی (۱۲ جلسه / ۳ قسط)",
                     callback_data=f"admin_online_plan_{user_id}_{course_id}_term",
                 ),
             ],
@@ -79,17 +74,11 @@ def admin_online_course_detail_keyboard(course):
                 InlineKeyboardButton(text="✏️ مدت جلسه", callback_data=f"admin_oc_edit_duration_minutes_{course.id}"),
             ],
             [
-                InlineKeyboardButton(text="✏️ قیمت هفتگی", callback_data=f"admin_oc_edit_weekly_price_{course.id}"),
                 InlineKeyboardButton(text="✏️ قیمت ماهانه", callback_data=f"admin_oc_edit_monthly_price_{course.id}"),
-            ],
-            [
                 InlineKeyboardButton(text="✏️ قیمت ترمی", callback_data=f"admin_oc_edit_term_price_{course.id}"),
             ],
             [
-                InlineKeyboardButton(text="✏️ جلسات هفتگی", callback_data=f"admin_oc_edit_weekly_sessions_{course.id}"),
                 InlineKeyboardButton(text="✏️ جلسات ماهانه", callback_data=f"admin_oc_edit_monthly_sessions_{course.id}"),
-            ],
-            [
                 InlineKeyboardButton(text="✏️ جلسات ترم", callback_data=f"admin_oc_edit_term_sessions_{course.id}"),
             ],
             [

@@ -8,7 +8,14 @@ from src.database.base import Base
 
 
 class PaymentModel(str, enum.Enum):
-    WEEKLY = "weekly"
+    """How the student pays for online classes.
+
+    Classes meet once per week. Payment is never weekly:
+    - MONTHLY: one payment unlocks 4 sessions (about one month).
+    - TERM: 12 sessions over ~3 months, typically as 3 monthly installments
+      of 4 sessions each (or a single term price if paid upfront).
+    """
+
     MONTHLY = "monthly"
     TERM = "term"
 

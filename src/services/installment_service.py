@@ -9,11 +9,12 @@ from src.database.repositories.installment_repository import InstallmentReposito
 
 class InstallmentService:
     """
-    Creates installment (payment cycle) records for weekly/monthly online
-    students. Due-date offset for auto-created cycles is "today".
+    Creates installment (payment cycle) records for online students.
 
-    Reminder cadence (7/3/1 days before + due date) is fixed at 7/3/1/0
-    per the confirmed business requirement.
+    Each installment corresponds to one month / 4 sessions.
+    MONTHLY plans recur indefinitely; TERM plans use up to 3 installments.
+
+    Reminder cadence (7/3/1 days before + due date) is fixed at 7/3/1/0.
     """
 
     REMINDER_OFFSETS = (
@@ -28,11 +29,13 @@ class InstallmentService:
 
     def _amount_for_enrollment(self, enrollment) -> int:
         course = enrollment.online_course
-        if enrollment.payment_model == PaymentModel.WEEKLY:
-            return course.weekly_price or 0
-        if enrollment.payment_model == PaymentModel.MONTHLY:
-            return course.monthly_price or 0
-        return course.term_price or 0
+        # Both monthly and term cycles bill the monthly price per 4-session block.
+        # If only term_price is set, split evenly across 3 months.
+        if course.monthly_price:
+            return course.monthly_price
+        if course.term_price:
+            return course.term_price // 3
+        return 0
 
     def create_next_installment(self, db: Session, enrollment) -> Installment:
         next_number = enrollment.current_installment_number + 1

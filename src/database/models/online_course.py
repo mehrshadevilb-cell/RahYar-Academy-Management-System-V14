@@ -10,7 +10,10 @@ class OnlineCourse(Base):
     """
     A live/private online class type (e.g. Arrangement, Mixing, Piano,
     Theory, Harmony, Ear Training) - distinct from the digital SpotPlayer
-    products in `courses`. Priced separately for weekly / monthly / term.
+    products in `courses`.
+
+    Sessions are weekly (one class per week). Pricing is monthly (4 sessions)
+    or term (12 sessions / ~3 months).
     """
 
     __tablename__ = "online_courses"
@@ -23,16 +26,14 @@ class OnlineCourse(Base):
 
     duration_minutes: Mapped[int] = mapped_column(Integer, default=60)
 
-    weekly_price: Mapped[int | None] = mapped_column(Integer, nullable=True)
-
     monthly_price: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     term_price: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
-    weekly_sessions: Mapped[int] = mapped_column(Integer, default=1)
-
+    # Sessions unlocked per monthly payment cycle (default: 4 = one month).
     monthly_sessions: Mapped[int] = mapped_column(Integer, default=4)
 
+    # Total sessions in a full term (default: 12 = three months).
     term_sessions: Mapped[int] = mapped_column(Integer, default=12)
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)

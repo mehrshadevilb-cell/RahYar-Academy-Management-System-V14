@@ -16,10 +16,8 @@ class OnlineCourseService:
         "name": str,
         "teacher": str,
         "duration_minutes": int,
-        "weekly_price": int,
         "monthly_price": int,
         "term_price": int,
-        "weekly_sessions": int,
         "monthly_sessions": int,
         "term_sessions": int,
     }
@@ -46,8 +44,6 @@ class OnlineCourseService:
         term_price: int | None,
         monthly_sessions: int,
         term_sessions: int,
-        weekly_price: int | None = None,
-        weekly_sessions: int = 1,
     ) -> OnlineCourse:
         return self.repository.create(
             db,
@@ -55,10 +51,8 @@ class OnlineCourseService:
                 name=name,
                 teacher=teacher,
                 duration_minutes=duration_minutes,
-                weekly_price=weekly_price,
                 monthly_price=monthly_price,
                 term_price=term_price,
-                weekly_sessions=weekly_sessions,
                 monthly_sessions=monthly_sessions,
                 term_sessions=term_sessions,
             ),

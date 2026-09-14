@@ -5,6 +5,7 @@ from src.database.models.reservation import ReservationStatus
 from src.database.models.online_enrollment import PaymentModel, EnrollmentStatus
 from src.database.repositories.attendance_repository import AttendanceRepository
 from src.services.installment_service import InstallmentService
+from src.services.online_enrollment_service import OnlineEnrollmentService
 
 
 class AttendanceService:
@@ -13,14 +14,16 @@ class AttendanceService:
     Only PRESENT consumes a session. ABSENT and CANCELLED never consume one.
     Re-clicking an attendance button is idempotent and cannot consume a second session.
 
-    When remaining_sessions hits 0 on a WEEKLY/MONTHLY plan, enrollment is set to
-    PAUSED (not ENDED) and a next installment is created so the student can pay
-    for the following cycle.
+    When remaining_sessions hits 0:
+    - MONTHLY → PAUSED + next installment (pay for next 4 sessions)
+    - TERM → if more cycles remain: PAUSED + next installment;
+             otherwise ENDED (full term completed).
     """
 
     def __init__(self):
         self.repository = AttendanceRepository()
         self.installment_service = InstallmentService()
+        self.enrollment_service = OnlineEnrollmentService()
 
     def mark_attendance(
         self, db: Session, enrollment, session_date, status: AttendanceStatus,
@@ -58,7 +61,7 @@ class AttendanceService:
                 enrollment.remaining_sessions -= 1
 
             if enrollment.remaining_sessions <= 0:
-                if enrollment.payment_model in (PaymentModel.WEEKLY, PaymentModel.MONTHLY):
+                if self.enrollment_service.should_create_next_cycle(enrollment):
                     enrollment.status = EnrollmentStatus.PAUSED
                     cycle_exhausted = True
                     self.installment_service.create_next_installment(db, enrollment)
@@ -69,7 +72,6 @@ class AttendanceService:
         else:
             db.commit()
 
-        # Stash flag on the enrollment object for the handler to notify student.
         enrollment._cycle_exhausted = cycle_exhausted  # type: ignore[attr-defined]
 
         return attendance
