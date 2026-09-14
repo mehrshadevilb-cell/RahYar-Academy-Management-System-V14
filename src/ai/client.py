@@ -2,19 +2,25 @@ from __future__ import annotations
 
 from typing import Any
 
-import httpx
+import urllib.error
+import urllib.request
+import json
 
 from src.core.config.settings import get_settings
 
 
 class AIClient:
-    """OpenAI-compatible client used by RahYar AI agents."""
+    """OpenAI-compatible client used by RahYar AI agents.
+
+    Uses stdlib urllib (no extra httpx dependency) so health checks work
+    with the same stack as AIAgentService.
+    """
 
     def __init__(self) -> None:
         settings = get_settings()
-        self.api_key = settings.AI_AGENT_API_KEY or getattr(settings, "AI_API_KEY", None)
-        self.base_url = settings.AI_AGENT_BASE_URL or getattr(settings, "AI_BASE_URL", "")
-        self.model = settings.AI_AGENT_MODEL or getattr(settings, "AI_MODEL", "")
+        self.api_key = settings.effective_ai_api_key
+        self.base_url = settings.effective_ai_base_url
+        self.model = settings.effective_ai_model
         self.timeout = settings.AI_AGENT_TIMEOUT_SECONDS
 
     async def chat(self, prompt: str, **kwargs: Any) -> dict[str, Any]:
@@ -27,14 +33,20 @@ class AIClient:
             **kwargs,
         }
 
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.post(
-                f"{self.base_url.rstrip('/')}/chat/completions",
-                headers={"Authorization": f"Bearer {self.api_key}"},
-                json=payload,
-            )
-            response.raise_for_status()
-            return response.json()
+        request = urllib.request.Request(
+            f"{self.base_url.rstrip('/')}/chat/completions",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"AI provider request failed: {exc}") from exc
 
 
 ai_client = AIClient()
