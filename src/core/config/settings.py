@@ -1,6 +1,31 @@
 from functools import lru_cache
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def normalize_database_url(url: str) -> str:
+    """
+    Make DATABASE_URL safe for SQLAlchemy 2 + psycopg3.
+
+    Render (and many hosts) inject `postgres://` or bare `postgresql://`.
+    Our stack uses the psycopg3 driver, so the URL must be
+    `postgresql+psycopg://...`. SQLite and already-qualified URLs are
+    left unchanged.
+    """
+    if not url:
+        return url
+
+    if url.startswith("postgres://"):
+        return "postgresql+psycopg://" + url.removeprefix("postgres://")
+
+    if url.startswith("postgresql+psycopg://"):
+        return url
+
+    if url.startswith("postgresql://"):
+        return "postgresql+psycopg://" + url.removeprefix("postgresql://")
+
+    return url
 
 
 class Settings(BaseSettings):
@@ -36,6 +61,13 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
+    @field_validator("DATABASE_URL", mode="before")
+    @classmethod
+    def _normalize_database_url(cls, value: object) -> object:
+        if isinstance(value, str):
+            return normalize_database_url(value)
+        return value
 
 
 @lru_cache
