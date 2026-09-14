@@ -10,6 +10,7 @@ from src.bot.handlers import online_class, admin_online, admin_installments
 from src.bot.handlers import admin_discount, admin_logs, admin_broadcast, admin_reports
 from src.bot.handlers import admin_ai, referral, support, admin_support
 from src.bot.handlers import assignment, admin_assignments, progress
+from src.bot.handlers import chat_assistant
 from src.bot.middlewares.database import DatabaseMiddleware
 
 settings = get_settings()
@@ -59,5 +60,8 @@ def setup_handlers():
         admin_online, admin_installments, admin_discount, admin_logs,
         admin_broadcast, admin_reports, admin_ai, referral, support, admin_support,
         assignment, admin_assignments, progress,
+        # chat_assistant MUST stay last: it's a catch-all for free text
+        # that no other router recognized (see its module docstring).
+        chat_assistant,
     ):
         dp.include_router(module.router)
