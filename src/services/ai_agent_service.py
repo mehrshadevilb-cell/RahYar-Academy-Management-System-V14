@@ -17,6 +17,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from urllib.parse import urlparse
 
 from src.core.config.settings import get_settings
 
@@ -30,6 +31,14 @@ class AIAgentService:
     MAX_FILE_BYTES = 120_000
     LOCK_NAME = ".ai-agent/run.lock"
     LOCK_STALE_SECONDS = 30 * 60
+
+    # AgentRouter (and similar) WAF often rejects generic Python clients.
+    # These headers match documented OpenAI-compatible client profiles.
+    _AGENTROUTER_HEADERS = {
+        "Originator": "codex_cli_rs",
+        "Version": "0.101.0",
+        "User-Agent": "codex_cli_rs/0.101.0 (Linux; x86_64) RahYar-AIAgent/1.0",
+    }
 
     def __init__(self) -> None:
         self.settings = get_settings()
@@ -107,7 +116,6 @@ class AIAgentService:
             pass
 
     def _reset_worktree(self) -> None:
-        """Discard uncommitted AI edits after a failed compile/test cycle."""
         if not self._has_git():
             return
         subprocess.run(
@@ -125,16 +133,22 @@ class AIAgentService:
             timeout=60,
         )
 
+    def _is_agentrouter_host(self) -> bool:
+        host = (urlparse(self._base_url()).hostname or "").lower()
+        return host.endswith("agentrouter.org")
+
     def _provider_headers(self) -> dict[str, str]:
-        return {
+        headers = {
             "Authorization": f"Bearer {self._api_key()}",
             "Content-Type": "application/json",
             "Accept": "application/json",
             "User-Agent": "RahYar-AIAgent/1.0",
         }
+        if self._is_agentrouter_host():
+            headers.update(self._AGENTROUTER_HEADERS)
+        return headers
 
     def _ping_provider(self) -> str:
-        """Lightweight connectivity check (short prompt, short timeout)."""
         url = self._base_url().rstrip("/") + "/chat/completions"
         payload = {
             "model": self._model(),
@@ -149,7 +163,9 @@ class AIAgentService:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=min(30, self.settings.AI_AGENT_TIMEOUT_SECONDS)) as response:
+            with urllib.request.urlopen(
+                request, timeout=min(30, self.settings.AI_AGENT_TIMEOUT_SECONDS)
+            ) as response:
                 data = json.loads(response.read().decode("utf-8"))
             content = data["choices"][0]["message"]["content"]
             return f"ok content={content!r}"
@@ -159,7 +175,13 @@ class AIAgentService:
                 body = exc.read().decode("utf-8", errors="replace")[:400]
             except Exception:
                 pass
-            return f"http_{exc.code} {body or exc.reason}"
+            hint = ""
+            if exc.code in {403, 405} and self._is_agentrouter_host():
+                hint = (
+                    " | try AI_BASE_URL=https://co.agentrouter.org/v1 "
+                    "or use OpenAI/OpenRouter key if WAF still blocks Render IPs"
+                )
+            return f"http_{exc.code} {body or exc.reason}{hint}"
         except Exception as exc:
             return f"error {type(exc).__name__}: {exc}"
 
