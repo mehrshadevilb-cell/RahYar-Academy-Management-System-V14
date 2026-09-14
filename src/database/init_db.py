@@ -1,3 +1,5 @@
+import os
+
 from src.database.base import Base
 from src.database.session import engine
 
@@ -27,6 +29,13 @@ from src.database.models.assignment import Assignment, AssignmentSubmission  # n
 
 
 def init_database():
+    """Dev/test helper only. Production schema is owned by Alembic."""
+    env = (os.getenv("APP_ENV") or os.getenv("ENVIRONMENT") or "").strip().lower()
+    if env in {"production", "prod", "staging"}:
+        raise RuntimeError(
+            "init_database() is blocked when APP_ENV/ENVIRONMENT is production/staging. "
+            "Use: alembic upgrade head"
+        )
     Base.metadata.create_all(bind=engine)
 
 
