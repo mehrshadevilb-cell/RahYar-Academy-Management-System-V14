@@ -28,7 +28,10 @@ def admin_main_menu():
                 InlineKeyboardButton(text="📢 پیام همگانی", callback_data="admin_broadcast"),
                 InlineKeyboardButton(text="📊 خروجی گزارش‌ها", callback_data="admin_reports"),
             ],
-            [InlineKeyboardButton(text="🧠 AI Developer Agent", callback_data="admin_ai")],
+            [
+                InlineKeyboardButton(text="❓ آزمون‌ها", callback_data="admin_quizzes"),
+                InlineKeyboardButton(text="🧠 AI Developer Agent", callback_data="admin_ai"),
+            ],
         ]
     )
 

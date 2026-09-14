@@ -9,6 +9,7 @@ from src.bot.handlers import start, course, profile, my_courses, payment, admin
 from src.bot.handlers import online_class, admin_online, admin_installments
 from src.bot.handlers import admin_discount, admin_logs, admin_broadcast, admin_reports
 from src.bot.handlers import admin_ai, referral
+from src.bot.handlers import quiz, admin_quizzes
 from src.bot.middlewares.database import DatabaseMiddleware
 
 settings = get_settings()
@@ -57,5 +58,6 @@ def setup_handlers():
         start, course, profile, my_courses, payment, admin, online_class,
         admin_online, admin_installments, admin_discount, admin_logs,
         admin_broadcast, admin_reports, admin_ai, referral,
+        quiz, admin_quizzes,
     ):
         dp.include_router(module.router)

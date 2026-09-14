@@ -34,3 +34,6 @@ DISCOUNT_CODE_TOGGLE = "discount_code_toggle"
 BROADCAST_SENT = "broadcast_sent"
 
 REFERRAL_REWARD = "referral_reward"
+
+QUIZ_CREATE = "quiz_create"
+QUIZ_QUESTION_ADD = "quiz_question_add"
