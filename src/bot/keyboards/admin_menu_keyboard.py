@@ -17,22 +17,25 @@ def admin_main_menu():
                 InlineKeyboardButton(text="⚙️ مدیریت کلاس‌های آنلاین", callback_data="admin_online_manage"),
             ],
             [
+                InlineKeyboardButton(text="🗓 زمان‌های آزاد کلاس", callback_data="admin_slots"),
                 InlineKeyboardButton(text="📅 رزروهای در انتظار", callback_data="admin_reservations"),
+            ],
+            [
                 InlineKeyboardButton(text="💰 اقساط", callback_data="admin_installments"),
-            ],
-            [
                 InlineKeyboardButton(text="🎁 کدهای تخفیف", callback_data="admin_discounts"),
+            ],
+            [
                 InlineKeyboardButton(text="📜 لاگ ادمین", callback_data="admin_logs"),
-            ],
-            [
                 InlineKeyboardButton(text="📢 پیام همگانی", callback_data="admin_broadcast"),
-                InlineKeyboardButton(text="📊 خروجی گزارش‌ها", callback_data="admin_reports"),
             ],
             [
+                InlineKeyboardButton(text="📊 خروجی گزارش‌ها", callback_data="admin_reports"),
                 InlineKeyboardButton(text="🆘 پشتیبانی", callback_data="admin_support"),
-                InlineKeyboardButton(text="📝 تکالیف", callback_data="admin_assignments"),
             ],
-            [InlineKeyboardButton(text="🧠 AI Developer Agent", callback_data="admin_ai")],
+            [
+                InlineKeyboardButton(text="📝 تکالیف", callback_data="admin_assignments"),
+                InlineKeyboardButton(text="🧠 AI Developer Agent", callback_data="admin_ai"),
+            ],
         ]
     )
 

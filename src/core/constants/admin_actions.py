@@ -42,3 +42,6 @@ AI_AGENT_RUN = "ai_agent_run"
 
 ASSIGNMENT_CREATE = "assignment_create"
 ASSIGNMENT_REVIEW = "assignment_review"
+
+CLASS_SLOT_CREATE = "class_slot_create"
+CLASS_SLOT_CLOSE = "class_slot_close"

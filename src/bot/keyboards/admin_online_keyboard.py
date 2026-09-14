@@ -24,19 +24,22 @@ def payment_model_keyboard(user_id: int, course_id: int):
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="ماهانه",
+                    text="هفتگی (۱ جلسه)",
+                    callback_data=f"admin_online_plan_{user_id}_{course_id}_weekly",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="ماهانه (۴ جلسه)",
                     callback_data=f"admin_online_plan_{user_id}_{course_id}_monthly",
                 ),
                 InlineKeyboardButton(
                     text="ترمی",
                     callback_data=f"admin_online_plan_{user_id}_{course_id}_term",
                 ),
-            ]
+            ],
         ]
     )
-
-
-# ---------------- Online course CRUD (admin management) ----------------
 
 
 def admin_online_manage_list_keyboard(courses):
