@@ -22,6 +22,15 @@ class Settings(BaseSettings):
     DEFAULT_CARD_HOLDER: str | None = None
     SPOTPLAYER_API_KEY: str | None = None
 
+    # AI Developer Agent. Disabled unless explicitly configured.
+    AI_AGENT_ENABLED: bool = False
+    AI_AGENT_REPO_PATH: str = "."
+    AI_AGENT_API_KEY: str | None = None
+    AI_AGENT_BASE_URL: str = "https://api.openai.com/v1"
+    AI_AGENT_MODEL: str = "gpt-5.6"
+    AI_AGENT_MAX_RETRIES: int = 2
+    AI_AGENT_TIMEOUT_SECONDS: int = 120
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

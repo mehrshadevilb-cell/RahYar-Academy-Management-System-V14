@@ -11,12 +11,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command:
-  [
-    "sh",
-    "-c",
-    "alembic upgrade head && uvicorn src.web:app --host 0.0.0.0 --port ${PORT:-10000} & python -m src.main"
-  ]
+    command: ["sh", "-c", "alembic upgrade head && python -m src.main"]
 
   postgres:
     image: postgres:16
