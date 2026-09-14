@@ -4,7 +4,7 @@ import threading
 import traceback
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 import uvicorn
 
 from src.bot.bot import bot, dp, setup_handlers
@@ -46,9 +46,16 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     )
 
 
-@app.get("/health")
+@app.api_route("/health", methods=["GET", "HEAD"])
 async def health():
-    return {"ok": True}
+    if True:  # HEAD and GET
+        return JSONResponse({"ok": True})
+
+
+@app.api_route("/", methods=["HEAD"])
+async def head_root():
+    """Some edge probes send HEAD / instead of GET /health."""
+    return Response(status_code=200)
 
 
 @app.get("/api/status")
@@ -117,11 +124,6 @@ async def debug_storefront():
                 }
             )
             templates = Jinja2Templates(directory=str(tpl_dir))
-            # Smoke-render home with empty lists (no DB objects).
-            class _Req:
-                scope = {"type": "http", "headers": []}
-
-            # Minimal request-like object is hard; just check get_template.
             templates.env.get_template("home.html")
             templates.env.get_template("base.html")
             out["steps"].append({"jinja_home": "ok"})

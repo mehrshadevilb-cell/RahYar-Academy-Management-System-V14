@@ -6,8 +6,7 @@ COPY requirements.txt .
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Cache-bust so Render rebuilds after storefront/migration fixes.
-ARG CACHE_BUST=20260915-storefront-template-v3
+ARG CACHE_BUST=20260915-schema-agentrouter-v4
 COPY . .
 
 CMD ["sh", "-c", "alembic upgrade head && python -m src.main"]
