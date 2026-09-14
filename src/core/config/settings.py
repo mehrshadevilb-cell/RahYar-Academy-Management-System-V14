@@ -1,4 +1,5 @@
 from functools import lru_cache
+from urllib.parse import urlparse
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -21,6 +22,38 @@ def normalize_database_url(url: str) -> str:
         return "postgresql+psycopg://" + url.removeprefix("postgresql://")
 
     return url
+
+
+def normalize_openai_compatible_base_url(url: str) -> str:
+    """Normalize gateway base URL for OpenAI-style /chat/completions.
+
+    AgentRouter and similar gateways expect .../v1 as the base so that
+    clients call {base}/chat/completions. Owners often paste the bare
+    host (https://agentrouter.org) — append /v1 automatically.
+    """
+    raw = (url or "").strip().rstrip("/")
+    if not raw:
+        return "https://api.openai.com/v1"
+
+    # Strip accidental endpoint suffixes the owner may have copied
+    for suffix in (
+        "/chat/completions",
+        "/v1/chat/completions",
+        "/completions",
+    ):
+        if raw.lower().endswith(suffix):
+            raw = raw[: -len(suffix)].rstrip("/")
+
+    host = (urlparse(raw).hostname or "").lower()
+    gateway_hosts = (
+        "agentrouter.org",
+        "co.agentrouter.org",
+        "www.agentrouter.org",
+    )
+    if host in gateway_hosts and not raw.endswith("/v1"):
+        raw = raw + "/v1"
+
+    return raw
 
 
 class Settings(BaseSettings):
@@ -56,7 +89,7 @@ class Settings(BaseSettings):
     AI_AGENT_MAX_RETRIES: int = 2
     AI_AGENT_TIMEOUT_SECONDS: int = 120
 
-    # Aliases accepted from Render / external dashboards
+    # Aliases accepted from Render / external dashboards (e.g. AgentRouter)
     AI_API_KEY: str | None = None
     AI_BASE_URL: str | None = None
     AI_MODEL: str | None = None
@@ -88,21 +121,18 @@ class Settings(BaseSettings):
 
     @property
     def effective_ai_base_url(self) -> str:
-        """Base URL for OpenAI-compatible chat/completions."""
-        if self.AI_AGENT_API_KEY and self.AI_AGENT_BASE_URL:
-            return self.AI_AGENT_BASE_URL.rstrip("/")
-        if self.AI_BASE_URL:
-            return self.AI_BASE_URL.rstrip("/")
-        return (self.AI_AGENT_BASE_URL or "https://api.openai.com/v1").rstrip("/")
+        """Base URL for OpenAI-compatible chat/completions.
+
+        Prefer explicit AI_BASE_URL (Render alias) over AI_AGENT_BASE_URL so
+        owners can set only AI_API_KEY + AI_BASE_URL + AI_MODEL.
+        """
+        raw = (self.AI_BASE_URL or self.AI_AGENT_BASE_URL or "https://api.openai.com/v1")
+        return normalize_openai_compatible_base_url(raw)
 
     @property
     def effective_ai_model(self) -> str:
-        """Model id for AI Developer Agent."""
-        if self.AI_AGENT_API_KEY and self.AI_AGENT_MODEL:
-            return self.AI_AGENT_MODEL
-        if self.AI_MODEL:
-            return self.AI_MODEL
-        return self.AI_AGENT_MODEL or "gpt-4o-mini"
+        """Model id for AI Developer Agent (AI_MODEL alias preferred)."""
+        return (self.AI_MODEL or self.AI_AGENT_MODEL or "gpt-4o-mini").strip()
 
     @property
     def bot_deep_link_base(self) -> str | None:
