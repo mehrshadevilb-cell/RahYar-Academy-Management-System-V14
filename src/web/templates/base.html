@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}{{ site_name }}{% endblock %}</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --card: #1a2332;
+      --text: #f2f5f8;
+      --muted: #9aa8b8;
+      --accent: #3d9cf0;
+      --accent2: #5ecf9a;
+      --border: #2a3648;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Tahoma, "Segoe UI", sans-serif;
+      background: radial-gradient(ellipse at top, #1a2740 0%, var(--bg) 55%);
+      color: var(--text);
+      min-height: 100vh;
+      line-height: 1.7;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .wrap { max-width: 960px; margin: 0 auto; padding: 1.25rem; }
+    header {
+      display: flex; flex-wrap: wrap; gap: .75rem;
+      align-items: center; justify-content: space-between;
+      border-bottom: 1px solid var(--border); padding-bottom: 1rem; margin-bottom: 1.5rem;
+    }
+    .brand { font-weight: 700; font-size: 1.15rem; color: var(--text); }
+    nav { display: flex; flex-wrap: wrap; gap: .9rem; }
+    nav a { color: var(--muted); }
+    nav a:hover { color: var(--text); }
+    .hero {
+      background: linear-gradient(135deg, #1e3a5f, #152033);
+      border: 1px solid var(--border);
+      border-radius: 16px; padding: 1.75rem; margin-bottom: 1.5rem;
+    }
+    .hero h1 { margin: 0 0 .5rem; font-size: 1.6rem; }
+    .hero p { margin: 0; color: var(--muted); }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 1rem;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 1.1rem;
+      display: flex; flex-direction: column; gap: .5rem;
+    }
+    .card h3 { margin: 0; font-size: 1.05rem; }
+    .price { color: var(--accent2); font-weight: 700; }
+    .muted { color: var(--muted); font-size: .92rem; }
+    .btn {
+      display: inline-block;
+      background: var(--accent);
+      color: #041018 !important;
+      font-weight: 700;
+      padding: .55rem 1rem;
+      border-radius: 10px;
+      border: none;
+      cursor: pointer;
+      text-decoration: none !important;
+    }
+    .btn.secondary { background: transparent; color: var(--text) !important; border: 1px solid var(--border); }
+    .btn-row { display: flex; flex-wrap: wrap; gap: .6rem; margin-top: .75rem; }
+    form label { display: block; margin: .6rem 0 .25rem; color: var(--muted); font-size: .9rem; }
+    form input, form textarea {
+      width: 100%; padding: .65rem .75rem;
+      border-radius: 10px; border: 1px solid var(--border);
+      background: #0d121a; color: var(--text);
+    }
+    form textarea { min-height: 90px; resize: vertical; }
+    footer {
+      margin-top: 2.5rem; padding-top: 1rem;
+      border-top: 1px solid var(--border);
+      color: var(--muted); font-size: .9rem;
+    }
+    .notice {
+      background: #13261f; border: 1px solid #2a5a45;
+      border-radius: 12px; padding: 1rem; margin: 1rem 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <a class="brand" href="/">{{ site_name }}</a>
+      <nav>
+        <a href="/">خانه</a>
+        <a href="/products">دوره‌های دیجیتال</a>
+        <a href="/classes">کلاس آنلاین</a>
+        {% if bot_link %}<a href="{{ bot_link }}" target="_blank" rel="noopener">ربات تلگرام</a>{% endif %}
+      </nav>
+    </header>
+    {% block content %}{% endblock %}
+    <footer>
+      {{ site_name }} — فروش آنلاین و ربات تلگرام از یک سیستم مشترک استفاده می‌کنند.
+      {% if bot_link %} · <a href="{{ bot_link }}" target="_blank" rel="noopener">ورود به ربات</a>{% endif %}
+    </footer>
+  </div>
+</body>
+</html>

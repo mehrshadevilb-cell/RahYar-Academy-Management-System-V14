@@ -47,6 +47,13 @@ class Settings(BaseSettings):
     DEFAULT_CARD_HOLDER: str | None = None
     SPOTPLAYER_API_KEY: str | None = None
 
+    # Public Telegram bot username without @ (for website deep links).
+    BOT_USERNAME: str | None = None
+
+    # Public site branding (Persian storefront).
+    SITE_NAME: str = "آکادمی راه‌یار"
+    SITE_TAGLINE: str = "آموزش حرفه‌ای موسیقی — دوره‌های دیجیتال و کلاس آنلاین"
+
     # AI Developer Agent. Disabled unless explicitly configured.
     AI_AGENT_ENABLED: bool = False
     AI_AGENT_REPO_PATH: str = "."
@@ -56,17 +63,11 @@ class Settings(BaseSettings):
     AI_AGENT_MAX_RETRIES: int = 2
     AI_AGENT_TIMEOUT_SECONDS: int = 120
 
-    # Student-facing chat assistant ("chat with the bot" / onboarding
-    # guide). Read-only: it never touches the database or the
-    # filesystem, unlike the AI Developer Agent above. Disabled unless
-    # explicitly configured, since it calls an external paid API for
-    # every message a student sends.
     CHAT_ASSISTANT_ENABLED: bool = False
     CHAT_ASSISTANT_API_KEY: str | None = None
     CHAT_ASSISTANT_BASE_URL: str = "https://api.openai.com/v1"
     CHAT_ASSISTANT_MODEL: str = "gpt-5.6"
     CHAT_ASSISTANT_TIMEOUT_SECONDS: int = 30
-    # Safety cap so one confused/abusive user can't run up the API bill.
     CHAT_ASSISTANT_MAX_MESSAGES_PER_HOUR: int = 20
 
     model_config = SettingsConfigDict(
@@ -81,6 +82,15 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return normalize_database_url(value)
         return value
+
+    @property
+    def bot_deep_link_base(self) -> str | None:
+        if not self.BOT_USERNAME:
+            return None
+        username = self.BOT_USERNAME.lstrip("@").strip()
+        if not username:
+            return None
+        return f"https://t.me/{username}"
 
 
 @lru_cache

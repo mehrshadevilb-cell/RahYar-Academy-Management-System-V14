@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}دوره‌های دیجیتال | {{ site_name }}{% endblock %}
+{% block content %}
+<h1>دوره‌های دیجیتال</h1>
+<p class="muted">پس از ثبت سفارش، پرداخت کارت‌به‌کارت و تأیید مالک در ربات انجام می‌شود.</p>
+{% if products %}
+<div class="grid">
+  {% for p in products %}
+  <article class="card">
+    <h3>{{ p.title }}</h3>
+    <div class="price">{{ "{:,}".format(p.price) }} تومان</div>
+    <p class="muted">{{ (p.description or "")[:160] }}{% if p.description and p.description|length > 160 %}…{% endif %}</p>
+    <a class="btn" href="/products/{{ p.id }}">خرید</a>
+  </article>
+  {% endfor %}
+</div>
+{% else %}
+<p class="muted">محصول فعالی وجود ندارد.</p>
+{% endif %}
+{% endblock %}

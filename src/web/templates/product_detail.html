@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}{{ product.title }} | {{ site_name }}{% endblock %}
+{% block content %}
+<article class="card" style="max-width:640px">
+  <h1 style="margin:0">{{ product.title }}</h1>
+  <div class="price" style="font-size:1.2rem">{{ "{:,}".format(product.price) }} تومان</div>
+  <p>{{ product.description or "توضیحی ثبت نشده است." }}</p>
+  {% if card %}
+  <div class="notice">
+    <strong>کارت مقصد (کارت‌به‌کارت)</strong><br/>
+    {{ card.card_number }} — {{ card.card_holder }}
+  </div>
+  {% endif %}
+  <p class="muted">دسترسی فقط بعد از تأیید پرداخت توسط آکادمی فعال می‌شود (همان قوانین ربات).</p>
+
+  <h2>ثبت سفارش از وب</h2>
+  <form method="post" action="/products/{{ product.id }}/order">
+    <label>نام و نام خانوادگی</label>
+    <input name="full_name" required maxlength="100" />
+    <label>موبایل (09xxxxxxxxx)</label>
+    <input name="phone" required maxlength="15" placeholder="09121234567" />
+    <label>توضیح اختیاری</label>
+    <textarea name="note" maxlength="500"></textarea>
+    <div class="btn-row">
+      <button class="btn" type="submit">ثبت سفارش</button>
+      {% if bot_buy_link %}
+      <a class="btn secondary" href="{{ bot_buy_link }}" target="_blank" rel="noopener">ادامه خرید در تلگرام</a>
+      {% endif %}
+    </div>
+  </form>
+</article>
+{% endblock %}
