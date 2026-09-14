@@ -1,0 +1,9 @@
+from aiogram.fsm.state import State, StatesGroup
+
+
+class AdminQuizState(StatesGroup):
+    waiting_course_id = State()
+    waiting_title = State()
+    waiting_question_text = State()
+    waiting_options = State()
+    waiting_correct_index = State()
