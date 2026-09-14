@@ -5,6 +5,14 @@ from sqlalchemy.orm import Session
 from src.database.models.payment import Payment
 from src.database.repositories.payment_repository import PaymentRepository
 
+# Allowed status transitions for the manual card-to-card review flow.
+REVIEWABLE_STATUSES = frozenset({"pending"})
+TERMINAL_STATUSES = frozenset({"approved", "rejected", "cancelled", "refunded"})
+
+
+class PaymentReviewError(ValueError):
+    """Raised when a review action is illegal for the current status."""
+
 
 class PaymentService:
     """
@@ -28,7 +36,6 @@ class PaymentService:
         discount_code_id: int | None = None,
         discount_amount: int = 0,
     ) -> Payment:
-
         payment = Payment(
             user_id=user_id,
             course_id=course_id,
@@ -38,7 +45,6 @@ class PaymentService:
             discount_code_id=discount_code_id,
             discount_amount=discount_amount,
         )
-
         return self.repository.create(db, payment)
 
     def approve(
@@ -47,16 +53,23 @@ class PaymentService:
         payment_id: int,
         admin_telegram_id: int,
     ) -> Payment | None:
-        """`admin_telegram_id` is the raw Telegram user id of whoever
-        approved this (there's currently a single owner/admin, so this
-        is always settings.OWNER_ID in practice) - it is NOT a
-        users.id foreign key, and must never be stored in a column
-        declared as one."""
+        """Approve a pending payment. Idempotent against double-click:
 
-        payment = self.repository.get_by_id(db, payment_id)
-
+        - missing id -> None
+        - already approved -> same payment, no second side-effect here
+        - rejected/cancelled -> PaymentReviewError
+        """
+        payment = self.repository.get_by_id_for_update(db, payment_id)
         if not payment:
             return None
+
+        if payment.status == "approved":
+            return payment
+
+        if payment.status not in REVIEWABLE_STATUSES:
+            raise PaymentReviewError(
+                f"Cannot approve payment {payment_id} from status={payment.status!r}"
+            )
 
         payment.status = "approved"
         payment.approved_by_id = admin_telegram_id
@@ -64,7 +77,6 @@ class PaymentService:
 
         db.commit()
         db.refresh(payment)
-
         return payment
 
     def reject(
@@ -74,11 +86,17 @@ class PaymentService:
         admin_telegram_id: int,
         reason: str | None = None,
     ) -> Payment | None:
-
-        payment = self.repository.get_by_id(db, payment_id)
-
+        payment = self.repository.get_by_id_for_update(db, payment_id)
         if not payment:
             return None
+
+        if payment.status == "rejected":
+            return payment
+
+        if payment.status not in REVIEWABLE_STATUSES:
+            raise PaymentReviewError(
+                f"Cannot reject payment {payment_id} from status={payment.status!r}"
+            )
 
         payment.status = "rejected"
         payment.approved_by_id = admin_telegram_id
@@ -87,12 +105,10 @@ class PaymentService:
 
         db.commit()
         db.refresh(payment)
-
         return payment
 
     def get_by_id(self, db: Session, payment_id: int) -> Payment | None:
         return self.repository.get_by_id(db, payment_id)
-
 
     def get_pending(self, db: Session):
         return self.repository.get_pending(db)
