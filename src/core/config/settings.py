@@ -1,4 +1,5 @@
 from functools import lru_cache
+import os
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -7,11 +8,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 def normalize_database_url(url: str) -> str:
     """
     Make DATABASE_URL safe for SQLAlchemy 2 + psycopg3.
-
-    Render (and many hosts) inject `postgres://` or bare `postgresql://`.
-    Our stack uses the psycopg3 driver, so the URL must be
-    `postgresql+psycopg://...`. SQLite and already-qualified URLs are
-    left unchanged.
     """
     if not url:
         return url
@@ -33,11 +29,8 @@ class Settings(BaseSettings):
     DEBUG: bool = False
 
     DATABASE_URL: str = "sqlite:///./rahyar.db"
-
     BOT_TOKEN: str = ""
-
     SECRET_KEY: str = ""
-
     OWNER_ID: int = 0
 
     PROXY_URL: str | None = None
@@ -46,15 +39,11 @@ class Settings(BaseSettings):
     DEFAULT_CARD_NUMBER: str | None = None
     DEFAULT_CARD_HOLDER: str | None = None
     SPOTPLAYER_API_KEY: str | None = None
-
-    # Public Telegram bot username without @ (for website deep links).
     BOT_USERNAME: str | None = None
 
-    # Public site branding (Persian storefront).
     SITE_NAME: str = "آکادمی راه‌یار"
     SITE_TAGLINE: str = "آموزش حرفه‌ای موسیقی — دوره‌های دیجیتال و کلاس آنلاین"
 
-    # AI Developer Agent. Disabled unless explicitly configured.
     AI_AGENT_ENABLED: bool = False
     AI_AGENT_REPO_PATH: str = "."
     AI_AGENT_API_KEY: str | None = None
@@ -91,6 +80,15 @@ class Settings(BaseSettings):
         if not username:
             return None
         return f"https://t.me/{username}"
+
+    def model_post_init(self, __context: object) -> None:
+        """Allow simple AI_* env names as aliases for Render configuration."""
+        if not self.AI_AGENT_API_KEY:
+            self.AI_AGENT_API_KEY = os.getenv("AI_API_KEY")
+        if self.AI_AGENT_BASE_URL == "https://api.openai.com/v1":
+            self.AI_AGENT_BASE_URL = os.getenv("AI_BASE_URL", self.AI_AGENT_BASE_URL)
+        if self.AI_AGENT_MODEL == "gpt-5.6":
+            self.AI_AGENT_MODEL = os.getenv("AI_MODEL", self.AI_AGENT_MODEL)
 
 
 @lru_cache
