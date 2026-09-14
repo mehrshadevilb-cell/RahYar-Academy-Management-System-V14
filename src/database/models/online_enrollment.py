@@ -25,10 +25,10 @@ class EnrollmentStatus(str, enum.Enum):
     ENDED = "ended"
 
 
-# How many free cancellations a student may use during one enrollment term
-# without consuming a paid session. Further cancellations count as absence
-# and consume remaining_sessions.
-FREE_CANCELS_PER_TERM = 1
+# Per every 12-session block (one term), the student may miss 1 session
+# (absent or cancel) without consuming a paid session. Further misses
+# consume remaining_sessions.
+FREE_MISSES_PER_12_SESSIONS = 1
 
 
 class OnlineEnrollment(Base):
@@ -57,7 +57,8 @@ class OnlineEnrollment(Base):
 
     current_installment_number: Mapped[int] = mapped_column(Integer, default=0)
 
-    # Free cancellations already used in this enrollment (max FREE_CANCELS_PER_TERM).
+    # Free absences/cancels already used in this enrollment (max 1 per 12 sessions).
+    # Column name kept as free_cancels_used for migration compatibility.
     free_cancels_used: Mapped[int] = mapped_column(Integer, default=0)
 
     status: Mapped[EnrollmentStatus] = mapped_column(

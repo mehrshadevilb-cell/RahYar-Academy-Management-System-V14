@@ -4,7 +4,7 @@ from src.database.models.attendance import Attendance, AttendanceStatus
 from src.database.models.reservation import ReservationStatus
 from src.database.models.online_enrollment import (
     EnrollmentStatus,
-    FREE_CANCELS_PER_TERM,
+    FREE_MISSES_PER_12_SESSIONS,
 )
 from src.database.repositories.attendance_repository import AttendanceRepository
 from src.services.installment_service import InstallmentService
@@ -16,9 +16,8 @@ class AttendanceService:
 
     Session consumption:
     - PRESENT → always consumes 1 remaining session.
-    - ABSENT → does not consume.
-    - CANCELLED → first free cancel per term does not consume;
-      further cancels consume 1 session (count as charged absence).
+    - ABSENT or CANCELLED → 1 free miss per 12 sessions (term block);
+      further misses consume 1 remaining session each.
 
     When remaining_sessions hits 0 after a consuming event:
     - MONTHLY → PAUSED + next installment
@@ -29,6 +28,17 @@ class AttendanceService:
         self.repository = AttendanceRepository()
         self.installment_service = InstallmentService()
         self.enrollment_service = OnlineEnrollmentService()
+
+    def _allowed_free_misses(self, enrollment) -> int:
+        """1 free miss per every 12 completed+remaining capacity of the plan.
+
+        For a standard term (12 sessions) this is 1 free miss for the whole term.
+        For longer enrollments it scales: floor(term_sessions / 12) * FREE_MISSES.
+        """
+        course = enrollment.online_course
+        term_size = getattr(course, "term_sessions", None) or 12
+        blocks = max(1, term_size // 12)
+        return blocks * FREE_MISSES_PER_12_SESSIONS
 
     def _consume_session(self, db: Session, enrollment) -> bool:
         """Decrement remaining_sessions; return True if cycle is now exhausted."""
@@ -43,6 +53,22 @@ class AttendanceService:
                 return True
             enrollment.status = EnrollmentStatus.ENDED
         return False
+
+    def _handle_miss(self, db: Session, enrollment) -> tuple[bool, str]:
+        """Apply free-miss or charged-miss rules.
+
+        Returns (cycle_exhausted, outcome) where outcome is
+        'free_miss' or 'charged_miss'.
+        """
+        used = enrollment.free_cancels_used or 0
+        allowed = self._allowed_free_misses(enrollment)
+
+        if used < allowed:
+            enrollment.free_cancels_used = used + 1
+            return False, "free_miss"
+
+        cycle_exhausted = self._consume_session(db, enrollment)
+        return cycle_exhausted, "charged_miss"
 
     def mark_attendance(
         self, db: Session, enrollment, session_date, status: AttendanceStatus,
@@ -73,30 +99,28 @@ class AttendanceService:
             reservation.status = ReservationStatus.COMPLETED
 
         cycle_exhausted = False
-        # free_cancel | charged_cancel | None
-        cancel_outcome: str | None = None
+        miss_outcome: str | None = None
 
         if status == AttendanceStatus.PRESENT:
             cycle_exhausted = self._consume_session(db, enrollment)
             db.commit()
 
-        elif status == AttendanceStatus.CANCELLED:
-            used = enrollment.free_cancels_used or 0
-            if used < FREE_CANCELS_PER_TERM:
-                enrollment.free_cancels_used = used + 1
-                cancel_outcome = "free_cancel"
-                db.commit()
-            else:
-                # Extra cancel beyond the free allowance → counts as session used.
-                cycle_exhausted = self._consume_session(db, enrollment)
-                cancel_outcome = "charged_cancel"
-                db.commit()
+        elif status in (AttendanceStatus.ABSENT, AttendanceStatus.CANCELLED):
+            # Every absence/cancel beyond the 1 free miss per 12 sessions
+            # consumes a paid session.
+            cycle_exhausted, miss_outcome = self._handle_miss(db, enrollment)
+            db.commit()
 
         else:
-            # ABSENT: no session consumption
             db.commit()
 
         enrollment._cycle_exhausted = cycle_exhausted  # type: ignore[attr-defined]
-        enrollment._cancel_outcome = cancel_outcome  # type: ignore[attr-defined]
+        enrollment._miss_outcome = miss_outcome  # type: ignore[attr-defined]
+        # Back-compat alias for older handler code
+        enrollment._cancel_outcome = (  # type: ignore[attr-defined]
+            "free_cancel" if miss_outcome == "free_miss"
+            else "charged_cancel" if miss_outcome == "charged_miss"
+            else None
+        )
 
         return attendance

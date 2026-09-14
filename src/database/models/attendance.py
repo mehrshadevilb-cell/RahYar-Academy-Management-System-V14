@@ -19,9 +19,8 @@ class Attendance(Base):
 
     Session consumption rules:
     - PRESENT always consumes one remaining session.
-    - ABSENT does not consume a session (no-show without formal cancel).
-    - CANCELLED: the first free cancel per enrollment term does NOT consume;
-      any further cancel is treated like a charged absence and consumes one session.
+    - ABSENT / CANCELLED: 1 free miss allowed per 12 sessions (one term);
+      any further miss consumes one remaining session.
     """
 
     __tablename__ = "attendances"
@@ -36,8 +35,7 @@ class Attendance(Base):
         ForeignKey("reservations.id"), nullable=True
     )
 
-    # Same Jalali-text storage as Reservation.requested_date, since this
-    # is copied directly from the reservation the attendance is for.
+    # Same Jalali-text storage as Reservation.requested_date.
     session_date: Mapped[str] = mapped_column(String(20), nullable=False)
 
     status: Mapped[AttendanceStatus] = mapped_column(Enum(AttendanceStatus))
