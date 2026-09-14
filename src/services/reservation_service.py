@@ -33,11 +33,12 @@ class ReservationService:
         reservation = self.repository.get_by_id(db, reservation_id)
         if not reservation:
             return None
-        if reservation.status not in (
-            ReservationStatus.PAYMENT_SUBMITTED,
-            ReservationStatus.PENDING,
-        ):
+
+        # A reservation can only become final after payment is submitted.
+        # The old PENDING path allowed admin confirmation without payment.
+        if reservation.status != ReservationStatus.PAYMENT_SUBMITTED:
             return reservation
+
         reservation.status = ReservationStatus.CONFIRMED
         db.commit()
         db.refresh(reservation)
