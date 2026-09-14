@@ -29,14 +29,16 @@ class Reservation(Base):
     requested_date: Mapped[str] = mapped_column(String(20), nullable=False)
     requested_time: Mapped[str] = mapped_column(String(10), nullable=False)
 
-    # values_callable + native_enum=False: persist "confirmed" not "CONFIRMED"
-    # so Postgres VARCHAR / non-native enums stay consistent with app filters.
+    # Production Postgres has a native enum type `reservationstatus` whose
+    # labels are the Python *member names* (CONFIRMED, PENDING, ...), not the
+    # lowercase .value strings. values_callable must send names or queries
+    # raise InvalidTextRepresentation.
     status: Mapped[ReservationStatus] = mapped_column(
         Enum(
             ReservationStatus,
-            values_callable=lambda enum_cls: [item.value for item in enum_cls],
-            native_enum=False,
-            length=32,
+            name="reservationstatus",
+            values_callable=lambda enum_cls: [item.name for item in enum_cls],
+            native_enum=True,
         ),
         default=ReservationStatus.WAITING_PAYMENT,
     )
