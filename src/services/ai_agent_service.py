@@ -2,6 +2,10 @@
 
 The agent is deliberately disabled by default. It operates on a local checkout,
 creates an ai/* branch, and never changes main automatically.
+
+On Render (Docker image without .git), status and analyze still work when
+AI_AGENT_ENABLED=true and an API key is set. implement() requires a real
+git working tree and will refuse otherwise.
 """
 
 from __future__ import annotations
@@ -31,15 +35,42 @@ class AIAgentService:
         self.settings = get_settings()
         self.repo = Path(self.settings.AI_AGENT_REPO_PATH).resolve()
 
-    def _check_enabled(self) -> None:
+    def _has_git(self) -> bool:
+        return self.repo.exists() and (self.repo / ".git").exists()
+
+    def _api_key(self) -> str:
+        key = self.settings.effective_ai_api_key
+        if not key:
+            raise AIAgentError(
+                "AI API key is not configured. "
+                "Set AI_AGENT_API_KEY or AI_API_KEY in environment."
+            )
+        return key
+
+    def _base_url(self) -> str:
+        return self.settings.effective_ai_base_url
+
+    def _model(self) -> str:
+        return self.settings.effective_ai_model
+
+    def _check_enabled(self, *, require_git: bool = False) -> None:
         if not self.settings.AI_AGENT_ENABLED:
-            raise AIAgentError("AI Developer Agent is disabled in configuration.")
-        if not self.settings.AI_AGENT_API_KEY:
-            raise AIAgentError("AI_AGENT_API_KEY is not configured.")
-        if not self.repo.exists() or not (self.repo / ".git").exists():
-            raise AIAgentError(f"AI_AGENT_REPO_PATH is not a git checkout: {self.repo}")
+            raise AIAgentError(
+                "AI Developer Agent is disabled. "
+                "Set AI_AGENT_ENABLED=true in environment to activate."
+            )
+        self._api_key()
+        if require_git and not self._has_git():
+            raise AIAgentError(
+                "AI agent write mode needs a git checkout (AI_AGENT_REPO_PATH). "
+                "On Render the Docker image has no .git sandbox — "
+                "use status/analyze only, or run implement on a local/dev machine "
+                "with a full clone."
+            )
 
     def _git(self, *args: str) -> str:
+        if not self._has_git():
+            raise AIAgentError("Git working tree is not available.")
         result = subprocess.run(
             ["git", *args],
             cwd=self.repo,
@@ -78,6 +109,8 @@ class AIAgentService:
 
     def _reset_worktree(self) -> None:
         """Discard uncommitted AI edits after a failed compile/test cycle."""
+        if not self._has_git():
+            return
         subprocess.run(
             ["git", "reset", "--hard", "HEAD"],
             cwd=self.repo,
@@ -94,24 +127,39 @@ class AIAgentService:
         )
 
     def status(self) -> str:
-        self._check_enabled()
-        branch = self._git("branch", "--show-current")
-        dirty = self._git("status", "--porcelain")
-        clean = not bool(dirty)
-        head = self._git("rev-parse", "--short", "HEAD")
-        lock = self._lock_path().exists()
+        self._check_enabled(require_git=False)
         lines = [
             f"enabled={self.settings.AI_AGENT_ENABLED}",
-            f"branch={branch}",
-            f"head={head}",
-            f"clean={clean}",
-            f"locked={lock}",
-            f"model={self.settings.AI_AGENT_MODEL}",
+            f"api_key_configured={bool(self.settings.effective_ai_api_key)}",
+            f"model={self._model()}",
+            f"base_url={self._base_url()}",
             f"max_retries={self.settings.AI_AGENT_MAX_RETRIES}",
             f"repo={self.repo}",
+            f"git_available={self._has_git()}",
+            f"write_mode={'yes' if self._has_git() else 'no (status/analyze only)'}",
         ]
-        if dirty:
-            lines.append(f"dirty_files={len(dirty.splitlines())}")
+        if self._has_git():
+            try:
+                branch = self._git("branch", "--show-current")
+                dirty = self._git("status", "--porcelain")
+                head = self._git("rev-parse", "--short", "HEAD")
+                lock = self._lock_path().exists()
+                lines.extend(
+                    [
+                        f"branch={branch}",
+                        f"head={head}",
+                        f"clean={not bool(dirty)}",
+                        f"locked={lock}",
+                    ]
+                )
+                if dirty:
+                    lines.append(f"dirty_files={len(dirty.splitlines())}")
+            except AIAgentError as exc:
+                lines.append(f"git_error={exc}")
+        else:
+            lines.append(
+                "note=Docker/Render deploy has no .git; implement is disabled here."
+            )
         return "\n".join(lines)
 
     def _context(self) -> str:
@@ -119,7 +167,18 @@ class AIAgentService:
         context = context_file.read_text(encoding="utf-8") if context_file.exists() else ""
         policy_file = self.repo / ".ai-agent" / "policy.md"
         policy = policy_file.read_text(encoding="utf-8") if policy_file.exists() else ""
-        tracked = self._git("ls-files")
+        tracked = ""
+        if self._has_git():
+            try:
+                tracked = self._git("ls-files")
+            except AIAgentError:
+                tracked = "(git ls-files unavailable)"
+        else:
+            # Lightweight inventory from source tree when .git is missing
+            src = self.repo / "src"
+            if src.exists():
+                paths = sorted(str(p.relative_to(self.repo)) for p in src.rglob("*.py"))
+                tracked = "\n".join(paths[:400])
         return (
             f"PROJECT CONTEXT:\n{context}\n\n"
             f"AGENT POLICY:\n{policy}\n\n"
@@ -127,9 +186,9 @@ class AIAgentService:
         )
 
     def _request_model(self, prompt: str) -> str:
-        url = self.settings.AI_AGENT_BASE_URL.rstrip("/") + "/chat/completions"
+        url = self._base_url().rstrip("/") + "/chat/completions"
         payload = {
-            "model": self.settings.AI_AGENT_MODEL,
+            "model": self._model(),
             "messages": [
                 {
                     "role": "system",
@@ -147,7 +206,7 @@ class AIAgentService:
             url,
             data=json.dumps(payload).encode("utf-8"),
             headers={
-                "Authorization": f"Bearer {self.settings.AI_AGENT_API_KEY}",
+                "Authorization": f"Bearer {self._api_key()}",
                 "Content-Type": "application/json",
             },
             method="POST",
@@ -170,14 +229,19 @@ class AIAgentService:
             "Audit the repository for bugs, risks, missing tests and architecture issues."
         ),
     ) -> str:
-        self._check_enabled()
+        self._check_enabled(require_git=False)
         self._acquire_lock()
         try:
-            status = self._git("status", "--short")
+            status = ""
+            if self._has_git():
+                try:
+                    status = self._git("status", "--short")
+                except AIAgentError:
+                    status = "(git status unavailable)"
             prompt = f"""{self._context()}
 
 CURRENT GIT STATUS:
-{status}
+{status or '(no git — advisory mode on deployed image)'}
 
 TASK:
 {request}
@@ -200,7 +264,6 @@ Do not modify files. Return findings grouped by severity, with exact paths and c
         path = Path(relative)
         if not path.parts or path.is_absolute() or ".." in path.parts or path.parts[0] in self.PROTECTED:
             raise AIAgentError(f"Protected or invalid path: {relative}")
-        # Extra deny patterns from policy
         lowered = str(path).lower()
         for token in (".env", "secrets", "credentials", "production.db"):
             if token in lowered:
@@ -261,7 +324,7 @@ Do not modify files. Return findings grouped by severity, with exact paths and c
         return True, "PASS"
 
     def implement(self, task: str, task_type: str = "feature") -> str:
-        self._check_enabled()
+        self._check_enabled(require_git=True)
         self._acquire_lock()
         try:
             branch = self._ensure_branch(task)
