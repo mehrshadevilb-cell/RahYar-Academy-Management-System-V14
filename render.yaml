@@ -1,0 +1,55 @@
+# RahYar Academy — Render Blueprint
+#
+# Deploy: Dashboard → New → Blueprint → connect this repo.
+# After create, fill sync:false secrets in the dashboard.
+#
+# Important:
+# - Use a paid/always-on web plan (Free sleeps; bot stops polling).
+# - Keep a single web instance (Telegram long-polling is not multi-replica safe).
+# - AI agent stays disabled on Render.
+
+services:
+  - type: web
+    name: rahyar-bot
+    runtime: docker
+    plan: starter
+    region: frankfurt
+    healthCheckPath: /health
+    # Dockerfile CMD already runs: alembic upgrade head && python -m src.main
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: OWNER_ID
+        sync: false
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: rahyar-db
+          property: connectionString
+      - key: SPOTPLAYER_API_KEY
+        sync: false
+      - key: DEFAULT_CARD_NUMBER
+        sync: false
+      - key: DEFAULT_CARD_HOLDER
+        sync: false
+      - key: DEBUG
+        value: "false"
+      - key: AI_AGENT_ENABLED
+        value: "false"
+      # Optional — only if Telegram is unreachable from the region:
+      # - key: PROXY_URL
+      #   sync: false
+      # Optional — when FSM/cache is wired to Redis:
+      # - key: REDIS_URL
+      #   fromService:
+      #     name: rahyar-redis
+      #     type: keyvalue
+      #     property: connectionString
+
+databases:
+  - name: rahyar-db
+    plan: basic-256mb
+    region: frankfurt
+    databaseName: rahyar
+    user: rahyar
