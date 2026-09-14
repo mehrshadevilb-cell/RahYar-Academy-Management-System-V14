@@ -27,7 +27,7 @@ def test_answer_missing_api_key_raises():
     service = ChatAssistantService()
     service.settings = MagicMock()
     service.settings.CHAT_ASSISTANT_ENABLED = True
-    service.settings.CHAT_ASSISTANT_API_KEY = None
+    service.settings.effective_chat_api_key = None
     with pytest.raises(ChatAssistantError, match="API_KEY"):
         service.answer(db=MagicMock(), telegram_id="1", user_message="سلام")
 
@@ -36,7 +36,7 @@ def test_answer_empty_message_raises():
     service = ChatAssistantService()
     service.settings = MagicMock()
     service.settings.CHAT_ASSISTANT_ENABLED = True
-    service.settings.CHAT_ASSISTANT_API_KEY = "key"
+    service.settings.effective_chat_api_key = "key"
     with pytest.raises(ChatAssistantError, match="empty_message"):
         service.answer(db=MagicMock(), telegram_id="1", user_message="   ")
 
@@ -56,7 +56,6 @@ def test_rate_limit_is_per_user():
     service.settings = MagicMock()
     service.settings.CHAT_ASSISTANT_MAX_MESSAGES_PER_HOUR = 1
     service._check_rate_limit("42")
-    # A different user must not be affected by user 42's usage.
     service._check_rate_limit("99")
 
 
@@ -74,8 +73,6 @@ def test_catalog_context_handles_empty_catalog():
 
 
 def test_system_prompt_forbids_payment_and_admin_disclosure():
-    # Guardrail regression check: if someone edits the prompt later,
-    # these two rules must still be present.
     assert "شماره کارت" in SYSTEM_PROMPT_FA
     assert "دستورات مدیریتی" in SYSTEM_PROMPT_FA
 
