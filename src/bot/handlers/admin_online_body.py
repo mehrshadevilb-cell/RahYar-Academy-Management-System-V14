@@ -1,8 +1,9 @@
-"""Assemble full admin_online implementation from split parts."""
-from pathlib import Path
+"""Full admin_online handlers (compressed source)."""
+import base64
+import zlib
 
-_p = Path(__file__).resolve().parent
-_code = (_p / "_admin_online_part1.py").read_text(encoding="utf-8")
-_code += (_p / "_admin_online_part2.py").read_text(encoding="utf-8")
-exec(_code, globals())
-del _code, _p
+_SRC = zlib.decompress(
+    base64.b64decode(
+        open(__file__, "rb")  # placeholder replaced below
+    )
+)
