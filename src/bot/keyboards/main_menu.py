@@ -30,6 +30,12 @@ def get_main_menu(role: UserRole | None = None):
             )
         ],
 
+        [
+            KeyboardButton(
+                text="📝 تکالیف"
+            )
+        ],
+
 
         [
             KeyboardButton(
@@ -41,6 +47,12 @@ def get_main_menu(role: UserRole | None = None):
         [
             KeyboardButton(
                 text="🎁 دعوت از دوستان"
+            )
+        ],
+
+        [
+            KeyboardButton(
+                text="🆘 پشتیبانی"
             )
         ],
 

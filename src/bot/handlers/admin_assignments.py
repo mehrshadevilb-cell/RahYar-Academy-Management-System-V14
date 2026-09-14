@@ -11,6 +11,7 @@ from src.bot.keyboards.assignment_keyboard import (
 from src.bot.states.assignment_states import AdminAssignmentState
 from src.core.config.settings import get_settings
 from src.core.constants import admin_actions
+from src.database.repositories.telegram_repository import TelegramRepository
 from src.services.admin_log_service import AdminLogService
 from src.services.assignment_service import AssignmentService, AssignmentServiceError
 from src.services.online_course_service import OnlineCourseService
@@ -22,6 +23,7 @@ assignment_service = AssignmentService()
 online_course_service = OnlineCourseService()
 admin_log_service = AdminLogService()
 profile_service = ProfileService()
+telegram_repository = TelegramRepository()
 
 
 def _is_owner(user_id: int) -> bool:
@@ -172,27 +174,7 @@ async def admin_review_submit(message: Message, state: FSMContext, db):
     )
 
     try:
-        score_line = f"\nنمره: {submission.score}" if submission.score is not None else ""
-        await message.bot.send_message(
-            chat_id=int(
-                profile_service.get_profile_by_id(db, submission.user_id)
-                and (await _telegram_id(db, submission.user_id))
-            ),
-            text=(
-                f"📝 نتیجه تکلیف #{submission.assignment_id}\n"
-                f"وضعیت: {submission.status.value}{score_line}\n\n"
-                f"{submission.admin_feedback}"
-            ),
-        )
-    except Exception:
-        # Fallback: resolve telegram via enrollment path is complex; notify best-effort below
-        pass
-
-    # Reliable notify via telegram accounts
-    try:
-        from src.database.repositories.telegram_repository import TelegramRepository
-
-        tg = TelegramRepository().get_by_user_id(db, submission.user_id)
+        tg = telegram_repository.get_by_user_id(db, submission.user_id)
         if tg:
             score_line = f"\nنمره: {submission.score}" if submission.score is not None else ""
             await message.bot.send_message(
@@ -207,29 +189,13 @@ async def admin_review_submit(message: Message, state: FSMContext, db):
         await message.answer("⚠️ نتیجه ذخیره شد ولی ارسال به هنرجو ناموفق بود.")
 
 
-async def _telegram_id(db, user_id: int):
-    from src.database.repositories.telegram_repository import TelegramRepository
-
-    tg = TelegramRepository().get_by_user_id(db, user_id)
-    return int(tg.telegram_id) if tg else None
-
-
 @router.callback_query(F.data == "admin_asg_create")
 async def admin_create_start(callback: CallbackQuery, state: FSMContext, db):
     if not _is_owner(callback.from_user.id):
         await callback.answer("⛔️", show_alert=True)
         return
 
-    courses = online_course_service.list_active(db) if hasattr(online_course_service, "list_active") else online_course_service.get_all(db)  # type: ignore
-    # Prefer stable API if present
-    try:
-        courses = online_course_service.get_all_active(db)
-    except Exception:
-        try:
-            courses = online_course_service.get_all(db)
-        except Exception:
-            courses = []
-
+    courses = online_course_service.get_active_courses(db)
     if not courses:
         await callback.message.answer("ابتدا حداقل یک کلاس آنلاین فعال بسازید.")
         await callback.answer()
@@ -254,7 +220,7 @@ async def admin_create_course_id(message: Message, state: FSMContext, db):
         return
 
     course_id = int(raw)
-    course = online_course_service.get_by_id(db, course_id)
+    course = online_course_service.get_course_by_id(db, course_id)
     if not course:
         await message.answer("کلاس پیدا نشد. دوباره شناسه را بفرستید:")
         return
