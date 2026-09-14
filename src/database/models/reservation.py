@@ -1,7 +1,7 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, ForeignKey, String
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.database.base import Base
@@ -38,6 +38,10 @@ class Reservation(Base):
     )
 
     admin_notes: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+    # Idempotent reminder flags (same pattern as installments).
+    reminder_1d_sent: Mapped[bool] = mapped_column(Boolean, default=False)
+    reminder_due_sent: Mapped[bool] = mapped_column(Boolean, default=False)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
