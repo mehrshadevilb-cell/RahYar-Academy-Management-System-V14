@@ -34,3 +34,8 @@ DISCOUNT_CODE_TOGGLE = "discount_code_toggle"
 BROADCAST_SENT = "broadcast_sent"
 
 REFERRAL_REWARD = "referral_reward"
+
+SUPPORT_REPLY = "support_reply"
+SUPPORT_CLOSE = "support_close"
+
+AI_AGENT_RUN = "ai_agent_run"

@@ -28,6 +28,7 @@ from src.database.models.installment import Installment  # noqa: F401
 from src.database.models.discount_code import DiscountCode  # noqa: F401
 from src.database.models.admin_log import AdminLog  # noqa: F401
 from src.database.models.referral import Referral  # noqa: F401
+from src.database.models.support_request import SupportRequest  # noqa: F401
 
 config = context.config
 
