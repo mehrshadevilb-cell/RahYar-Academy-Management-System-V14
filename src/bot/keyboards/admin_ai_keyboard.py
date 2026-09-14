@@ -15,5 +15,8 @@ def admin_ai_keyboard() -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(text="🛑 توقف", callback_data="ai_stop"),
             ],
+            [
+                InlineKeyboardButton(text="⬅️ بازگشت", callback_data="admin_home"),
+            ],
         ]
     )

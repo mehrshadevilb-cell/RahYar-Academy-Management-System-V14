@@ -1,11 +1,12 @@
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from src.services.ai_agent_service import AIAgentError, AIAgentService
 
 
-def test_safe_path_rejects_empty_and_parent_paths(tmp_path, monkeypatch):
+def test_safe_path_rejects_empty_and_parent_paths(tmp_path):
     agent = AIAgentService()
     agent.repo = Path(tmp_path)
     with pytest.raises(AIAgentError):
@@ -20,3 +21,47 @@ def test_safe_path_allows_project_file(tmp_path):
     agent = AIAgentService()
     agent.repo = Path(tmp_path)
     assert agent._safe_path("src/example.py") == Path(tmp_path).resolve() / "src/example.py"
+
+
+def test_safe_path_rejects_absolute(tmp_path):
+    agent = AIAgentService()
+    agent.repo = Path(tmp_path)
+    with pytest.raises(AIAgentError):
+        agent._safe_path("/etc/passwd")
+
+
+def test_parse_plan_accepts_fenced_json():
+    agent = AIAgentService()
+    raw = '```json\n{"summary": "ok", "files": [{"path": "a.py", "content": "x"}]}\n```'
+    plan = agent._parse_plan(raw)
+    assert plan["summary"] == "ok"
+    assert plan["files"][0]["path"] == "a.py"
+
+
+def test_parse_plan_rejects_empty_files():
+    agent = AIAgentService()
+    with pytest.raises(AIAgentError):
+        agent._parse_plan('{"summary": "x", "files": []}')
+
+
+def test_apply_files_writes_under_repo(tmp_path):
+    agent = AIAgentService()
+    agent.repo = Path(tmp_path)
+    written = agent._apply_files([{"path": "src/demo.py", "content": "print(1)\n"}])
+    assert written == ["src/demo.py"]
+    assert (tmp_path / "src" / "demo.py").read_text(encoding="utf-8") == "print(1)\n"
+
+def test_apply_files_rejects_oversized(tmp_path):
+    agent = AIAgentService()
+    agent.repo = Path(tmp_path)
+    big = "x" * (AIAgentService.MAX_FILE_BYTES + 10)
+    with pytest.raises(AIAgentError):
+        agent._apply_files([{"path": "big.py", "content": big}])
+
+
+def test_implement_disabled_raises():
+    agent = AIAgentService()
+    agent.settings = MagicMock()
+    agent.settings.AI_AGENT_ENABLED = False
+    with pytest.raises(AIAgentError, match="disabled"):
+        agent.implement("do something")

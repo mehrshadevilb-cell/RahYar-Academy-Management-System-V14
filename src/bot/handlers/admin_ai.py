@@ -5,6 +5,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from src.bot.keyboards.admin_ai_keyboard import admin_ai_keyboard
+from src.bot.keyboards.admin_menu_keyboard import admin_back_button
 from src.bot.states.admin_states import AdminState
 from src.core.config.settings import get_settings
 from src.services.ai_agent_service import AIAgentError, AIAgentService
@@ -23,7 +24,14 @@ async def ai_home(callback: CallbackQuery):
     if not _owner(callback.from_user.id):
         await callback.answer("⛔️ دسترسی ندارید.", show_alert=True)
         return
-    await callback.message.edit_text("🧠 AI Developer Agent\n\nکنترل تعمیر، Audit و توسعه پروژه:", reply_markup=admin_ai_keyboard())
+    await callback.message.edit_text(
+        "🧠 AI Developer Agent\n\n"
+        "کنترل تعمیر، Audit و توسعه پروژه:\n"
+        "• فقط روی branchهای ai/* کار می‌کند\n"
+        "• قبل از commit تست می‌گیرد\n"
+        "• merge به main فقط با تأیید شما",
+        reply_markup=admin_ai_keyboard(),
+    )
     await callback.answer()
 
 
@@ -60,7 +68,10 @@ async def ai_fix_start(callback: CallbackQuery, state: FSMContext):
         return
     await state.set_state(AdminState.waiting_ai_task)
     await state.update_data(ai_task_type="fix")
-    await callback.message.answer("🐞 مشکل/باگ را دقیق توضیح بدهید. Agent روی branch جدا کار می‌کند و قبل از commit تست می‌گیرد.")
+    await callback.message.answer(
+        "🐞 مشکل/باگ را دقیق توضیح بدهید.\n"
+        "Agent روی branch جدا کار می‌کند، در صورت شکست retry می‌کند و قبل از commit تست می‌گیرد."
+    )
     await callback.answer()
 
 
@@ -71,7 +82,10 @@ async def ai_feature_start(callback: CallbackQuery, state: FSMContext):
         return
     await state.set_state(AdminState.waiting_ai_task)
     await state.update_data(ai_task_type="feature")
-    await callback.message.answer("✨ Feature موردنظر را دقیق توضیح بدهید. Agent فقط روی branch ai/* کار می‌کند.")
+    await callback.message.answer(
+        "✨ Feature موردنظر را دقیق توضیح بدهید.\n"
+        "Agent فقط روی branch ai/* کار می‌کند و بدون عبور تست commit نمی‌کند."
+    )
     await callback.answer()
 
 
@@ -83,18 +97,27 @@ async def ai_task(message: Message, state: FSMContext):
     if not task:
         await message.answer("❌ توضیح Task خالی است.")
         return
+    data = await state.get_data()
+    task_type = data.get("ai_task_type", "feature")
     await state.clear()
-    await message.answer("🧠 Agent شروع کرد...\n⏳ کد را بررسی، تغییر و تست می‌کند.")
+    await message.answer(
+        f"🧠 Agent شروع کرد ({task_type})...\n"
+        "⏳ کد را بررسی، تغییر، تست و در صورت نیاز retry می‌کند."
+    )
     try:
-        result = await asyncio.to_thread(agent.implement, task)
+        result = await asyncio.to_thread(agent.implement, task, task_type)
     except AIAgentError as exc:
         result = f"❌ {exc}"
     await message.answer(result[:3900])
 
 
 @router.callback_query(F.data == "ai_stop")
-async def ai_stop(callback: CallbackQuery):
+async def ai_stop(callback: CallbackQuery, state: FSMContext):
     if not _owner(callback.from_user.id):
         await callback.answer("⛔️", show_alert=True)
         return
-    await callback.answer("🛑 اجرای خودکار جدید فقط با اجرای مجدد Task شروع می‌شود.", show_alert=True)
+    await state.clear()
+    await callback.answer(
+        "🛑 اجرای خودکار جدید فقط با اجرای مجدد Task شروع می‌شود.",
+        show_alert=True,
+    )

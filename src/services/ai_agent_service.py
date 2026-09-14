@@ -36,29 +36,81 @@ class AIAgentService:
             raise AIAgentError(f"AI_AGENT_REPO_PATH is not a git checkout: {self.repo}")
 
     def _git(self, *args: str) -> str:
-        result = subprocess.run(["git", *args], cwd=self.repo, text=True, capture_output=True, timeout=60)
+        result = subprocess.run(
+            ["git", *args],
+            cwd=self.repo,
+            text=True,
+            capture_output=True,
+            timeout=60,
+        )
         if result.returncode:
             raise AIAgentError(result.stderr.strip() or result.stdout.strip())
         return result.stdout.strip()
 
+    def _reset_worktree(self) -> None:
+        """Discard uncommitted AI edits after a failed compile/test cycle."""
+        subprocess.run(
+            ["git", "reset", "--hard", "HEAD"],
+            cwd=self.repo,
+            text=True,
+            capture_output=True,
+            timeout=60,
+        )
+        subprocess.run(
+            ["git", "clean", "-fd"],
+            cwd=self.repo,
+            text=True,
+            capture_output=True,
+            timeout=60,
+        )
+
     def status(self) -> str:
         self._check_enabled()
         branch = self._git("branch", "--show-current")
-        clean = not bool(self._git("status", "--porcelain"))
-        return f"branch={branch}; clean={clean}"
+        dirty = self._git("status", "--porcelain")
+        clean = not bool(dirty)
+        head = self._git("rev-parse", "--short", "HEAD")
+        enabled = self.settings.AI_AGENT_ENABLED
+        model = self.settings.AI_AGENT_MODEL
+        retries = self.settings.AI_AGENT_MAX_RETRIES
+        lines = [
+            f"enabled={enabled}",
+            f"branch={branch}",
+            f"head={head}",
+            f"clean={clean}",
+            f"model={model}",
+            f"max_retries={retries}",
+            f"repo={self.repo}",
+        ]
+        if dirty:
+            lines.append(f"dirty_files={len(dirty.splitlines())}")
+        return "\n".join(lines)
 
     def _context(self) -> str:
         context_file = self.repo / "AI_PROJECT_CONTEXT.md"
         context = context_file.read_text(encoding="utf-8") if context_file.exists() else ""
+        policy_file = self.repo / ".ai-agent" / "policy.md"
+        policy = policy_file.read_text(encoding="utf-8") if policy_file.exists() else ""
         tracked = self._git("ls-files")
-        return f"PROJECT CONTEXT:\n{context}\n\nTRACKED FILES:\n{tracked}"
+        return (
+            f"PROJECT CONTEXT:\n{context}\n\n"
+            f"AGENT POLICY:\n{policy}\n\n"
+            f"TRACKED FILES:\n{tracked}"
+        )
 
     def _request_model(self, prompt: str) -> str:
         url = self.settings.AI_AGENT_BASE_URL.rstrip("/") + "/chat/completions"
         payload = {
             "model": self.settings.AI_AGENT_MODEL,
             "messages": [
-                {"role": "system", "content": "You are the RahYar senior software engineer. Follow AI_PROJECT_CONTEXT.md exactly. Never suggest secrets. Return concise, actionable engineering output."},
+                {
+                    "role": "system",
+                    "content": (
+                        "You are the RahYar senior software engineer. "
+                        "Follow AI_PROJECT_CONTEXT.md and .ai-agent/policy.md exactly. "
+                        "Never suggest secrets. Return concise, actionable engineering output."
+                    ),
+                },
                 {"role": "user", "content": prompt},
             ],
             "temperature": 0.1,
@@ -66,11 +118,16 @@ class AIAgentService:
         request = urllib.request.Request(
             url,
             data=json.dumps(payload).encode("utf-8"),
-            headers={"Authorization": f"Bearer {self.settings.AI_AGENT_API_KEY}", "Content-Type": "application/json"},
+            headers={
+                "Authorization": f"Bearer {self.settings.AI_AGENT_API_KEY}",
+                "Content-Type": "application/json",
+            },
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=self.settings.AI_AGENT_TIMEOUT_SECONDS) as response:
+            with urllib.request.urlopen(
+                request, timeout=self.settings.AI_AGENT_TIMEOUT_SECONDS
+            ) as response:
                 data = json.loads(response.read().decode("utf-8"))
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
             raise AIAgentError(f"AI provider request failed: {exc}") from exc
@@ -79,10 +136,23 @@ class AIAgentService:
         except (KeyError, IndexError, TypeError) as exc:
             raise AIAgentError("AI provider returned an unexpected response.") from exc
 
-    def analyze(self, request: str = "Audit the repository for bugs, risks, missing tests and architecture issues.") -> str:
+    def analyze(
+        self,
+        request: str = (
+            "Audit the repository for bugs, risks, missing tests and architecture issues."
+        ),
+    ) -> str:
         self._check_enabled()
         status = self._git("status", "--short")
-        prompt = f"""{self._context()}\n\nCURRENT GIT STATUS:\n{status}\n\nTASK:\n{request}\n\nDo not modify files. Return findings grouped by severity, with exact paths and concrete remediation steps."""
+        prompt = f"""{self._context()}
+
+CURRENT GIT STATUS:
+{status}
+
+TASK:
+{request}
+
+Do not modify files. Return findings grouped by severity, with exact paths and concrete remediation steps."""
         return self._request_model(prompt)
 
     def _ensure_branch(self, purpose: str) -> str:
@@ -103,36 +173,134 @@ class AIAgentService:
             raise AIAgentError(f"Path escapes repository: {relative}")
         return target
 
-    def implement(self, task: str) -> str:
-        self._check_enabled()
-        branch = self._ensure_branch(task)
-        prompt = f"""{self._context()}\n\nTASK:\n{task}\n\nReturn ONLY valid JSON with this exact shape: {{\"summary\": string, \"files\": [{{\"path\": string, \"content\": string}}]}}. Include complete file contents, not diffs. Change only the minimum required files. Never include .env, secrets, credentials, or production data."""
-        raw = self._request_model(prompt).strip()
-        if raw.startswith("```"):
-            raw = raw.removeprefix("```").removeprefix("json").removesuffix("```").strip()
+    def _parse_plan(self, raw: str) -> dict:
+        text = raw.strip()
+        if text.startswith("```"):
+            text = text.removeprefix("```").removeprefix("json").removesuffix("```").strip()
         try:
-            plan = json.loads(raw)
+            plan = json.loads(text)
         except json.JSONDecodeError as exc:
             raise AIAgentError("AI did not return valid JSON changes.") from exc
         files = plan.get("files", [])
         if not isinstance(files, list) or not files:
             raise AIAgentError("AI returned no file changes.")
+        return plan
+
+    def _apply_files(self, files: list) -> list[str]:
+        written: list[str] = []
         for item in files:
-            path = self._safe_path(str(item.get("path", "")))
+            rel = str(item.get("path", ""))
+            path = self._safe_path(rel)
             content = str(item.get("content", ""))
             if len(content.encode("utf-8")) > self.MAX_FILE_BYTES:
                 raise AIAgentError(f"Refusing oversized AI file change: {path}")
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content, encoding="utf-8")
+            written.append(rel)
+        return written
 
-        compile_result = subprocess.run(["python", "-m", "compileall", "-q", "src", "tests"], cwd=self.repo, text=True, capture_output=True, timeout=180)
+    def _run_checks(self) -> tuple[bool, str]:
+        compile_result = subprocess.run(
+            ["python", "-m", "compileall", "-q", "src", "tests"],
+            cwd=self.repo,
+            text=True,
+            capture_output=True,
+            timeout=180,
+        )
         if compile_result.returncode:
-            return f"Branch: {branch}\nCompile failed; changes were NOT committed.\n{compile_result.stderr}"
+            return False, f"Compile failed.\n{compile_result.stderr or compile_result.stdout}"
 
-        test_result = subprocess.run(["python", "-m", "pytest", "-q"], cwd=self.repo, text=True, capture_output=True, timeout=600)
+        test_result = subprocess.run(
+            ["python", "-m", "pytest", "-q"],
+            cwd=self.repo,
+            text=True,
+            capture_output=True,
+            timeout=600,
+        )
         if test_result.returncode:
-            return f"Branch: {branch}\nTests failed; changes were NOT committed.\n{test_result.stdout[-5000:]}\n{test_result.stderr[-3000:]}"
+            out = (test_result.stdout or "")[-5000:]
+            err = (test_result.stderr or "")[-3000:]
+            return False, f"Tests failed.\n{out}\n{err}"
+        return True, "PASS"
 
-        self._git("add", "--", *[str(item["path"]) for item in files])
-        self._git("commit", "-m", f"ai: {task[:60]}")
-        return f"Branch: {branch}\nTests: PASS\nCommitted: {self._git('rev-parse', '--short', 'HEAD')}\nSummary: {plan.get('summary', 'completed')}"
+    def implement(self, task: str, task_type: str = "feature") -> str:
+        self._check_enabled()
+        branch = self._ensure_branch(task)
+        task_type = (task_type or "feature").strip().lower()
+        if task_type not in {"fix", "feature"}:
+            task_type = "feature"
+
+        intent = (
+            "Fix the described bug with the smallest safe change. Preserve existing behavior elsewhere."
+            if task_type == "fix"
+            else "Implement the described feature with the smallest clean change that fits the architecture."
+        )
+
+        max_retries = max(0, int(self.settings.AI_AGENT_MAX_RETRIES))
+        last_error = ""
+
+        for attempt in range(max_retries + 1):
+            feedback = ""
+            if last_error:
+                feedback = (
+                    f"\n\nPREVIOUS ATTEMPT FAILED (attempt {attempt}/{max_retries}):\n"
+                    f"{last_error}\n"
+                    "Produce a corrected JSON plan that fixes the failure."
+                )
+
+            prompt = f"""{self._context()}
+
+TASK TYPE: {task_type}
+INTENT: {intent}
+
+TASK:
+{task}
+{feedback}
+
+Return ONLY valid JSON with this exact shape:
+{{"summary": string, "files": [{{"path": string, "content": string}}]}}
+
+Include complete file contents, not diffs.
+Change only the minimum required files.
+Never include .env, secrets, credentials, or production data.
+Never push to main."""
+
+            try:
+                raw = self._request_model(prompt)
+                plan = self._parse_plan(raw)
+                written = self._apply_files(plan.get("files", []))
+            except AIAgentError as exc:
+                last_error = str(exc)
+                self._reset_worktree()
+                if attempt >= max_retries:
+                    return (
+                        f"Branch: {branch}\n"
+                        f"Attempts: {attempt + 1}\n"
+                        f"Failed after retries.\n{last_error}"
+                    )
+                continue
+
+            ok, check_msg = self._run_checks()
+            if not ok:
+                last_error = check_msg
+                self._reset_worktree()
+                if attempt >= max_retries:
+                    return (
+                        f"Branch: {branch}\n"
+                        f"Attempts: {attempt + 1}\n"
+                        f"Checks failed; changes were NOT committed.\n{check_msg}"
+                    )
+                continue
+
+            self._git("add", "--", *written)
+            self._git("commit", "-m", f"ai({task_type}): {task[:60]}")
+            return (
+                f"Branch: {branch}\n"
+                f"Attempts: {attempt + 1}\n"
+                f"Tests: PASS\n"
+                f"Committed: {self._git('rev-parse', '--short', 'HEAD')}\n"
+                f"Files: {', '.join(written)}\n"
+                f"Summary: {plan.get('summary', 'completed')}"
+            )
+
+        return f"Branch: {branch}\nFailed after retries.\n{last_error}"
