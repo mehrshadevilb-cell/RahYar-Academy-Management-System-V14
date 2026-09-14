@@ -6,8 +6,8 @@ COPY requirements.txt .
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Cache-bust marker so Render always re-COPY source after storefront fixes.
-ARG CACHE_BUST=20260914-storefront-v2
+# Cache-bust so Render rebuilds after storefront/migration fixes.
+ARG CACHE_BUST=20260915-storefront-template-v3
 COPY . .
 
 CMD ["sh", "-c", "alembic upgrade head && python -m src.main"]
