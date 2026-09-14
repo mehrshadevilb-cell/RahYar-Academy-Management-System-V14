@@ -56,6 +56,19 @@ class Settings(BaseSettings):
     AI_AGENT_MAX_RETRIES: int = 2
     AI_AGENT_TIMEOUT_SECONDS: int = 120
 
+    # Student-facing chat assistant ("chat with the bot" / onboarding
+    # guide). Read-only: it never touches the database or the
+    # filesystem, unlike the AI Developer Agent above. Disabled unless
+    # explicitly configured, since it calls an external paid API for
+    # every message a student sends.
+    CHAT_ASSISTANT_ENABLED: bool = False
+    CHAT_ASSISTANT_API_KEY: str | None = None
+    CHAT_ASSISTANT_BASE_URL: str = "https://api.openai.com/v1"
+    CHAT_ASSISTANT_MODEL: str = "gpt-5.6"
+    CHAT_ASSISTANT_TIMEOUT_SECONDS: int = 30
+    # Safety cap so one confused/abusive user can't run up the API bill.
+    CHAT_ASSISTANT_MAX_MESSAGES_PER_HOUR: int = 20
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
