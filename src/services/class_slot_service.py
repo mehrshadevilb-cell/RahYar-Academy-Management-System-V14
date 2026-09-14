@@ -1,66 +1,74 @@
 from sqlalchemy.orm import Session
 
-from src.database.models.class_slot import ClassSlot
+from src.database.models.class_slot import ClassSlot, ClassSlotStatus
 from src.database.repositories.class_slot_repository import ClassSlotRepository
 
 
-class ClassSlotServiceError(ValueError):
-    pass
-
-
 class ClassSlotService:
-
-    def __init__(self) -> None:
+    def __init__(self):
         self.repository = ClassSlotRepository()
 
-    def create_slot(
+    def publish(
         self,
         db: Session,
-        *,
         online_course_id: int,
         slot_date: str,
         slot_time: str,
         capacity: int = 1,
-        notes: str | None = None,
     ) -> ClassSlot:
-        slot_date = (slot_date or "").strip()
-        slot_time = (slot_time or "").strip()
-        if not slot_date or not slot_time:
-            raise ClassSlotServiceError("invalid_slot")
-        if capacity < 1:
-            raise ClassSlotServiceError("invalid_capacity")
-
         return self.repository.create(
             db,
             ClassSlot(
                 online_course_id=online_course_id,
                 slot_date=slot_date,
                 slot_time=slot_time,
-                capacity=capacity,
-                notes=notes,
+                capacity=max(1, capacity),
+                status=ClassSlotStatus.OPEN,
             ),
         )
 
-    def list_open_for_course(self, db: Session, online_course_id: int) -> list[ClassSlot]:
-        return self.repository.list_open_for_course(db, online_course_id)
-
-    def list_all_open(self, db: Session) -> list[ClassSlot]:
-        return self.repository.list_all_open(db)
-
-    def list_for_admin(self, db: Session) -> list[ClassSlot]:
-        return self.repository.list_for_admin(db)
-
-    def get(self, db: Session, slot_id: int) -> ClassSlot | None:
+    def get_by_id(self, db: Session, slot_id: int) -> ClassSlot | None:
         return self.repository.get_by_id(db, slot_id)
 
-    def close(self, db: Session, slot_id: int) -> ClassSlot:
+    def get_open_by_course(self, db: Session, online_course_id: int) -> list[ClassSlot]:
+        return self.repository.get_open_by_course(db, online_course_id)
+
+    def get_open_all(self, db: Session) -> list[ClassSlot]:
+        return self.repository.get_open_all(db)
+
+    def list_active(self, db: Session) -> list[ClassSlot]:
+        return self.repository.list_active(db)
+
+    def list_by_course(self, db: Session, online_course_id: int) -> list[ClassSlot]:
+        return self.repository.list_by_course(db, online_course_id)
+
+    def close(self, db: Session, slot_id: int) -> ClassSlot | None:
         slot = self.repository.get_by_id(db, slot_id)
         if not slot:
-            raise ClassSlotServiceError("not_found")
-        return self.repository.close(db, slot)
+            return None
+        slot.status = ClassSlotStatus.CLOSED
+        slot.is_active = False
+        db.commit()
+        db.refresh(slot)
+        return slot
 
-    def book_slot(self, db: Session, slot_id: int) -> ClassSlot:
-        slot = self.repository.get_by_id(db, slot_id)
-        if not slot or not slot.is_available:
-            raise ClassSlotServiceError("slot_unavailable")
-        return self.repository.book(db, slot)
+    def try_book(self, db: Session, slot: ClassSlot) -> bool:
+        """Increment booked_count if capacity remains. Returns False if full."""
+        if slot.status != ClassSlotStatus.OPEN or not slot.is_active:
+            return False
+        if slot.booked_count >= slot.capacity:
+            return False
+        slot.booked_count += 1
+        if slot.booked_count >= slot.capacity:
+            slot.status = ClassSlotStatus.BOOKED
+        db.commit()
+        db.refresh(slot)
+        return True
+
+    def release_book(self, db: Session, slot: ClassSlot) -> None:
+        """Release one booking (e.g. reservation rejected/cancelled)."""
+        if slot.booked_count > 0:
+            slot.booked_count -= 1
+        if slot.status == ClassSlotStatus.BOOKED and slot.booked_count < slot.capacity:
+            slot.status = ClassSlotStatus.OPEN
+        db.commit()

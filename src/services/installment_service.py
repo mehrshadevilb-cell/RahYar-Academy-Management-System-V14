@@ -9,10 +9,11 @@ from src.database.repositories.installment_repository import InstallmentReposito
 
 class InstallmentService:
     """
-    Payment cycles for WEEKLY / MONTHLY online enrollments.
+    Creates installment (payment cycle) records for weekly/monthly online
+    students. Due-date offset for auto-created cycles is "today".
 
-    Reminder cadence 7/3/1/0 days. Session credits are applied by
-    OnlineEnrollmentService.credit_sessions_after_payment when marked paid.
+    Reminder cadence (7/3/1 days before + due date) is fixed at 7/3/1/0
+    per the confirmed business requirement.
     """
 
     REMINDER_OFFSETS = (
@@ -25,11 +26,17 @@ class InstallmentService:
     def __init__(self):
         self.repository = InstallmentRepository()
 
-    def create_next_installment(self, db: Session, enrollment) -> Installment:
-        from src.services.online_enrollment_service import cycle_amount
+    def _amount_for_enrollment(self, enrollment) -> int:
+        course = enrollment.online_course
+        if enrollment.payment_model == PaymentModel.WEEKLY:
+            return course.weekly_price or 0
+        if enrollment.payment_model == PaymentModel.MONTHLY:
+            return course.monthly_price or 0
+        return course.term_price or 0
 
+    def create_next_installment(self, db: Session, enrollment) -> Installment:
         next_number = enrollment.current_installment_number + 1
-        amount = cycle_amount(enrollment.online_course, enrollment.payment_model)
+        amount = self._amount_for_enrollment(enrollment)
 
         installment = self.repository.create(
             db,
@@ -46,6 +53,8 @@ class InstallmentService:
         return installment
 
     def mark_paid(self, db: Session, installment: Installment) -> Installment:
+        """Idempotent: re-confirming an already-paid installment is a no-op."""
+
         if installment.status == InstallmentStatus.PAID:
             return installment
 

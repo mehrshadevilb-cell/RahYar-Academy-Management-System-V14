@@ -1,9 +1,9 @@
 from sqlalchemy.orm import Session
 
 from src.database.models.online_enrollment import (
-    EnrollmentStatus,
     OnlineEnrollment,
     PaymentModel,
+    EnrollmentStatus,
 )
 from src.database.repositories.online_enrollment_repository import (
     OnlineEnrollmentRepository,
@@ -11,38 +11,23 @@ from src.database.repositories.online_enrollment_repository import (
 from src.services.installment_service import InstallmentService
 
 
-def sessions_for_plan(online_course, payment_model: PaymentModel) -> int:
-    if payment_model == PaymentModel.WEEKLY:
-        return 1
-    if payment_model == PaymentModel.MONTHLY:
-        return online_course.monthly_sessions or 4
-    return online_course.term_sessions or 12
-
-
-def cycle_amount(online_course, payment_model: PaymentModel) -> int:
-    if payment_model == PaymentModel.WEEKLY:
-        # Prefer explicit weekly price if set later; fall back to monthly/sessions.
-        monthly = online_course.monthly_price or 0
-        sessions = online_course.monthly_sessions or 4
-        if sessions > 0 and monthly:
-            return max(monthly // sessions, 0)
-        return monthly
-    if payment_model == PaymentModel.MONTHLY:
-        return online_course.monthly_price or 0
-    return online_course.term_price or 0
-
-
 class OnlineEnrollmentService:
     """
-    Enrolls a student in an online class.
-
-    WEEKLY / MONTHLY: sessions are credited when an installment is marked paid
-    (not at enrollment time). TERM credits all sessions immediately.
+    Enrolls a student in an online class. Session credits for weekly/monthly
+    plans are granted when the corresponding installment is marked paid
+    (see credit_sessions_after_payment). TERM plans receive sessions upfront.
     """
 
     def __init__(self):
         self.repository = OnlineEnrollmentRepository()
         self.installment_service = InstallmentService()
+
+    def _sessions_for_plan(self, online_course, payment_model: PaymentModel) -> int:
+        if payment_model == PaymentModel.WEEKLY:
+            return online_course.weekly_sessions or 1
+        if payment_model == PaymentModel.MONTHLY:
+            return online_course.monthly_sessions or 4
+        return online_course.term_sessions or 12
 
     def create_enrollment(
         self,
@@ -51,14 +36,14 @@ class OnlineEnrollmentService:
         online_course,
         payment_model: PaymentModel,
     ) -> OnlineEnrollment:
-
-        if payment_model == PaymentModel.TERM:
-            remaining = sessions_for_plan(online_course, payment_model)
-            status = EnrollmentStatus.ACTIVE
-        else:
-            # Wait for first cycle payment before granting sessions.
+        # WEEKLY / MONTHLY: sessions granted only after payment confirmation.
+        # TERM: full package paid upfront → sessions available immediately.
+        if payment_model in (PaymentModel.WEEKLY, PaymentModel.MONTHLY):
             remaining = 0
             status = EnrollmentStatus.PAUSED
+        else:
+            remaining = self._sessions_for_plan(online_course, payment_model)
+            status = EnrollmentStatus.ACTIVE
 
         enrollment = self.repository.create(
             db,
@@ -71,16 +56,27 @@ class OnlineEnrollmentService:
             ),
         )
 
-        if payment_model in (PaymentModel.MONTHLY, PaymentModel.WEEKLY):
+        if payment_model in (PaymentModel.WEEKLY, PaymentModel.MONTHLY):
             self.installment_service.create_next_installment(db, enrollment)
 
         return enrollment
 
-    def credit_sessions_after_payment(self, db: Session, enrollment: OnlineEnrollment) -> OnlineEnrollment:
+    def credit_sessions_after_payment(
+        self, db: Session, enrollment: OnlineEnrollment
+    ) -> OnlineEnrollment:
+        """After installment is marked paid: top-up remaining_sessions and activate.
+
+        Idempotent relative to status — calling twice still only adds one cycle's
+        worth of sessions from the plan definition (owner can re-credit via admin
+        if needed).
+        """
         course = enrollment.online_course
-        grant = sessions_for_plan(course, enrollment.payment_model)
-        enrollment.remaining_sessions = (enrollment.remaining_sessions or 0) + grant
-        enrollment.status = EnrollmentStatus.ACTIVE
+        sessions = self._sessions_for_plan(course, enrollment.payment_model)
+
+        enrollment.remaining_sessions = (enrollment.remaining_sessions or 0) + sessions
+        if enrollment.status in (EnrollmentStatus.PAUSED, EnrollmentStatus.ENDED):
+            enrollment.status = EnrollmentStatus.ACTIVE
+
         db.commit()
         db.refresh(enrollment)
         return enrollment
@@ -90,3 +86,6 @@ class OnlineEnrollmentService:
 
     def get_active_by_user(self, db: Session, user_id: int):
         return self.repository.get_active_by_user(db, user_id)
+
+    def get_by_user(self, db: Session, user_id: int):
+        return self.repository.get_by_user(db, user_id) if hasattr(self.repository, "get_by_user") else self.repository.get_active_by_user(db, user_id)
