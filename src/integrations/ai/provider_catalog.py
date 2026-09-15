@@ -15,8 +15,9 @@ class ProviderPreset:
     supports_tools: bool = True
 
 
-# These are OpenAI-compatible gateways. API keys stay in environment variables
-# and are encrypted before being persisted to the database.
+# Known gateways. API keys stay in environment variables and are encrypted
+# before being persisted to the database. Model IDs are intentionally not
+# hard-coded: every provider is discovered through its models endpoint.
 PROVIDER_PRESETS: tuple[ProviderPreset, ...] = (
     ProviderPreset(
         name="orcarouter",
@@ -40,7 +41,9 @@ PROVIDER_PRESETS: tuple[ProviderPreset, ...] = (
     ProviderPreset(
         name="agentrouter",
         display_name="AgentRouter",
-        base_url="https://agentrouter.org/v1",
+        # Official OpenAI-compatible endpoint. The bare agentrouter.org URL
+        # is not the API base and would cause /v1/models to resolve incorrectly.
+        base_url="https://co.agentrouter.org/v1",
         api_key_env="AGENTROUTER_API_KEY",
         supports_vision=True,
     ),
