@@ -12,7 +12,7 @@ from src.bot.telegram_errors import is_benign_telegram_error, should_notify_owne
 from src.bot.handlers import start, course, profile, my_courses, payment, admin
 from src.bot.handlers import online_class, admin_online, admin_installments
 from src.bot.handlers import admin_discount, admin_logs, admin_broadcast, admin_reports
-from src.bot.handlers import admin_ai, referral, support, admin_support
+from src.bot.handlers import admin_ai, admin_ai_self_check, referral, support, admin_support
 from src.bot.handlers import assignment, admin_assignments, progress
 from src.bot.handlers import music_generator, group_music_panel
 from src.bot.handlers import chat_assistant
@@ -133,9 +133,9 @@ def setup_handlers():
     for module in (
         start, course, profile, my_courses, payment, admin, online_class,
         admin_online, admin_installments, admin_discount, admin_logs,
-        admin_broadcast, admin_reports, admin_ai, referral, support, admin_support,
-        assignment, admin_assignments, progress, group_music_panel, music_generator,
-        ai_agent_knowledge,
+        admin_broadcast, admin_reports, admin_ai, admin_ai_self_check,
+        referral, support, admin_support, assignment, admin_assignments,
+        progress, group_music_panel, music_generator, ai_agent_knowledge,
         chat_assistant,
     ):
         dp.include_router(module.router)
