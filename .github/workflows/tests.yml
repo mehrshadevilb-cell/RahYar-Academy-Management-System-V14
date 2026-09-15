@@ -25,7 +25,10 @@ jobs:
           pip install -r requirements.txt
 
       - name: Compile check
-        run: python -m compileall -q src tests
+        run: python -m compileall -q src tests alembic
+
+      - name: Validate Alembic heads
+        run: alembic heads
 
       - name: Run tests
         run: pytest -q
