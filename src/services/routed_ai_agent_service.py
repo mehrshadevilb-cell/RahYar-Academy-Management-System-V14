@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 
+from src.ai.latency_aware_provider_router import LatencyAwareAIProviderRouter
 from src.ai.provider_router import AIProviderError, AIProviderRouter
 from src.services.ai_agent_service import AIAgentError, AIAgentService
 from src.services.provider_model_health_service import ProviderModelHealthService
@@ -12,7 +13,7 @@ class RoutedAIAgentService(AIAgentService):
 
     def __init__(self) -> None:
         super().__init__()
-        self.router = AIProviderRouter()
+        self.router = LatencyAwareAIProviderRouter()
         self.model_health = ProviderModelHealthService(self.router)
 
     def _api_key(self) -> str:
@@ -59,9 +60,6 @@ class RoutedAIAgentService(AIAgentService):
                     )
                 content = str(content or "").strip()
 
-                # A HTTP 2xx with an empty/invalid answer is not considered success.
-                # Put that exact model on a short cooldown and immediately ask the
-                # router for the next healthy candidate (free-first ordering remains).
                 if not content:
                     provider_name = str(data.get("_rahyar_provider") or "")
                     model_name = str(data.get("_rahyar_model") or "")
@@ -82,8 +80,6 @@ class RoutedAIAgentService(AIAgentService):
                 detail = str(exc)
                 if exc.retry_after:
                     detail += f" (retry_after={exc.retry_after}s)"
-                # The router already skips failed/rate-limited/auth-failed models
-                # and continues to the next candidate. Do not stop the agent early.
                 if attempts < max_attempts and exc.retryable:
                     continue
                 raise AIAgentError(f"AI provider router failed: {detail}") from exc
