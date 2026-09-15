@@ -2,6 +2,7 @@ from aiogram import Router
 from aiogram.filters import Command, CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.types import KeyboardButton, Message, ReplyKeyboardMarkup
+import unicodedata
 
 from src.bot.keyboards.main_menu import get_main_menu
 from src.core.config.settings import get_settings
@@ -36,8 +37,11 @@ def normalize_iranian_mobile(value: str | None) -> str | None:
     if not value:
         return None
 
-    translation = str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")
-    digits = "".join(ch for ch in str(value).translate(translation) if ch.isdigit())
+    digits = "".join(
+        str(unicodedata.digit(ch))
+        for ch in str(value)
+        if unicodedata.category(ch) == "Nd"
+    )
 
     if digits.startswith("0098"):
         digits = "0" + digits[4:]

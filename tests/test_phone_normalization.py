@@ -13,6 +13,7 @@ from src.bot.handlers.start import normalize_iranian_mobile
         ("9121234567", "09121234567"),
         ("+98 912-123-4567", "09121234567"),
         ("۰۹۱۲۱۲۳۴۵۶۷", "09121234567"),
+        ("+٩٨ (٩١٢) ١٢٣-٤٥٦٧", "09121234567"),
     ],
 )
 def test_normalize_iranian_mobile_formats(raw, expected):
