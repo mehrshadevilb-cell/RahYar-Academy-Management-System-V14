@@ -2,30 +2,44 @@
 
 Skills expand the RahYar AI Developer Agent without installing arbitrary packages.
 
+## Design / UI pack (installed)
+
+| File | Focus |
+|------|--------|
+| `telegram_ux.md` | Baseline Telegram UX rules |
+| `visual_hierarchy.md` | Message structure & density |
+| `keyboard_design.md` | Inline keyboard layout |
+| `persian_copy.md` | Persian microcopy |
+| `student_journey_ux.md` | Student flows |
+| `admin_panel_ux.md` | Owner admin panel |
+
+Any skill with `tags: design, ux` is **auto-attached** when the owner uses 🎨 زیباسازی UI / design mode.
+
 ## How to add a skill
 
-1. Create a markdown file: `.ai-agent/skills/<skill_id>.md`
-2. Optional front-matter style lines at the top:
+1. Create `.ai-agent/skills/<skill_id>.md`
+2. Front-matter lines:
 
 ```text
 title: عنوان فارسی
 description: توضیح کوتاه
-tools: web_search, read_file, list_tree
+tools: read_file, list_tree
+tags: design, ux
 ```
 
-3. The rest of the file is injected into the agent system prompt when the skill is active.
-4. Open a PR (or ask the agent in feature mode to add the file).
+3. Body = system guidance injected into the agent.
+4. Ship via PR (or ask the agent in feature mode).
 
 ## Security
 
 - Skills are **prompt + allowed tools** only.
-- The agent **never** runs `pip install` from the internet on the host.
-- `web_search` is read-only public search (DuckDuckGo).
-- Write path still only commits on `ai/*` and opens a PR.
+- No runtime `pip install` from the internet.
+- `web_search` is read-only public search.
+- Writes still only on `ai/*` + PR.
 
 ## Built-in skills
 
-- `coding` — Clean Architecture / services / migrations
-- `ui_polish` — Persian Telegram UX, keyboards, copy
+- `coding` — architecture / services / migrations
+- `ui_polish` — core UI design brain
 - `web_research` — public web research
-- `debug` — production log root-cause analysis
+- `debug` — production root-cause analysis
