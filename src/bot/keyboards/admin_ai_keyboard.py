@@ -19,22 +19,25 @@ def admin_ai_keyboard() -> InlineKeyboardMarkup:
                 ),
             ],
             [
+                InlineKeyboardButton(
+                    text="👁 فعالیت Agent", callback_data="ai_activity"
+                ),
                 InlineKeyboardButton(text="🧠 وضعیت Agent", callback_data="ai_status"),
-                InlineKeyboardButton(text="🔎 Audit", callback_data="ai_analyze"),
             ],
             [
+                InlineKeyboardButton(text="🔎 Audit", callback_data="ai_analyze"),
                 InlineKeyboardButton(text="🧩 Skills", callback_data="ai_skills"),
+            ],
+            [
                 InlineKeyboardButton(
                     text="✨ افزودن Feature", callback_data="ai_feature"
                 ),
+                InlineKeyboardButton(text="🐞 رفع باگ (کد)", callback_data="ai_fix"),
             ],
             [
-                InlineKeyboardButton(text="🐞 رفع باگ (کد)", callback_data="ai_fix"),
                 InlineKeyboardButton(
                     text="🎨 اعمال UI (کد)", callback_data="ai_ui_write"
                 ),
-            ],
-            [
                 InlineKeyboardButton(text="🛑 توقف / خروج چت", callback_data="ai_stop"),
             ],
             [
