@@ -35,3 +35,34 @@ def test_retry_after_from_provider_metadata(monkeypatch):
     monkeypatch.setenv("AI_PROVIDERS_JSON", "[]")
     value = AIProviderRouter._retry_after({}, '{"error":{"metadata":{"retry_after_seconds":42}}}')
     assert value == 42
+
+
+def test_free_models_are_globally_before_paid_models(monkeypatch):
+    monkeypatch.setenv(
+        "AI_PROVIDERS_JSON",
+        json.dumps([
+            {
+                "name": "paid-first-provider",
+                "api_key": "paid-key",
+                "base_url": "https://paid.example/v1",
+                "models": ["paid-model"],
+                "priority": 1,
+            },
+            {
+                "name": "free-provider",
+                "api_key": "free-key",
+                "base_url": "https://free.example/v1",
+                "models": ["backup:free"],
+                "priority": 50,
+            },
+        ]),
+    )
+    router = AIProviderRouter()
+    candidates = router._ordered_candidates(router.providers())
+    assert [model for _, model in candidates] == ["backup:free", "paid-model"]
+
+
+def test_free_model_is_detected_from_id():
+    assert AIProviderRouter._is_free_model("provider/model:free") is True
+    assert AIProviderRouter._is_free_model("provider/model-free") is True
+    assert AIProviderRouter._is_free_model("provider/model") is False
