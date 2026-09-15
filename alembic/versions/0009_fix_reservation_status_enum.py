@@ -3,22 +3,19 @@
 Revision ID: 0009
 Revises: 0008
 
-The ORM now persists ReservationStatus member names (WAITING_PAYMENT,
-PAYMENT_SUBMITTED, ...). Some production databases were created with the
-older lowercase enum labels, which causes PostgreSQL InvalidTextRepresentation
-when a new reservation is inserted. Add the canonical uppercase labels and
-normalize existing rows without dropping the enum type.
+PostgreSQL requires ALTER TYPE ... ADD VALUE to be committed before a newly
+added enum value can be used. Therefore enum additions are executed in an
+Alembic autocommit block, followed by the data conversion in the normal
+transaction.
 """
 from typing import Sequence, Union
 
 from alembic import op
 
-
 revision: str = "0009"
 down_revision: Union[str, None] = "0008"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
-
 
 _LABELS = (
     "WAITING_PAYMENT",
@@ -32,31 +29,31 @@ _LABELS = (
 
 
 def upgrade() -> None:
-    # Add canonical labels only when they are missing. This is safe whether
-    # the existing database enum contains lowercase labels, uppercase labels,
-    # or a mixture from previous deployments.
+    # PostgreSQL does not allow a newly-added enum label to be used in the
+    # same transaction. Commit each ALTER TYPE block before converting rows.
     for label in _LABELS:
         escaped = label.replace("'", "''")
-        op.execute(
-            f"""
-            DO $$
-            BEGIN
-                IF NOT EXISTS (
-                    SELECT 1
-                    FROM pg_enum e
-                    JOIN pg_type t ON t.oid = e.enumtypid
-                    WHERE t.typname = 'reservationstatus'
-                      AND e.enumlabel = '{escaped}'
-                ) THEN
-                    ALTER TYPE reservationstatus ADD VALUE '{escaped}';
-                END IF;
-            END
-            $$;
-            """
-        )
+        with op.get_context().autocommit_block():
+            op.execute(
+                f"""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1
+                        FROM pg_enum e
+                        JOIN pg_type t ON t.oid = e.enumtypid
+                        WHERE t.typname = 'reservationstatus'
+                          AND e.enumlabel = '{escaped}'
+                    ) THEN
+                        ALTER TYPE reservationstatus ADD VALUE '{escaped}';
+                    END IF;
+                END
+                $$;
+                """
+            )
 
-    # Convert rows created with the old lowercase labels to the canonical
-    # labels expected by SQLAlchemy's ReservationStatus mapping.
+    # Now that all canonical labels have been committed, normalize existing
+    # rows created with the previous lowercase labels.
     op.execute(
         """
         UPDATE reservations
@@ -79,7 +76,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # PostgreSQL cannot safely remove enum labels while rows/types may depend
-    # on them. Keep the canonical labels in place; the migration is therefore
-    # intentionally data-preserving and has no destructive downgrade.
+    # PostgreSQL cannot safely remove enum labels without rebuilding the type.
+    # Keep the canonical labels to avoid destructive schema changes.
     pass
