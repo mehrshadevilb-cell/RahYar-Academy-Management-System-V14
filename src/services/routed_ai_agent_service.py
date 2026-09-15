@@ -40,7 +40,13 @@ class RoutedAIAgentService(AIAgentService):
         ]
         attempts = 0
         candidates = self.router._ordered_candidates(self.router.providers())
-        max_attempts = max(1, min(len(candidates), 24))
+        try:
+            configured_retries = max(0, int(self.settings.AI_AGENT_MAX_RETRIES))
+        except (TypeError, ValueError):
+            configured_retries = 2
+        # Candidate count is not a retry budget: a single configured model
+        # still needs bounded recovery from transient 5xx/timeout failures.
+        max_attempts = max(1, min(len(candidates) + configured_retries, 24))
         last_empty_model = ""
         cooldown_recovery_attempted = False
 

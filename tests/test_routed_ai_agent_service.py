@@ -53,6 +53,28 @@ def test_routed_agent_probes_models_when_all_routes_are_cooling_down(monkeypatch
     assert calls["count"] == 2
 
 
+def test_routed_agent_retries_transient_504_with_one_configured_model():
+    service = RoutedAIAgentService()
+    fake = FakeRouter()
+    calls = {"count": 0}
+
+    def chat(messages, **kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise AIProviderError(
+                "provider request failed: fake/free-model (HTTP 504)",
+                retryable=True,
+                retry_after=60,
+                provider="fake",
+            )
+        return {"choices": [{"message": {"content": "Recovered after 504"}}]}
+
+    fake.chat = chat
+    service.router = fake
+    assert service._request_model("hello") == "Recovered after 504"
+    assert calls["count"] == 2
+
+
 def test_routed_agent_status_uses_router_without_legacy_ping(monkeypatch):
     service = RoutedAIAgentService()
     fake = FakeRouter()

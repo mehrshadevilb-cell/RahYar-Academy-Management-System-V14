@@ -399,7 +399,12 @@ class AIProviderRouter:
                     self._model_cooldown_until[model_key] = time.time() + 30
                     last = AIProviderError(f"provider authentication failed: {provider.name}/{model}", retryable=False, retry_after=30, provider=provider.name)
                     continue
-                last = AIProviderError(f"provider request failed: {provider.name}/{model} (HTTP {exc.code})", retryable=exc.code >= 500, provider=provider.name)
+                last = AIProviderError(
+                    f"provider request failed: {provider.name}/{model} (HTTP {exc.code})",
+                    retryable=exc.code >= 500,
+                    retry_after=60 if exc.code >= 500 else 0,
+                    provider=provider.name,
+                )
                 if exc.code >= 500:
                     self._model_cooldown_until[model_key] = time.time() + 60
                 continue
