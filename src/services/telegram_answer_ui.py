@@ -6,7 +6,7 @@ import re
 
 
 def format_assistant_answer(text: str) -> str:
-    """Render plain/markdown-ish model output as safe, polished Telegram HTML."""
+    """Render model output as safe, polished, compact Telegram HTML."""
     value = (text or "").strip()
     if not value:
         return "🤖 <b>راه‌یار</b>\n\nجوابی پیدا نشد."
@@ -17,6 +17,7 @@ def format_assistant_answer(text: str) -> str:
     value = re.sub(r"`([^`]+)`", r"<code>\1</code>", value)
     value = re.sub(r"^#{1,6}\s*(.+)$", r"<b>\1</b>", value, flags=re.MULTILINE)
     value = re.sub(r"^[*-]\s+", "• ", value, flags=re.MULTILINE)
+    value = re.sub(r"^\s*[-=]{3,}\s*$", "", value, flags=re.MULTILINE)
     value = re.sub(r"\n{3,}", "\n\n", value)
 
     lines = value.splitlines()
@@ -24,14 +25,24 @@ def format_assistant_answer(text: str) -> str:
     for line in lines:
         stripped = line.strip()
         if not stripped:
-            rendered.append("")
+            if rendered and rendered[-1] != "":
+                rendered.append("")
             continue
-        if stripped.startswith("🔎 منابع"):
+
+        # Keep common answer sections visually distinct without making the UI noisy.
+        section = re.match(r"^(?:🎯\s*)?(?:جواب|پیشنهاد|انتخاب|مقایسه)\s*:?[ ]*(.*)$", stripped, re.I)
+        if section:
+            suffix = f" — {section.group(1)}" if section.group(1) else ""
+            rendered.append(f"<b>🎯 {stripped.split(':', 1)[0].replace('🎯', '').strip()}</b>{suffix}")
+        elif stripped.startswith("🔎 منابع") or stripped.startswith("📚 منابع"):
             rendered.append("<b>🔎 منابع</b>")
-        elif stripped.startswith("💡") or stripped.startswith("⚠️"):
+        elif stripped.startswith("💡") or stripped.startswith("⚠️") or stripped.startswith("⚙️"):
             rendered.append(f"<b>{stripped[:2]}</b>{stripped[2:]}")
+        elif stripped.startswith(("1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣")):
+            rendered.append(stripped)
         else:
             rendered.append(line)
 
     body = "\n".join(rendered).strip()
+    body = re.sub(r"\n{3,}", "\n\n", body)
     return f"🤖 <b>راه‌یار</b>\n\n{body}"
