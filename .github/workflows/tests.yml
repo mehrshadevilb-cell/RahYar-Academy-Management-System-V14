@@ -24,5 +24,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Full system diagnostic
-        run: python scripts/full_system_check.py
+      - name: Compile check
+        run: python -m compileall -q src tests alembic scripts
+
+      - name: Validate Alembic heads
+        run: alembic heads
+
+      - name: Run tests
+        run: pytest -q
+
+      - name: Critical module import check
+        run: python scripts/full_system_check.py --imports-only
