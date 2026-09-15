@@ -1,0 +1,22 @@
+{
+  "id": "music.theory",
+  "name": "Music Theory",
+  "kind": "academic_knowledge",
+  "categories": ["fundamentals","harmony","melody","rhythm","ear_training","arrangement","analysis"],
+  "topics": [
+    "notes, intervals, scales and modes",
+    "chords, triads, seventh chords and extensions",
+    "diatonic harmony, functional harmony and cadences",
+    "voice leading and chord progressions",
+    "rhythm, meter, syncopation and groove",
+    "melody, motifs, phrasing and counterpoint",
+    "song structure, arrangement and harmonic analysis",
+    "ear-training concepts and terminology"
+  ],
+  "answer_rules": [
+    "Distinguish established theory from stylistic convention.",
+    "Give examples in the user's requested key when possible.",
+    "When terminology has multiple meanings, define the meaning used.",
+    "Do not invent citations; use web research for disputed or specialized claims."
+  ]
+}
