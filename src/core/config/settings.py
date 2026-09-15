@@ -44,8 +44,6 @@ class Settings(BaseSettings):
     DEFAULT_CARD_NUMBER: str | None = None
     DEFAULT_CARD_HOLDER: str | None = None
     SPOTPLAYER_API_KEY: str | None = None
-    # The knowledge gateway is intentionally pinned to the production bot
-    # username so group targeting still works when BOT_USERNAME is omitted.
     BOT_USERNAME: str | None = "Mb_tutorialbot"
     SITE_NAME: str = "آکادمی راه‌یار"
     SITE_TAGLINE: str = "آموزش حرفه‌ای موسیقی — دوره‌های دیجیتال و کلاس آنلاین"
@@ -70,6 +68,18 @@ class Settings(BaseSettings):
     OPENROUTER_API_KEY: str | None = None
     AGENTROUTER_API_KEY: str | None = None
     GOOGLE_API_KEY: str | None = None
+
+    # Native music/audio generation endpoint. Leave blank to reuse the primary
+    # AI provider credentials and model with MUSIC_AUDIO_PATH.
+    MUSIC_AUDIO_API_KEY: str | None = None
+    MUSIC_AUDIO_BASE_URL: str | None = None
+    MUSIC_AUDIO_MODEL: str | None = None
+    MUSIC_AUDIO_PATH: str = "/audio/generations"
+    MUSIC_AUDIO_MAX_SECONDS: int = 90
+    MUSIC_AUDIO_FORMAT: str = "wav"
+    MUSIC_AUDIO_TIMEOUT_SECONDS: int = 240
+    MUSIC_GENERATION_RAHYAR_DAILY_LIMIT: int = 15
+    MUSIC_GENERATION_PUBLIC_DAILY_LIMIT: int = 8
 
     AI_AGENT_WRITE_ENABLED: bool = False
     AI_AGENT_WORK_DIR: str = "/tmp/rahyar-agent-repo"
