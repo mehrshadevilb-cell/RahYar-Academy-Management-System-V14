@@ -456,6 +456,19 @@ class AIAgentService:
                     status = self._git("status", "--short")
                 except AIAgentError:
                     status = "(git status unavailable)"
+            audit_guidance = """
+AUDIT QUALITY CONTRACT:
+- Inspect the supplied repository inventory and current git status; do not invent files,
+  features, test results, vulnerabilities, or runtime behavior.
+- Separate CONFIRMED findings from NEEDS-VERIFICATION observations.
+- For every confirmed finding include: severity (P0/P1/P2/P3), exact path, symbol or
+  line area, user/business impact, why it is a problem, and the smallest safe fix.
+- Prioritize correctness, security/privacy, data integrity, availability, and failing
+  tests before style suggestions. Do not report a missing test suite when tests exist.
+- Mention evidence and a concrete regression test for each proposed fix.
+- End with a compact summary: confirmed count by severity, verification items, and the
+  recommended next action. Do not modify files.
+""".strip()
             prompt = f"""{self._context()}
 
 CURRENT GIT STATUS:
@@ -464,7 +477,8 @@ CURRENT GIT STATUS:
 TASK:
 {request}
 
-Do not modify files. Group findings by severity with paths and remediation.
+{audit_guidance}
+Group findings by severity with paths and remediation.
 If tests/ or alembic/versions/ appear in inventory, do NOT report them missing.
 Write primarily in Persian; keep paths in English."""
             return self._request_model(prompt)

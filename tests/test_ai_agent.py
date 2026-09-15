@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from src.services.ai_agent_service import AIAgentError, AIAgentService
+from src.bot.handlers.admin_ai import _safe_html
 
 
 def test_safe_path_rejects_empty_and_parent_paths(tmp_path):
@@ -84,3 +85,7 @@ def test_lock_blocks_second_acquire(tmp_path):
     agent._release_lock()
     agent._acquire_lock()
     agent._release_lock()
+
+
+def test_ai_audit_output_is_safe_for_telegram_html():
+    assert _safe_html("<script>alert('x')</script> & details") == "&lt;script&gt;alert('x')&lt;/script&gt; &amp; details"

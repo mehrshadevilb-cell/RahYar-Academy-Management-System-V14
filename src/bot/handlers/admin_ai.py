@@ -1,4 +1,5 @@
 import asyncio
+import html
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
@@ -33,6 +34,11 @@ def _safe_error(exc: Exception) -> str:
         if secret:
             text = text.replace(secret, "***")
     return text[:1200]
+
+
+def _safe_html(text: str) -> str:
+    """Escape model and runtime output before embedding it in Telegram HTML."""
+    return html.escape(text or "", quote=False)
 
 
 def _home_text() -> str:
@@ -79,7 +85,10 @@ async def ai_status(callback: CallbackQuery):
         result = "\n".join(lines)
     except AIAgentError as exc:
         result = f"❌ {_safe_error(exc)}"
-    await callback.message.answer(f"🧪 <b>AI API / Agent Status</b>\n\n<code>{result}</code>", parse_mode="HTML")
+    await callback.message.answer(
+        f"🧪 <b>AI API / Agent Status</b>\n\n<code>{_safe_html(result)}</code>",
+        parse_mode="HTML",
+    )
     await callback.answer()
 
 
@@ -94,7 +103,7 @@ async def ai_test_models(callback: CallbackQuery):
     except AIAgentError as exc:
         result = f"❌ {_safe_error(exc)}"
     for part in _chunk(result):
-        await callback.message.answer(part, parse_mode="HTML")
+        await callback.message.answer(_safe_html(part), parse_mode="HTML")
 
 
 @router.callback_query(F.data == "ai_security")
@@ -141,8 +150,9 @@ async def ai_analyze(callback: CallbackQuery):
         result = await asyncio.to_thread(runtime.agent.analyze)
     except AIAgentError as exc:
         result = f"❌ {_safe_error(exc)}"
-    for part in _chunk(f"🔎 <b>AI Audit</b>\n\n{result}"):
-        await callback.message.answer(part, parse_mode="HTML")
+    for index, part in enumerate(_chunk(result)):
+        heading = "🔎 <b>AI Audit</b>\n\n" if index == 0 else ""
+        await callback.message.answer(heading + _safe_html(part), parse_mode="HTML")
 
 
 @router.callback_query(F.data == "ai_assistant")
