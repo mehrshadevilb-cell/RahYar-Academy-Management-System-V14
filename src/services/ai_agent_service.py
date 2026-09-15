@@ -6,6 +6,12 @@ Write modes:
 - Local: AI_AGENT_REPO_PATH points at a git checkout
 - Online (Render): AI_AGENT_WRITE_ENABLED + GITHUB_TOKEN + GITHUB_REPO
   clones into AI_AGENT_WORK_DIR, commits, pushes, opens a PR
+
+Skills exposed to the owner (via src/bot/handlers/admin_ai.py):
+- status / analyze (debug, assistant consult)   - read-only
+- list_ai_branches / read_file / search_code    - read-only
+- implement(task, task_type)                    - fix | feature | refactor | tests
+  writes only to ai/* branches, runs tests before committing, opens a PR
 """
 
 from __future__ import annotations
@@ -30,8 +36,25 @@ class AIAgentError(RuntimeError):
 class AIAgentService:
     PROTECTED = {".env", ".git", ".github/workflows/secrets.yml"}
     MAX_FILE_BYTES = 120_000
+    MAX_READ_CHARS = 4000
+    SEARCHABLE_SUFFIXES = {".py", ".md", ".yml", ".yaml", ".txt", ".html"}
     LOCK_NAME = ".ai-agent/run.lock"
     LOCK_STALE_SECONDS = 30 * 60
+
+    TASK_INTENTS = {
+        "fix": "Fix the described bug with the smallest safe change.",
+        "feature": "Implement the feature with the smallest clean change.",
+        "refactor": (
+            "Refactor the described code for clarity/maintainability "
+            "without changing external behavior. All existing tests "
+            "must keep passing."
+        ),
+        "tests": (
+            "Add or improve automated tests for the described area. Do "
+            "not change production behavior; only add/adjust test files "
+            "unless a small testability fix is unavoidable."
+        ),
+    }
 
     _AGENTROUTER_HEADERS = {
         "Originator": "codex_cli_rs",
@@ -334,6 +357,22 @@ class AIAgentService:
         more = f"\n... ({len(paths) - limit} more)" if len(paths) > limit else ""
         return f"### {relative}/ ({len(paths)} files)\n{body}{more}"
 
+    def _tracked_files(self) -> list[str]:
+        """List of repo-relative file paths, via git when available so
+        it respects .gitignore, falling back to a directory walk of the
+        usual source roots otherwise."""
+        if self._has_git():
+            try:
+                return self._git("ls-files").splitlines()
+            except AIAgentError:
+                pass
+        files: list[str] = []
+        for rel in ("src", "tests", "alembic/versions", "docs", ".github/workflows"):
+            root = self.repo / rel
+            if root.exists():
+                files.extend(str(p.relative_to(self.repo)) for p in root.rglob("*") if p.is_file())
+        return files
+
     def _context(self) -> str:
         context_file = self.repo / "AI_PROJECT_CONTEXT.md"
         context = context_file.read_text(encoding="utf-8") if context_file.exists() else ""
@@ -432,6 +471,97 @@ Write primarily in Persian; keep paths in English."""
         finally:
             self._release_lock()
 
+    # ------------------------------------------------------------------
+    # Read-only inspection skills — no model call required, no lock
+    # needed (nothing is written), safe to run anytime the feature is
+    # enabled. Exposed to the owner via admin_ai.py so they can inspect
+    # the codebase from Telegram without needing GitHub open.
+    # ------------------------------------------------------------------
+
+    def list_ai_branches(self) -> str:
+        """Lists ai/* branches (local and, if fetched, origin/ai/*) with
+        their last commit date and subject, newest first — visibility
+        into everything the agent has previously done."""
+        self._check_enabled(require_git=False)
+        if not self._has_git():
+            return "(git در دسترس نیست — این قابلیت فقط با git workspace کار می‌کند)"
+        try:
+            raw = self._git(
+                "for-each-ref",
+                "--sort=-committerdate",
+                "--format=%(refname:short)|%(committerdate:short)|%(subject)",
+                "refs/heads/ai/",
+                "refs/remotes/origin/ai/",
+            )
+        except AIAgentError as exc:
+            return f"(خطا در خواندن شاخه‌ها: {exc})"
+        if not raw:
+            return "هیچ شاخه‌ی ai/* یافت نشد."
+        lines = ["🌿 شاخه‌های AI Agent (جدیدترین اول):"]
+        for row in raw.splitlines():
+            parts = row.split("|", 2)
+            if len(parts) == 3:
+                name, date, subject = parts
+                lines.append(f"- {name} ({date}): {subject}")
+        return "\n".join(lines)
+
+    def read_file(self, relative_path: str, max_chars: int | None = None) -> str:
+        """Read-only: return a tracked file's content so the owner can
+        inspect it from Telegram. Reuses the same _safe_path guard as
+        write operations even though this never writes, so it can never
+        read outside the repo or peek at protected/secret paths."""
+        self._check_enabled(require_git=False)
+        path = self._safe_path(relative_path)
+        if not path.exists() or not path.is_file():
+            raise AIAgentError(f"فایل پیدا نشد: {relative_path}")
+        limit = max_chars or self.MAX_READ_CHARS
+        try:
+            content = path.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            raise AIAgentError(f"خطا در خواندن فایل: {exc}") from exc
+        truncated = content[:limit]
+        remaining = len(content) - limit
+        suffix = f"\n... ({remaining} کاراکتر بیشتر، فایل کامل را از GitHub ببینید)" if remaining > 0 else ""
+        return f"📄 {relative_path} ({len(content)} کاراکتر)\n\n{truncated}{suffix}"
+
+    def search_code(self, query: str, limit: int = 30) -> str:
+        """Read-only, literal (non-regex) case-insensitive search across
+        tracked text files. Deliberately not regex: the owner types
+        business terms or symbol names, not patterns, and a plain
+        substring search has zero ReDoS/injection surface."""
+        self._check_enabled(require_git=False)
+        needle = (query or "").strip()
+        if not needle:
+            raise AIAgentError("عبارت جستجو خالی است.")
+        if len(needle) < 2:
+            raise AIAgentError("عبارت جستجو باید حداقل ۲ کاراکتر باشد.")
+        if len(needle) > 200:
+            raise AIAgentError("عبارت جستجو خیلی طولانی است.")
+
+        needle_lower = needle.lower()
+        matches: list[str] = []
+        for rel in self._tracked_files():
+            if len(matches) >= limit:
+                break
+            full = self.repo / rel
+            if not full.is_file() or full.suffix not in self.SEARCHABLE_SUFFIXES:
+                continue
+            try:
+                text = full.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            for line_number, line in enumerate(text.splitlines(), start=1):
+                if needle_lower in line.lower():
+                    matches.append(f"{rel}:{line_number}: {line.strip()[:160]}")
+                    if len(matches) >= limit:
+                        break
+
+        if not matches:
+            return f"🔍 چیزی برای «{needle}» پیدا نشد."
+        capped = " (فقط این تعداد اول نمایش داده می‌شود)" if len(matches) >= limit else ""
+        header = f"🔍 نتایج جستجو برای «{needle}» — {len(matches)} مورد{capped}:"
+        return header + "\n" + "\n".join(matches)
+
     def _ensure_branch(self, purpose: str) -> str:
         current = self._git("branch", "--show-current")
         if current.startswith("ai/"):
@@ -511,14 +641,9 @@ Write primarily in Persian; keep paths in English."""
         try:
             branch = self._ensure_branch(task)
             task_type = (task_type or "feature").strip().lower()
-            if task_type not in {"fix", "feature"}:
+            if task_type not in self.TASK_INTENTS:
                 task_type = "feature"
-
-            intent = (
-                "Fix the described bug with the smallest safe change."
-                if task_type == "fix"
-                else "Implement the feature with the smallest clean change."
-            )
+            intent = self.TASK_INTENTS[task_type]
 
             max_retries = max(0, int(self.settings.AI_AGENT_MAX_RETRIES))
             last_error = ""
