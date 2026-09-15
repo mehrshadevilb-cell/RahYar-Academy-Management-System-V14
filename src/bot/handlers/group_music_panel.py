@@ -5,7 +5,7 @@ music-generation session unless the member invokes /ai_generator.
 Generation quota is still enforced by the music generator service.
 """
 
-from aiogram import Router
+from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
@@ -28,7 +28,7 @@ async def group_ai_generator_panel(message: Message, state: FSMContext):
     )
 
 
-@router.callback_query(lambda callback: callback.data and callback.data.startswith("music_open:"))
+@router.callback_query(F.data.startswith("music_open:"))
 async def group_ai_generator_open(callback: CallbackQuery, state: FSMContext):
     requested = callback.data.split(":", 1)[1]
     if requested not in {"audio", "midi", "auto"}:
