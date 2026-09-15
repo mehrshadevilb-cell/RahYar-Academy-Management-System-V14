@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
 
-from src.core.config.settings import get_settings
+from src.core.config.settings import get_settings, normalize_openai_compatible_base_url
 
 
 @dataclass(frozen=True)
@@ -43,9 +43,13 @@ class AIProviderRouter:
         self._model_cooldown_until: dict[str, float] = {}
 
     @staticmethod
-    def _provider_from_env(name: str, key_var: str, url_var: str, model_var: str, priority: int) -> AIProvider | None:
+    def _normalize_base_url(value: str) -> str:
+        return normalize_openai_compatible_base_url((value or "").strip())
+
+    @classmethod
+    def _provider_from_env(cls, name: str, key_var: str, url_var: str, model_var: str, priority: int) -> AIProvider | None:
         key = (os.getenv(key_var) or "").strip()
-        base_url = (os.getenv(url_var) or "").strip().rstrip("/")
+        base_url = cls._normalize_base_url(os.getenv(url_var) or "")
         model = (os.getenv(model_var) or "").strip()
         if not (key and base_url and model):
             return None
@@ -110,7 +114,7 @@ class AIProviderRouter:
                         AIProvider(
                             name=provider.name,
                             api_key=api_key,
-                            base_url=provider.base_url.rstrip("/"),
+                            base_url=self._normalize_base_url(provider.base_url),
                             models=tuple(m.model_id for m in active_models),
                             priority=index,
                         )
@@ -121,13 +125,55 @@ class AIProviderRouter:
         except Exception:
             return []
 
+    def _env_providers(self) -> list[AIProvider]:
+        """Load explicit legacy env providers even when DB providers exist.
+
+        This prevents a stale DB pool from silently shadowing a corrected
+        deployment credential configured through AI_API_KEY/AI2_API_KEY.
+        """
+        providers: list[AIProvider] = []
+        primary = self._provider_from_env("primary", "AI_API_KEY", "AI_BASE_URL", "AI_MODEL", 10)
+        if primary:
+            providers.append(primary)
+        secondary = self._provider_from_env("secondary", "AI2_API_KEY", "AI2_BASE_URL", "AI2_MODEL", 20)
+        if secondary:
+            providers.append(secondary)
+        if not providers and self.settings.effective_ai_api_key:
+            providers.append(
+                AIProvider(
+                    name="primary",
+                    api_key=self.settings.effective_ai_api_key,
+                    base_url=self._normalize_base_url(self.settings.effective_ai_base_url),
+                    models=(self.settings.effective_ai_model,),
+                    priority=100,
+                )
+            )
+        return providers
+
+    @staticmethod
+    def _merge_providers(providers: list[AIProvider]) -> list[AIProvider]:
+        """Deduplicate equivalent provider/model routes while preserving priority."""
+        merged: dict[tuple[str, str, str], AIProvider] = {}
+        for provider in providers:
+            for model in provider.models:
+                key = (provider.name.lower(), provider.base_url.rstrip("/"), model)
+                current = merged.get(key)
+                if current is None or provider.priority < current.priority:
+                    merged[key] = AIProvider(
+                        name=provider.name,
+                        api_key=provider.api_key,
+                        base_url=provider.base_url,
+                        models=(model,),
+                        priority=provider.priority,
+                        enabled=provider.enabled,
+                    )
+        return sorted(merged.values(), key=lambda p: (p.priority, p.name, p.model))
+
     def _parse(self) -> list[AIProvider]:
         db_providers = self._from_database()
-        if db_providers:
-            return db_providers
 
         raw = (self.settings.AI_PROVIDERS_JSON or "").strip()
-        providers: list[AIProvider] = []
+        configured: list[AIProvider] = []
         if raw:
             try:
                 rows = json.loads(raw)
@@ -142,7 +188,7 @@ class AIProviderRouter:
                 key_env = str(row.get("api_key_env", "") or "")
                 if key_env:
                     key = os.getenv(key_env, "")
-                base_url = str(row.get("base_url", "") or "").strip().rstrip("/")
+                base_url = self._normalize_base_url(str(row.get("base_url", "") or ""))
                 name = str(row.get("name", f"provider-{index + 1}") or f"provider-{index + 1}")
                 models: list[str] = []
                 raw_models = row.get("models")
@@ -153,25 +199,34 @@ class AIProviderRouter:
                     if single:
                         models = [single]
                 if key and base_url and models:
-                    providers.append(AIProvider(name=name, api_key=key, base_url=base_url, models=tuple(models), priority=int(row.get("priority", 100))))
+                    configured.append(
+                        AIProvider(
+                            name=name,
+                            api_key=key,
+                            base_url=base_url,
+                            models=tuple(models),
+                            priority=int(row.get("priority", 100)),
+                        )
+                    )
 
-        if not providers:
-            primary = self._provider_from_env("primary", "AI_API_KEY", "AI_BASE_URL", "AI_MODEL", 10)
-            if primary:
-                providers.append(primary)
-            secondary = self._provider_from_env("secondary", "AI2_API_KEY", "AI2_BASE_URL", "AI2_MODEL", 20)
-            if secondary:
-                providers.append(secondary)
-
-        if not providers and self.settings.effective_ai_api_key:
-            providers.append(AIProvider(name="primary", api_key=self.settings.effective_ai_api_key, base_url=self.settings.effective_ai_base_url, models=(self.settings.effective_ai_model,), priority=100))
-        return sorted(providers, key=lambda p: p.priority)
+        # Explicit JSON routes are authoritative for that route, but DB and
+        # legacy env routes remain available as failover candidates. This is
+        # especially important when a deployment rotates an API credential.
+        candidates = configured + db_providers + self._env_providers()
+        if not candidates:
+            raise AIProviderError("No AI provider is configured")
+        return self._merge_providers(candidates)
 
     def providers(self) -> list[AIProvider]:
         return self._parse()
 
     def _headers(self, provider: AIProvider) -> dict[str, str]:
-        headers = {"Authorization": f"Bearer {provider.api_key}", "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "RahYar-AIProviderRouter/1.0"}
+        headers = {
+            "Authorization": f"Bearer {provider.api_key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "RahYar-AIProviderRouter/1.1",
+        }
         host = (urlparse(provider.base_url).hostname or "").lower()
         if host.endswith("agentrouter.org"):
             headers.update({"Originator": "codex_cli_rs", "Version": "0.101.0"})
@@ -210,8 +265,6 @@ class AIProviderRouter:
 
     def chat(self, messages: list[dict[str, Any]], **kwargs: Any) -> dict[str, Any]:
         providers = self.providers()
-        if not providers:
-            raise AIProviderError("No AI provider is configured")
         timeout_seconds = kwargs.pop("timeout_seconds", None)
         if timeout_seconds is None:
             timeout_seconds = self.settings.AI_AGENT_TIMEOUT_SECONDS
@@ -257,34 +310,43 @@ class AIProviderRouter:
                 if self._is_rate_limited(exc.code, body):
                     cooldown = min(retry_after or 300, 86400)
                     self._model_cooldown_until[model_key] = time.time() + cooldown
-                    last = AIProviderError(f"model rate limited: {provider.name}/{model}", retryable=True, retry_after=cooldown, provider=provider.name)
+                    last = AIProviderError(
+                        f"model rate limited: {provider.name}/{model}",
+                        retryable=True,
+                        retry_after=cooldown,
+                        provider=provider.name,
+                    )
                     continue
-                if exc.code in {408, 409, 500, 502, 503, 504}:
+                if exc.code in {401, 403}:
+                    # Authentication failures are route-specific. Do not poison
+                    # the whole provider pool: a corrected env route or another
+                    # configured provider must still be allowed to answer.
                     self._model_cooldown_until[model_key] = time.time() + 30
-                    last = AIProviderError(f"provider HTTP {exc.code}: {provider.name}/{model}", retryable=True, provider=provider.name)
-                else:
-                    last = AIProviderError(f"provider HTTP {exc.code}: {provider.name}/{model}", provider=provider.name)
+                    last = AIProviderError(
+                        f"provider authentication failed: {provider.name}/{model}",
+                        retryable=True,
+                        retry_after=30,
+                        provider=provider.name,
+                    )
+                    continue
+                last = AIProviderError(
+                    f"provider request failed: {provider.name}/{model} (HTTP {exc.code})",
+                    retryable=exc.code >= 500,
+                    provider=provider.name,
+                )
+                if exc.code >= 500:
+                    self._model_cooldown_until[model_key] = time.time() + 60
                 continue
-            except (urllib.error.URLError, TimeoutError):
+            except (urllib.error.URLError, TimeoutError, OSError) as exc:
+                last = AIProviderError(
+                    f"provider unavailable: {provider.name}/{model}",
+                    retryable=True,
+                    retry_after=30,
+                    provider=provider.name,
+                )
                 self._model_cooldown_until[model_key] = time.time() + 30
-                last = AIProviderError(f"provider unavailable: {provider.name}/{model}", retryable=True, provider=provider.name)
-                continue
-            except (json.JSONDecodeError, ValueError, TypeError):
-                self._model_cooldown_until[model_key] = time.time() + 30
-                last = AIProviderError(f"provider returned invalid response: {provider.name}/{model}", provider=provider.name)
                 continue
 
-        raise last or AIProviderError("All configured AI models are cooling down", retryable=True)
-
-    def status(self) -> list[dict[str, Any]]:
-        now = time.time()
-        return [
-            {
-                "name": p.name,
-                "models": list(p.models),
-                "model": p.model,
-                "priority": p.priority,
-                "cooldown_seconds": max(0, int(self._cooldown_until.get(p.name, 0) - now)),
-            }
-            for p in self.providers()
-        ]
+        if last:
+            raise last
+        raise AIProviderError("All configured AI models are temporarily unavailable", retryable=True, retry_after=30)
