@@ -8,6 +8,7 @@ from src.bot.keyboards.admin_ai_keyboard import admin_ai_keyboard
 from src.bot.keyboards.admin_menu_keyboard import admin_back_button
 from src.bot.states.admin_states import AdminState
 from src.core.config.settings import get_settings
+from src.services.ai_activity import activity_tracker
 from src.services.ai_agent_service import AIAgentError, AIAgentService
 
 router = Router()
@@ -26,6 +27,28 @@ def _chunk(text: str, size: int = 3900) -> list[str]:
     return [text[i : i + size] for i in range(0, len(text), size)]
 
 
+def _track_start(kind: str, mode: str, request: str) -> None:
+    activity_tracker.start(kind=kind, mode=mode, request=request)
+    activity_tracker.step("درخواست از پنل ادمین دریافت شد")
+
+
+def _track_ok(result: str) -> None:
+    activity_tracker.step("پاسخ Agent آماده شد")
+    activity_tracker.finish(
+        success=True,
+        outcome=(result or "")[:1500],
+        persist_dir=getattr(agent, "repo", None),
+    )
+
+
+def _track_fail(exc: BaseException) -> None:
+    activity_tracker.finish(
+        success=False,
+        error=str(exc)[:1000],
+        persist_dir=getattr(agent, "repo", None),
+    )
+
+
 @router.callback_query(F.data == "admin_ai")
 async def ai_home(callback: CallbackQuery, state: FSMContext):
     if not _owner(callback.from_user.id):
@@ -38,12 +61,30 @@ async def ai_home(callback: CallbackQuery, state: FSMContext):
         "• 💬 کدنویسی / معماری\n"
         "• 🛠 دیباگ با لاگ\n"
         "• 🎨 زیباسازی متن و کیبورد تلگرام\n"
-        "• 🌐 جستجوی وب (مستندات عمومی)\n"
-        "• 🧩 Skills قابل‌گسترش\n"
-        "• 🐞/✨ نوشتن کد روی branch ai/* + PR\n\n"
+        "• 🌐 جستجوی وب\n"
+        "• 👁 مشاهده فعالیت (آیا کار شما انجام شد؟)\n"
+        "• 🧩 Skills + 🐞/✨ نوشتن کد + PR\n\n"
         "merge به main فقط با تأیید شما در GitHub.",
         reply_markup=admin_ai_keyboard(),
     )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "ai_activity")
+async def ai_activity(callback: CallbackQuery):
+    if not _owner(callback.from_user.id):
+        await callback.answer("⛔️", show_alert=True)
+        return
+    try:
+        if hasattr(agent, "activity_report"):
+            result = await asyncio.to_thread(agent.activity_report)
+        else:
+            activity_tracker.load_persisted(getattr(agent, "repo", None) or ".")
+            result = activity_tracker.report_text()
+    except AIAgentError as exc:
+        result = f"❌ {exc}"
+    for part in _chunk(result):
+        await callback.message.answer(part)
     await callback.answer()
 
 
@@ -80,12 +121,27 @@ async def ai_analyze(callback: CallbackQuery):
         await callback.answer("⛔️", show_alert=True)
         return
     await callback.answer("در حال Audit...", show_alert=False)
+    req = "Audit the repository for bugs, risks, missing tests and architecture issues."
+    _track_start("analyze", "assistant", req)
     try:
         result = await asyncio.to_thread(agent.analyze, mode="assistant")
+        _track_ok(result)
+    except TypeError:
+        try:
+            result = await asyncio.to_thread(agent.analyze)
+            _track_ok(result)
+        except AIAgentError as exc:
+            _track_fail(exc)
+            result = f"❌ {exc}"
     except AIAgentError as exc:
+        _track_fail(exc)
         result = f"❌ {exc}"
     for part in _chunk(f"🔎 AI Audit\n\n{result}"):
         await callback.message.answer(part)
+    await callback.message.answer(
+        "👁 برای دیدن مراحل اجرا: دکمه «فعالیت Agent»",
+        reply_markup=admin_ai_keyboard(),
+    )
 
 
 @router.callback_query(F.data == "ai_assistant")
@@ -96,11 +152,9 @@ async def ai_assistant_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AdminState.waiting_ai_consult)
     await state.update_data(ai_consult_mode="assistant")
     await callback.message.answer(
-        "💬 دستیار کدنویسی فعال شد (با Skills کدنویسی + جستجوی وب).\n\n"
-        "سؤال فنی بپرسید، مثلاً:\n"
-        "• جریان تأیید پرداخت کجاست؟\n"
-        "• برای feature جدید چه فایل‌هایی لازم است؟\n"
-        "• آخرین الگوی Aiogram 3 برای FSM چیست؟ (جستجوی وب)\n\n"
+        "💬 دستیار کدنویسی فعال شد.\n\n"
+        "سؤال فنی بپرسید.\n"
+        "هر زمان بخواهید ببینید Agent چه کرد: «👁 فعالیت Agent»\n\n"
         "خروج: /cancel یا 🛑 توقف",
         reply_markup=admin_back_button("admin_ai"),
     )
@@ -116,9 +170,9 @@ async def ai_debug_start(callback: CallbackQuery, state: FSMContext):
     await state.update_data(ai_consult_mode="debug")
     await callback.message.answer(
         "🛠 حالت دیباگ فعال شد.\n\n"
-        "لاگ Render، متن خطا، یا توضیح باگ را بفرستید.\n"
-        "Agent با ساختار مخزن + در صورت نیاز جستجوی وب، علت و راه‌حل می‌دهد.\n\n"
-        "خروج: /cancel یا 🛑 توقف",
+        "لاگ یا توضیح باگ را بفرستید.\n"
+        "وضعیت اجرا: «👁 فعالیت Agent»\n\n"
+        "خروج: /cancel",
         reply_markup=admin_back_button("admin_ai"),
     )
     await callback.answer()
@@ -133,9 +187,7 @@ async def ai_ui_polish_start(callback: CallbackQuery, state: FSMContext):
     await state.update_data(ai_consult_mode="ui")
     await callback.message.answer(
         "🎨 حالت زیباسازی UI فعال شد.\n\n"
-        "بگویید کدام منو/پیام را می‌خواهید بهتر شود.\n"
-        "Agent فقط روی متن فارسی، دکمه‌ها و تجربهٔ کاربری تمرکز می‌کند.\n\n"
-        "برای اعمال واقعی روی کد از «🎨 اعمال UI (کد)» استفاده کنید.\n"
+        "بگویید کدام منو/پیام بهتر شود.\n"
         "خروج: /cancel",
         reply_markup=admin_back_button("admin_ai"),
     )
@@ -151,8 +203,7 @@ async def ai_research_start(callback: CallbackQuery, state: FSMContext):
     await state.update_data(ai_consult_mode="research")
     await callback.message.answer(
         "🌐 حالت جستجوی وب فعال شد.\n\n"
-        "موضوع را بفرستید (مثلاً مستندات Aiogram webhook، SQLAlchemy 2 relationship).\n"
-        "Agent از DuckDuckGo جستجو می‌کند و خلاصهٔ عملی می‌دهد.\n\n"
+        "موضوع را بفرستید.\n"
         "خروج: /cancel",
         reply_markup=admin_back_button("admin_ai"),
     )
@@ -184,63 +235,60 @@ async def ai_consult_message(message: Message, state: FSMContext):
         prompt = (
             "You are debugging the RahYar Academy Telegram bot in production.\n"
             "The owner pasted logs, stack traces, or a bug description below.\n"
-            "Using the repository inventory and architecture:\n"
-            "1) Likely root cause\n"
-            "2) Exact file paths involved\n"
-            "3) Concrete fix steps (code-level)\n"
-            "4) What to test after the fix\n"
-            "Do NOT modify files. Do NOT invent missing modules.\n"
-            "Answer in Persian; keep paths and symbols in English.\n\n"
+            "1) Likely root cause\n2) Exact file paths\n3) Concrete fix steps\n4) What to test\n"
+            "Do NOT modify files. Answer in Persian; keep paths in English.\n\n"
             f"OWNER INPUT:\n{text[:8000]}"
         )
         header = "🛠 نتیجه دیباگ"
     elif mode == "ui":
         prompt = (
             "You are polishing Telegram UX for RahYar Academy.\n"
-            "Suggest clearer Persian copy, keyboard layout improvements, "
-            "and navigation fixes. Do not change business rules.\n"
-            "Reference existing keyboard/handler paths when possible.\n"
-            "Answer in Persian.\n\n"
+            "Suggest clearer Persian copy and keyboard improvements. "
+            "Do not change business rules. Answer in Persian.\n\n"
             f"OWNER REQUEST:\n{text[:8000]}"
         )
         header = "🎨 پیشنهاد زیباسازی UI"
     elif mode == "research":
         prompt = (
             "Research the topic using web_search when helpful.\n"
-            "Summarize practical guidance for the RahYar stack "
-            "(Python, aiogram 3, SQLAlchemy 2, PostgreSQL, Redis, Docker).\n"
-            "Cite URLs. Answer in Persian with English paths/APIs.\n\n"
+            "Cite URLs. Answer in Persian.\n\n"
             f"TOPIC:\n{text[:8000]}"
         )
         header = "🌐 نتیجه تحقیق"
     else:
         prompt = (
-            "You are the owner's coding assistant for the RahYar Academy codebase.\n"
-            "Answer using repository inventory, architecture, and web_search if needed.\n"
-            "Be practical: which files, functions, and patterns to use.\n"
-            "Do NOT modify files. Do NOT dump secrets.\n"
+            "You are the owner's coding assistant for RahYar.\n"
+            "Be practical about files and patterns. Do NOT modify files.\n"
             "Answer in Persian; keep paths in English.\n\n"
             f"OWNER QUESTION:\n{text[:8000]}"
         )
         header = "💬 دستیار کدنویسی"
 
-    await message.answer("⏳ در حال فکر کردن با API (+ skills/tools)...")
+    await message.answer(
+        "⏳ Agent شروع کرد...\n"
+        "برای دیدن پیشرفت لحظه‌ای می‌توانید «👁 فعالیت Agent» را بزنید."
+    )
+    _track_start("analyze", mode, text)
+    activity_tracker.step(f"حالت={mode} · ارسال به API")
     try:
         result = await asyncio.to_thread(agent.analyze, prompt, mode=mode)
+        _track_ok(result)
     except TypeError:
-        # Backward safety if older service without mode kw is loaded briefly
         try:
             result = await asyncio.to_thread(agent.analyze, prompt)
+            _track_ok(result)
         except AIAgentError as exc:
+            _track_fail(exc)
             result = f"❌ {exc}"
     except AIAgentError as exc:
+        _track_fail(exc)
         result = f"❌ {exc}"
 
     for part in _chunk(f"{header}\n\n{result}"):
         await message.answer(part)
 
     await message.answer(
-        "می‌توانید سؤال بعدی را بفرستید، یا /cancel بزنید.",
+        "می‌توانید سؤال بعدی را بفرستید، /cancel، یا «👁 فعالیت Agent».",
         reply_markup=admin_ai_keyboard(),
     )
 
@@ -253,9 +301,8 @@ async def ai_fix_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AdminState.waiting_ai_task)
     await state.update_data(ai_task_type="fix")
     await callback.message.answer(
-        "🐞 مشکل/باگ را دقیق توضیح بدهید.\n"
-        "اگر write mode فعال باشد، Agent کد را روی branch ai/* عوض می‌کند، "
-        "تست می‌گیرد و PR باز می‌کند (نه merge به main)."
+        "🐞 مشکل را دقیق توضیح دهید.\n"
+        "در حین اجرا از «👁 فعالیت Agent» وضعیت را ببینید."
     )
     await callback.answer()
 
@@ -268,7 +315,7 @@ async def ai_feature_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AdminState.waiting_ai_task)
     await state.update_data(ai_task_type="feature")
     await callback.message.answer(
-        "✨ Feature موردنظر را دقیق توضیح بدهید.\n"
+        "✨ Feature را دقیق توضیح دهید.\n"
         "نیاز به AI_AGENT_WRITE_ENABLED + GITHUB_TOKEN دارد."
     )
     await callback.answer()
@@ -282,8 +329,8 @@ async def ai_ui_write_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AdminState.waiting_ai_task)
     await state.update_data(ai_task_type="ui")
     await callback.message.answer(
-        "🎨 توضیح دهید کدام بخش UI باید زیباتر/روشن‌تر شود.\n"
-        "Agent فقط متن‌ها و کیبوردها را با رعایت قوانین کسب‌وکار تغییر می‌دهد و PR می‌سازد."
+        "🎨 کدام بخش UI باید زیباتر شود؟\n"
+        "Agent کد را عوض می‌کند و PR می‌سازد."
     )
     await callback.answer()
 
@@ -301,14 +348,33 @@ async def ai_task(message: Message, state: FSMContext):
     await state.clear()
     await message.answer(
         f"🧠 Agent شروع کرد ({task_type})...\n"
-        "⏳ بررسی، تغییر، تست و در صورت امکان PR."
+        "⏳ clone/تغییر/تست/PR\n"
+        "👁 وضعیت زنده: دکمه «فعالیت Agent»"
     )
+    _track_start("implement", task_type, task)
+    activity_tracker.step("شروع implement (write mode)")
     try:
         result = await asyncio.to_thread(agent.implement, task, task_type)
+        # Parse light signals from result text
+        if "Files:" in result:
+            activity_tracker.step("فایل‌ها در خروجی گزارش شد")
+        if "PR:" in result or "http" in result:
+            activity_tracker.step("خروجی PR/commit دریافت شد")
+        if result.startswith("❌") or "Failed" in result or "failed" in result.lower():
+            activity_tracker.finish(
+                success=False, error=result[:800], persist_dir=getattr(agent, "repo", None)
+            )
+        else:
+            _track_ok(result)
     except AIAgentError as exc:
+        _track_fail(exc)
         result = f"❌ {exc}"
     for part in _chunk(result):
         await message.answer(part)
+    await message.answer(
+        "برای مرور دقیق مراحل: «👁 فعالیت Agent»",
+        reply_markup=admin_ai_keyboard(),
+    )
 
 
 @router.callback_query(F.data == "ai_stop")
