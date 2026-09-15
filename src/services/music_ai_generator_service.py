@@ -16,10 +16,7 @@ class MusicAIGeneratorError(RuntimeError):
 
 
 class MusicAIGeneratorService:
-    """Prompt -> production-oriented MIDI plan, plus native AI audio.
-
-    Artifacts are returned as bytes and are never persisted by this service.
-    """
+    """Prompt -> production-oriented MIDI plan, plus explicitly configured native AI audio."""
 
     def __init__(self) -> None:
         self.settings = get_settings()
@@ -29,17 +26,19 @@ class MusicAIGeneratorService:
         system = """You are RahYar's professional music-production composer.
 Turn a natural-language music request into a precise production plan. The user
 may be extremely vague; infer sensible BPM, key, scale, meter, length, genre,
-mood, sound palette, arrangement and musical role. For MIDI return ONLY JSON:
+mood, sound palette, arrangement and musical role. Return ONLY valid JSON:
 {"title":str,"bpm":int,"key":str,"scale":str,"meter":"4/4","bars":int,"tracks":[{"name":str,"program":int,"channel":int,"notes":[{"start":number,"duration":number,"note":int,"velocity":int}]}]}
 start/duration are beats. Notes 0-127, velocity 1-127, program 0-127,
 channel 0-15. Maximum 8 tracks, 64 bars, 512 notes/track. Write coherent
 phrases with repetition, development, correct harmony, voice leading and groove;
 never random note soup. Respect explicit constraints over defaults. Keep the
 result useful in a real DAW."""
+        # Do not force response_format: several OpenAI-compatible gateways accept
+        # normal chat completions but reject the JSON-mode parameter.
         result = self.router.chat([
             {"role": "system", "content": system},
             {"role": "user", "content": f"Output type: {output}\nVariation: {variation}\nUser request: {prompt}"},
-        ], temperature=0.35, timeout_seconds=180, response_format={"type": "json_object"})
+        ], temperature=0.35, timeout_seconds=180)
         choices = result.get("choices") or []
         content = ((choices[0].get("message") or {}).get("content") if choices else "")
         if isinstance(content, list):
@@ -110,7 +109,8 @@ result useful in a real DAW."""
         if isinstance(data, dict):
             for key in ("audio", "audio_base64", "b64_json", "data"):
                 value = data.get(key)
-                values.extend(value if isinstance(value, list) else [value]) if value else None
+                if value:
+                    values.extend(value if isinstance(value, list) else [value])
             for key in ("url", "audio_url", "download_url"):
                 url = data.get(key)
                 if isinstance(url, str):
@@ -137,24 +137,14 @@ result useful in a real DAW."""
         return None
 
     def _audio_candidates(self) -> list[tuple[str, str, str]]:
-        settings = self.settings
-        path = (settings.MUSIC_AUDIO_PATH or "/audio/generations").strip()
-        if not path.startswith("/"):
-            path = "/" + path
-        explicit_key = (settings.MUSIC_AUDIO_API_KEY or "").strip()
-        explicit_base = (settings.MUSIC_AUDIO_BASE_URL or "").strip()
-        explicit_model = (settings.MUSIC_AUDIO_MODEL or "").strip()
+        # Audio is a separate integration. Never send a normal text-model API key
+        # to /audio/generations just because that provider happens to be configured.
+        explicit_key = (self.settings.MUSIC_AUDIO_API_KEY or "").strip()
+        explicit_base = (self.settings.MUSIC_AUDIO_BASE_URL or "").strip()
+        explicit_model = (self.settings.MUSIC_AUDIO_MODEL or "").strip()
         if explicit_key and explicit_base and explicit_model:
             return [(explicit_key, normalize_openai_compatible_base_url(explicit_base), explicit_model)]
-        try:
-            providers = self.router.providers()
-        except Exception:
-            providers = []
-        candidates = [(p.api_key, p.base_url, model) for p in providers for model in p.models]
-        # Prefer models whose identifiers strongly suggest native audio/music,
-        # then preserve the router's configured priority for everything else.
-        candidates.sort(key=lambda item: (not bool(re.search(r"music|audio|lyria|stable-audio|suno|udio", item[2], re.I))))
-        return candidates
+        return []
 
     def generate_audio(self, prompt: str, variation: int = 0) -> tuple[bytes, dict[str, Any]]:
         settings = self.settings
@@ -163,7 +153,7 @@ result useful in a real DAW."""
             path = "/" + path
         candidates = self._audio_candidates()
         if not candidates:
-            raise MusicAIGeneratorError("هیچ Audio provider قابل استفاده‌ای در ENV پیدا نشد.")
+            raise MusicAIGeneratorError("Audio API هنوز وصل نشده؛ خروجی MIDI با AI فعلی آماده است. برای Audio مقدارهای MUSIC_AUDIO_API_KEY / MUSIC_AUDIO_BASE_URL / MUSIC_AUDIO_MODEL را تنظیم کن.")
         errors: list[str] = []
         for api_key, base_url, model in candidates:
             payload = {
