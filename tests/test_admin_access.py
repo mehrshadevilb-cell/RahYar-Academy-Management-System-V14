@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from src.core.admin_access import is_admin_user
 from src.core.config.settings import get_settings
 
@@ -36,4 +38,10 @@ def test_missing_username_is_rejected_for_non_owner(monkeypatch):
     assert is_admin_user(999, None) is False
 
 
-# Trigger one-time migration after verifying the main branch still had owner-only checks.
+def test_telegram_user_object_is_supported(monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "OWNER_ID", 123456)
+    monkeypatch.setattr(settings, "ADMIN_USERNAMES", "Hi_all")
+
+    user = SimpleNamespace(id=999, username="@HI_ALL")
+    assert is_admin_user(user) is True
