@@ -8,6 +8,12 @@ MAX_TELEGRAM_ANSWER_CHARS = 3900
 
 
 def _normalize_model_markup(value: str) -> str:
+    value = re.sub(
+        r"```(?:[a-zA-Z0-9_+-]+)?\s*\n?(.*?)```",
+        lambda match: f"<pre>{match.group(1).strip()}</pre>",
+        value,
+        flags=re.DOTALL,
+    )
     value = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", value)
     value = re.sub(r"__(.+?)__", r"<b>\1</b>", value)
     value = re.sub(r"`([^`]+)`", r"<code>\1</code>", value)
@@ -21,7 +27,11 @@ def _section_title(line: str) -> str | None:
     clean = line.strip()
     clean = re.sub(r"^<b>(.+?)</b>$", r"\1", clean)
     clean = re.sub(r"^[🎯📌💡🔎📚⚙️🧠]\s*", "", clean)
-    match = re.match(r"^(جواب|پاسخ|نتیجه|مراحل|نکات|پیشنهاد|انتخاب|مقایسه|هشدار|منابع)\s*:?(.*)$", clean, re.I)
+    match = re.match(
+        r"^(جواب|پاسخ|نتیجه|خلاصه|راهنما|مراحل|نکات|پیشنهاد|انتخاب|مقایسه|هشدار|منابع)\s*:?(.*)$",
+        clean,
+        re.I,
+    )
     if not match:
         return None
     title = match.group(1)
@@ -29,6 +39,8 @@ def _section_title(line: str) -> str | None:
         "جواب": "🎯",
         "پاسخ": "🎯",
         "نتیجه": "🎯",
+        "خلاصه": "⚡",
+        "راهنما": "🧭",
         "مراحل": "🛠️",
         "نکات": "💡",
         "پیشنهاد": "💡",
@@ -37,7 +49,8 @@ def _section_title(line: str) -> str | None:
         "هشدار": "⚠️",
         "منابع": "🔎",
     }.get(title, "📌")
-    return f"<b>{emoji} {title}</b>"
+    suffix = match.group(2).strip()
+    return f"<b>{emoji} {title}</b>{(' ' + suffix) if suffix else ''}"
 
 
 def format_assistant_answer(text: str) -> str:
@@ -63,6 +76,8 @@ def format_assistant_answer(text: str) -> str:
         section = _section_title(stripped)
         if section:
             rendered.append(section)
+        elif stripped.startswith("<pre>") and stripped.endswith("</pre>"):
+            rendered.append(stripped)
         elif stripped.startswith(("1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣")):
             rendered.append(stripped)
         elif stripped.startswith("🔎 منابع") or stripped.startswith("📚 منابع"):

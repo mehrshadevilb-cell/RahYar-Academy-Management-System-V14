@@ -16,3 +16,12 @@ def test_format_assistant_answer_never_exceeds_safe_telegram_budget():
     result = format_assistant_answer("x " * 3000)
     assert len(result) <= 3900 + len("🤖 <b>راه‌یار</b>\n\n")
     assert result.endswith("…")
+
+
+def test_format_assistant_answer_preserves_heading_suffix_and_code_block():
+    result = format_assistant_answer(
+        "## راهنما: تنظیم سریع\n\n```python\nprint('ok')\n```"
+    )
+
+    assert "<b>🧭 راهنما</b> تنظیم سریع" in result
+    assert "<pre>print('ok')</pre>" in result

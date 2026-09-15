@@ -7,6 +7,7 @@ from src.services.chat_assistant_service import (
     SYSTEM_PROMPT_FA,
     ChatAssistantError,
     ChatAssistantService,
+    _question_guidance,
 )
 
 
@@ -83,3 +84,11 @@ def test_system_prompt_forbids_payment_and_admin_disclosure():
 
 def test_bot_guide_mentions_support_as_escalation_path():
     assert "پشتیبانی" in BOT_GUIDE_FA
+
+
+def test_question_guidance_prioritizes_catalog_for_purchase_questions():
+    assert "کاتالوگ فعلی" in _question_guidance("قیمت دوره چقدر است؟")
+
+
+def test_question_guidance_structures_troubleshooting_questions():
+    assert "تشخیص علت" in _question_guidance("این خطا چرا رخ می‌دهد؟")

@@ -64,6 +64,28 @@ UI_PROMPT_FA = """
 - اگر پاسخ طولانی واقعاً لازم است، بخش‌بندی کوتاه با تیترهای واضح بساز.
 """.strip()
 
+ANSWER_CONTRACT_PROMPT_FA = """
+قرارداد پاسخ:
+- خط اول باید پاسخ مستقیم یا نتیجه عملی را بدهد؛ با «حتماً» یا تکرار سؤال شروع نکن.
+- برای راهنمایی فنی، مسیر منو/تنظیم دقیق و سپس یک راه بررسی نتیجه بنویس.
+- اگر سؤال مبهم است، فقط یک سؤال روشن‌کننده بپرس و هم‌زمان بهترین فرض را کوتاه ذکر کن.
+- درباره قیمت، خرید، پرداخت، دسترسی و وضعیت دوره فقط از کاتالوگ فعلی context استفاده کن؛ حدس نزن.
+- اگر از WEB RESEARCH استفاده شد، ادعاهای منبع‌دار را با بخش «منابع» و حداکثر ۳ URL خام تمام کن.
+- اگر پاسخ قطعی نیست، صادقانه بگو چه چیزی لازم است؛ پاسخ ساختگی یا کلی‌گویی ممنوع است.
+""".strip()
+
+
+def _question_guidance(question: str) -> str:
+    """Add small deterministic hints so the model chooses the right answer shape."""
+    normalized = question.casefold()
+    if any(token in normalized for token in ("قیمت", "خرید", "پرداخت", "دسترسی", "دوره")):
+        return "راهنمای سؤال: داده کاتالوگ فعلی اولویت دارد؛ قیمت یا دسترسی را از خودت نساز."
+    if any(token in normalized for token in ("خطا", "ارور", "نمی", "کار نمی", "مشکل")):
+        return "راهنمای سؤال: پاسخ را به تشخیص علت، یک راه‌حل کم‌خطر، و روش بررسی نتیجه تقسیم کن."
+    if any(token in normalized for token in ("مقایسه", "بهتر", "پیشنهاد", "انتخاب")):
+        return "راهنمای سؤال: گزینه‌ها را بر اساس نیاز کاربر مقایسه کن و در پایان یک پیشنهاد مشروط بده."
+    return "راهنمای سؤال: پاسخ را متناسب با سطح سؤال کوتاه و اجرایی نگه دار."
+
 WEB_DECISION_PROMPT = """
 به عنوان fact-checker عمل کن. با توجه به سوال و دانش داخلی، اگر می‌توانی پاسخ دقیق و قابل اتکا بدهی
 کلمه EXACT را برگردان. اگر اطلاعات کافی نیست، یا سؤال درباره نسخه/منو/تنظیمات نرم‌افزار، manual،
@@ -215,11 +237,13 @@ class ChatAssistantService:
         base_context = [
             {"role": "system", "content": SYSTEM_PROMPT_FA},
             {"role": "system", "content": UI_PROMPT_FA},
+            {"role": "system", "content": ANSWER_CONTRACT_PROMPT_FA},
             {"role": "system", "content": MUSIC_EXPERTISE_FA},
             {"role": "system", "content": BOT_GUIDE_FA},
             {"role": "system", "content": pack_context or "MUSIC KNOWLEDGE PACK: no specific product matched; use general music expertise."},
             {"role": "system", "content": self._catalog_context(db)},
             {"role": "system", "content": "دانش جمع‌آوری و پالایش‌شده داخلی:\n" + (knowledge or "هنوز مطلب آموزشی ثبت نشده است.")},
+            {"role": "system", "content": _question_guidance(text)},
         ]
 
         if self._needs_web_research(text, knowledge):
