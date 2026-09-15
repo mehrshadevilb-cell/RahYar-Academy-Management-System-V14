@@ -62,14 +62,13 @@ class Settings(BaseSettings):
     GITHUB_TOKEN: str | None = None
     GITHUB_REPO: str = "mehrshadevilb-cell/RahYar-Academy-Management-System-V14"
 
-    CHAT_ASSISTANT_ENABLED: bool = False
+    CHAT_ASSISTANT_ENABLED: bool = True
     CHAT_ASSISTANT_API_KEY: str | None = None
     CHAT_ASSISTANT_BASE_URL: str = "https://api.openai.com/v1"
     CHAT_ASSISTANT_MODEL: str = "gpt-4o-mini"
     CHAT_ASSISTANT_TIMEOUT_SECONDS: int = 45
     CHAT_ASSISTANT_MAX_MESSAGES_PER_HOUR: int = 20
 
-    # AI knowledge engine: group memory + official Waves/iZotope ingestion.
     KNOWLEDGE_ENABLED: bool = True
     KNOWLEDGE_GROUP_IDS: str = ""
     KNOWLEDGE_FETCH_INTERVAL_HOURS: int = 24
