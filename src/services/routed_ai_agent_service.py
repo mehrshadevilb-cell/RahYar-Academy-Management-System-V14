@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Any
-
 from src.ai.provider_router import AIProviderError, AIProviderRouter
 from src.services.ai_agent_service import AIAgentError, AIAgentService
 
@@ -14,8 +12,6 @@ class RoutedAIAgentService(AIAgentService):
         self.router = AIProviderRouter()
 
     def _api_key(self) -> str:
-        # The router may be configured entirely from encrypted DB credentials;
-        # the legacy base service should not reject that configuration.
         if self.router.providers():
             return "router-managed"
         return super()._api_key()
@@ -36,14 +32,7 @@ class RoutedAIAgentService(AIAgentService):
         try:
             data = self.router.chat(
                 [
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are the RahYar senior software engineer. "
-                            "Follow project architecture. Never include secrets. "
-                            "Return concise engineering output."
-                        ),
-                    },
+                    {"role": "system", "content": "You are the RahYar senior software engineer. Follow project architecture. Never include secrets. Return concise engineering output."},
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.1,
@@ -59,4 +48,46 @@ class RoutedAIAgentService(AIAgentService):
             raise AIAgentError("AI provider returned an unexpected response.") from exc
 
     def status(self) -> str:
-        return super().status() + "\nrouter_status=" + repr(self.router.status())
+        """Return sanitized health for the same provider pool used by requests."""
+        self._check_enabled(require_git=False)
+        providers = self.router.providers()
+        if not providers:
+            raise AIAgentError("No AI provider is configured")
+
+        candidates = self.router._ordered_candidates(providers)
+        free_count = sum(1 for provider, model in candidates if self.router._is_free_model(model))
+        route_lines = [
+            f"{provider.name}/{model}{' [free]' if self.router._is_free_model(model) else ''}"
+            for provider, model in candidates
+        ]
+        write = self._write_capable()
+        lines = [
+            f"enabled={self.settings.AI_AGENT_ENABLED}",
+            f"api_key_configured={bool(providers)}",
+            f"model={candidates[0][1] if candidates else self._model()}",
+            f"base_url=hidden ({len(providers)} provider route(s))",
+            f"max_retries={self.settings.AI_AGENT_MAX_RETRIES}",
+            f"repo={self.repo}",
+            f"git_available={self._has_git()}",
+            f"github_write_ready={self.settings.github_write_ready}",
+            f"write_mode={'yes' if write else 'no (status/analyze only)'}",
+            f"chat_assistant_enabled={self.settings.CHAT_ASSISTANT_ENABLED}",
+            f"chat_key_configured={bool(self.settings.effective_chat_api_key)}",
+            f"router_free_candidates={free_count}",
+            f"router_candidates={route_lines!r}",
+        ]
+        if self._has_git():
+            try:
+                lines.extend([
+                    f"branch={self._git('branch', '--show-current')}",
+                    f"head={self._git('rev-parse', '--short', 'HEAD')}",
+                    f"locked={self._lock_path().exists()}",
+                ])
+            except AIAgentError as exc:
+                lines.append(f"git_error={exc}")
+        elif self.settings.github_write_ready:
+            lines.append("note=Online write: clone on demand to AI_AGENT_WORK_DIR, push ai/* + PR")
+        else:
+            lines.append("note=برای نوشتن کد: AI_AGENT_WRITE_ENABLED + GITHUB_TOKEN + GITHUB_REPO")
+        lines.append("provider_ping=deferred_to_router_request")
+        return "\n".join(lines)
