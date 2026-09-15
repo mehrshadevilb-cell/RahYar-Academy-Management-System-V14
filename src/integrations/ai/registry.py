@@ -4,12 +4,16 @@ from typing import Type
 
 from src.database.models.ai_provider import AIProvider
 from src.integrations.ai.base import BaseAIProvider
+from src.integrations.ai.providers.anthropic import AnthropicProvider
+from src.integrations.ai.providers.google import GoogleProvider
 from src.integrations.ai.providers.openai_compatible import OpenAICompatibleProvider
 
 
 class ProviderRegistry:
     _providers: dict[str, Type[BaseAIProvider]] = {
         "openai_compatible": OpenAICompatibleProvider,
+        "anthropic": AnthropicProvider,
+        "google": GoogleProvider,
     }
 
     @classmethod
