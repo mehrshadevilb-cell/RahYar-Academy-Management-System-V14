@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     AI_API_KEY: str | None = None
     AI_BASE_URL: str | None = None
     AI_MODEL: str | None = None
+    AI_PROVIDERS_JSON: str = ""
     AI_AGENT_WRITE_ENABLED: bool = False
     AI_AGENT_WORK_DIR: str = "/tmp/rahyar-agent-repo"
     GITHUB_TOKEN: str | None = None
