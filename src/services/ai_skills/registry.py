@@ -6,7 +6,7 @@ They do NOT install arbitrary pip packages on the host (security boundary).
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
@@ -46,21 +46,32 @@ CODING_SKILL = Skill(
 
 UI_POLISH_SKILL = Skill(
     id="ui_polish",
-    title="زیباسازی UX تلگرام",
-    description="متن‌های فارسی واضح، کیبورد مرتب، پیام‌های کوتاه و حرفه‌ای",
+    title="طراحی و زیباسازی UI تلگرام",
+    description="سلسله‌مراتب بصری، کیبورد، کپی فارسی، سفر هنرجو و پنل ادمین",
     tools=("read_file", "list_tree"),
-    tags=("ux", "telegram", "persian"),
+    tags=("ux", "telegram", "persian", "design"),
     system_addendum=(
-        "UI POLISH SKILL ACTIVE:\n"
-        "- All user-facing Telegram copy must be clear Persian.\n"
-        "- Prefer short paragraphs, emoji sparingly as visual anchors.\n"
-        "- Always provide Back / Cancel where multi-step FSM exists.\n"
-        "- Dangerous actions need explicit confirmation steps.\n"
-        "- Avoid message spam; edit_text when possible.\n"
-        "- Button labels: short, action-oriented (e.g. تایید پرداخت).\n"
-        "- Error messages must be actionable for non-technical owners.\n"
-        "- Keep keyboard layouts consistent with existing admin_*_keyboard modules.\n"
-        "- Do not change business rules while polishing copy/layout.\n"
+        "UI / DESIGN SKILL ACTIVE:\n"
+        "You are the product designer + UX writer for the RahYar Telegram bot.\n"
+        "Goals: clarity, speed, trust, Persian-native copy, consistent keyboards.\n"
+        "\n"
+        "VISUAL HIERARCHY:\n"
+        "- Title line (emoji + screen name) → body → status → CTA.\n"
+        "- Short messages; bullets for 3+ items; no text walls.\n"
+        "\n"
+        "KEYBOARDS:\n"
+        "- Short verb-first Persian labels; Back on bottom row.\n"
+        "- Confirm/Cancel for destructive actions.\n"
+        "- Reuse src/bot/keyboards patterns; keep callback prefixes stable.\n"
+        "\n"
+        "COPY:\n"
+        "- Owner is non-technical; students need step-by-step guidance.\n"
+        "- Errors: plain Persian + next action. Never stack traces.\n"
+        "\n"
+        "CONSTRAINTS:\n"
+        "- Do not change business rules, payment approval, or OWNER_ID checks.\n"
+        "- Prefer edit_text over message spam.\n"
+        "- When writing code for UI, only touch keyboards, handler strings, states.\n"
     ),
 )
 
@@ -102,6 +113,10 @@ BUILTIN_SKILLS: dict[str, Skill] = {
 }
 
 
+def _split_csv(value: str) -> tuple[str, ...]:
+    return tuple(t.strip() for t in value.split(",") if t.strip())
+
+
 class SkillRegistry:
     def __init__(self, repo_root: Path | None = None) -> None:
         self.repo_root = repo_root
@@ -113,6 +128,8 @@ class SkillRegistry:
         if not folder.exists() or not folder.is_dir():
             return
         for path in sorted(folder.glob("*.md")):
+            if path.name.lower() == "readme.md":
+                continue
             try:
                 text = path.read_text(encoding="utf-8")
             except OSError:
@@ -121,6 +138,7 @@ class SkillRegistry:
             title = skill_id
             description = ""
             tools: list[str] = []
+            tags: list[str] = ["custom"]
             body_lines: list[str] = []
             for line in text.splitlines():
                 low = line.strip().lower()
@@ -129,11 +147,9 @@ class SkillRegistry:
                 elif low.startswith("description:"):
                     description = line.split(":", 1)[1].strip()
                 elif low.startswith("tools:"):
-                    tools = [
-                        t.strip()
-                        for t in line.split(":", 1)[1].split(",")
-                        if t.strip()
-                    ]
+                    tools = list(_split_csv(line.split(":", 1)[1]))
+                elif low.startswith("tags:"):
+                    tags = list(_split_csv(line.split(":", 1)[1])) or ["custom"]
                 else:
                     body_lines.append(line)
             body = "\n".join(body_lines).strip()
@@ -143,7 +159,7 @@ class SkillRegistry:
                 description=description[:200],
                 system_addendum=body or description,
                 tools=tuple(tools),
-                tags=("custom",),
+                tags=tuple(tags),
             )
 
     def list_skills(self) -> list[Skill]:
@@ -151,6 +167,14 @@ class SkillRegistry:
 
     def get(self, skill_id: str) -> Skill | None:
         return self._skills.get((skill_id or "").strip().lower())
+
+    def by_tag(self, *tags: str) -> list[Skill]:
+        wanted = {t.lower() for t in tags}
+        return [
+            s
+            for s in self.list_skills()
+            if wanted.intersection({t.lower() for t in s.tags})
+        ]
 
     def resolve_for_mode(self, mode: str) -> list[Skill]:
         mode = (mode or "").strip().lower()
@@ -161,11 +185,27 @@ class SkillRegistry:
             "feature": ["coding", "web_research"],
             "ui": ["ui_polish", "coding"],
             "ui_polish": ["ui_polish", "coding"],
+            "design": ["ui_polish", "coding"],
             "research": ["web_research", "coding"],
             "web": ["web_research"],
         }
         ids = mapping.get(mode, ["coding"])
-        return [self._skills[i] for i in ids if i in self._skills]
+        selected: list[Skill] = []
+        seen: set[str] = set()
+        for skill_id in ids:
+            skill = self._skills.get(skill_id)
+            if skill and skill.id not in seen:
+                selected.append(skill)
+                seen.add(skill.id)
+
+        # UI / design modes automatically attach all design|ux tagged skills
+        if mode in {"ui", "ui_polish", "design"}:
+            for skill in self.by_tag("design", "ux"):
+                if skill.id not in seen:
+                    selected.append(skill)
+                    seen.add(skill.id)
+
+        return selected
 
     def system_prompt_block(self, skills: list[Skill]) -> str:
         if not skills:
@@ -185,14 +225,16 @@ class SkillRegistry:
         lines = ["🧩 Skills در دسترس Agent:"]
         for skill in self.list_skills():
             tool_txt = ", ".join(skill.tools) if skill.tools else "—"
+            tag_txt = ", ".join(skill.tags) if skill.tags else "—"
             lines.append(
                 f"• `{skill.id}` — {skill.title}\n"
                 f"  {skill.description}\n"
+                f"  tags: {tag_txt}\n"
                 f"  tools: {tool_txt}"
             )
         lines.append(
-            "\nبرای نصب skill سفارشی: فایل markdown در `.ai-agent/skills/<id>.md` "
-            "با فیلدهای title/description/tools + بدنهٔ راهنما بگذارید (از طریق PR)."
+            "\nبرای نصب skill طراحی/UI: فایل `.ai-agent/skills/<id>.md` با "
+            "`tags: design, ux` بگذارید تا در حالت 🎨 UI به‌صورت خودکار فعال شود."
         )
         return "\n".join(lines)
 
