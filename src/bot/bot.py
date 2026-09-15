@@ -1,6 +1,7 @@
 from aiogram import Bot, Dispatcher
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.exceptions import TelegramConflictError, TelegramUnauthorizedError
+from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import ErrorEvent
 
 from src.core.config.settings import get_settings
@@ -16,22 +17,42 @@ from src.bot.handlers import chat_assistant
 from src.bot.middlewares.database import DatabaseMiddleware
 
 settings = get_settings()
+logger = get_logger("bot.errors")
+
+
+def build_fsm_storage():
+    """Prefer Redis when REDIS_URL is set so FSM survives process restarts.
+
+    Falls back to MemoryStorage if Redis is missing or fails to init
+    (e.g. local dev without Redis).
+    """
+    url = (settings.REDIS_URL or "").strip()
+    if not url:
+        logger.info("FSM storage: MemoryStorage (REDIS_URL not set)")
+        return MemoryStorage()
+    try:
+        from aiogram.fsm.storage.redis import RedisStorage
+
+        storage = RedisStorage.from_url(url)
+        logger.info("FSM storage: RedisStorage")
+        return storage
+    except Exception:
+        logger.exception("FSM Redis init failed; falling back to MemoryStorage")
+        return MemoryStorage()
+
 
 session = AiohttpSession(proxy=settings.PROXY_URL) if settings.PROXY_URL else None
 bot = Bot(token=settings.BOT_TOKEN, session=session)
-dp = Dispatcher()
+dp = Dispatcher(storage=build_fsm_storage())
 
 dp.message.middleware(DatabaseMiddleware())
 dp.callback_query.middleware(DatabaseMiddleware())
-
-logger = get_logger("bot.errors")
 
 
 @dp.error()
 async def global_error_handler(event: ErrorEvent):
     exc = event.exception
 
-    # Infrastructure noise during rolling deploys — do not spam users/owner.
     if isinstance(exc, TelegramConflictError):
         logger.warning("TelegramConflictError (another getUpdates active): %s", exc)
         return True
