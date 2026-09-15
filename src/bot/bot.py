@@ -17,7 +17,7 @@ from src.bot.handlers import music_generator
 from src.bot.handlers import chat_assistant
 from src.bot.middlewares.database import DatabaseMiddleware
 from src.bot.middlewares.security import SecurityMiddleware
-from src.services.ai_agent_knowledge_runtime import AIAgentKnowledgeRuntime
+from src.services.ai_agent_knowledge_failover import AIAgentKnowledgeRuntime
 
 settings = get_settings()
 logger = get_logger("bot.errors")
