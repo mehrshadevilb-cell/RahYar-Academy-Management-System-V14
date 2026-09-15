@@ -14,7 +14,7 @@ from src.bot.handlers import admin_discount, admin_logs, admin_broadcast, admin_
 from src.bot.handlers import admin_ai, referral, support, admin_support
 from src.bot.handlers import assignment, admin_assignments, progress
 from src.bot.handlers import music_generator
-from src.bot.handlers import chat_assistant
+from src.bot.handlers import chat_assistant, knowledge
 from src.bot.middlewares.database import DatabaseMiddleware
 from src.bot.middlewares.security import SecurityMiddleware
 
@@ -23,18 +23,12 @@ logger = get_logger("bot.errors")
 
 
 def build_fsm_storage():
-    """Prefer Redis when REDIS_URL is set so FSM survives process restarts.
-
-    Falls back to MemoryStorage if Redis is missing or fails to init
-    (e.g. local dev without Redis).
-    """
     url = (settings.REDIS_URL or "").strip()
     if not url:
         logger.info("FSM storage: MemoryStorage (REDIS_URL not set)")
         return MemoryStorage()
     try:
         from aiogram.fsm.storage.redis import RedisStorage
-
         storage = RedisStorage.from_url(url)
         logger.info("FSM storage: RedisStorage")
         return storage
@@ -46,9 +40,6 @@ def build_fsm_storage():
 session = AiohttpSession(proxy=settings.PROXY_URL) if settings.PROXY_URL else None
 bot = Bot(token=settings.BOT_TOKEN, session=session)
 dp = Dispatcher(storage=build_fsm_storage())
-
-# Order matters: DatabaseMiddleware must run first so data["db"] exists
-# by the time SecurityMiddleware runs its blocked-user check.
 dp.message.middleware(DatabaseMiddleware())
 dp.callback_query.middleware(DatabaseMiddleware())
 dp.message.middleware(SecurityMiddleware())
@@ -59,68 +50,34 @@ dp.callback_query.middleware(SecurityMiddleware())
 async def global_error_handler(event: ErrorEvent):
     exc = event.exception
     callback_query = event.update.callback_query
-
     if callback_query:
         try:
-            # Without this, a failed callback handler leaves the button
-            # in the user's Telegram client spinning until Telegram's
-            # own client-side timeout - a real, user-visible UI bug
-            # independent of whatever caused the underlying exception.
             await callback_query.answer()
         except Exception:
             logger.exception("Failed to answer callback_query %s after an error", callback_query.id)
-
     if isinstance(exc, TelegramConflictError):
         logger.warning("TelegramConflictError (another getUpdates active): %s", exc)
         return True
     if isinstance(exc, TelegramUnauthorizedError):
         logger.error("TelegramUnauthorizedError — BOT_TOKEN invalid or revoked")
         return True
-
     if is_benign_telegram_error(exc):
-        logger.info(
-            "Benign Telegram error on update %s: %s: %s",
-            event.update.update_id,
-            type(exc).__name__,
-            exc,
-        )
+        logger.info("Benign Telegram error on update %s: %s: %s", event.update.update_id, type(exc).__name__, exc)
         return True
-
-    logger.exception(
-        "Unhandled error on update %s: %s",
-        event.update.update_id,
-        exc,
-        exc_info=exc,
-    )
-
+    logger.exception("Unhandled error on update %s: %s", event.update.update_id, exc, exc_info=exc)
     chat_id = None
     if event.update.message:
         chat_id = event.update.message.chat.id
     elif callback_query and callback_query.message:
         chat_id = callback_query.message.chat.id
-
     if chat_id:
         try:
-            await bot.send_message(
-                chat_id=chat_id,
-                text=(
-                    "⚠️ متأسفانه خطایی رخ داد. "
-                    "لطفاً دوباره تلاش کنید یا از «🆘 پشتیبانی» پیام بگذارید."
-                ),
-            )
+            await bot.send_message(chat_id=chat_id, text="⚠️ متأسفانه خطایی رخ داد. لطفاً دوباره تلاش کنید یا از «🆘 پشتیبانی» پیام بگذارید.")
         except Exception:
             logger.exception("Failed to notify user %s about an error", chat_id)
-
     if settings.OWNER_ID and should_notify_owner(exc):
         try:
-            await bot.send_message(
-                chat_id=settings.OWNER_ID,
-                text=(
-                    f"🚨 خطای فنی در ربات\n\n"
-                    f"نوع: {type(exc).__name__}\n"
-                    f"پیام: {str(exc)[:500]}"
-                ),
-            )
+            await bot.send_message(chat_id=settings.OWNER_ID, text=f"🚨 خطای فنی در ربات\n\nنوع: {type(exc).__name__}\nپیام: {str(exc)[:500]}")
         except Exception:
             logger.exception("Failed to notify owner about an error")
     return True
@@ -132,8 +89,9 @@ def setup_handlers():
         admin_online, admin_installments, admin_discount, admin_logs,
         admin_broadcast, admin_reports, admin_ai, referral, support, admin_support,
         assignment, admin_assignments, progress, music_generator,
-        # chat_assistant MUST stay last: it's a catch-all for free text
-        # that no other router recognized (see its module docstring).
+        # Knowledge capture is before the catch-all assistant but after normal flows.
+        knowledge,
+        # chat_assistant MUST stay last: it is a free-text catch-all.
         chat_assistant,
     ):
         dp.include_router(module.router)
