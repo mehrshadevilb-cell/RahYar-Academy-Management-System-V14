@@ -1,3 +1,5 @@
+import re
+
 from aiogram import Router, F, Bot
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
@@ -9,6 +11,7 @@ from src.services.online_enrollment_service import OnlineEnrollmentService
 from src.services.attendance_service import AttendanceService
 from src.services.profile_service import ProfileService
 from src.services.online_course_service import OnlineCourseService
+from src.services.online_schedule_service import OnlineScheduleService
 from src.bot.states.admin_states import AdminState
 from src.bot.keyboards.admin_online_keyboard import (
     admin_online_courses_keyboard,
@@ -32,14 +35,56 @@ online_enrollment_service = OnlineEnrollmentService()
 attendance_service = AttendanceService()
 profile_service = ProfileService()
 online_course_service = OnlineCourseService()
+online_schedule_service = OnlineScheduleService()
 telegram_repository = TelegramRepository()
 admin_log_service = AdminLogService()
 
 settings = get_settings()
+SLOT_INPUT = re.compile(r"^(شنبه|یکشنبه|دوشنبه|سه‌شنبه|سه شنبه|چهارشنبه|پنجشنبه|جمعه)\s+(\d{2}:\d{2})\s*-\s*(\d{2}:\d{2})$")
+SLOT_DAYS = {"دوشنبه": 0, "سه‌شنبه": 1, "سه شنبه": 1, "چهارشنبه": 2, "پنجشنبه": 3, "جمعه": 4, "شنبه": 5, "یکشنبه": 6}
 
 
 def _is_owner(user_id: int) -> bool:
     return user_id == settings.OWNER_ID
+
+
+@router.callback_query(F.data.startswith("admin_oc_slot_"))
+async def admin_online_slot_start(callback: CallbackQuery, state: FSMContext):
+    if not _is_owner(callback.from_user.id):
+        await callback.answer("⛔️", show_alert=True)
+        return
+    course_id = int(callback.data.replace("admin_oc_slot_", ""))
+    await state.update_data(online_slot_course_id=course_id)
+    await state.set_state(AdminState.waiting_online_slot)
+    await callback.message.answer(
+        "🕒 زمان هفتگی را ارسال کنید؛ هر خط یک زمان.\n"
+        "فرمت: شنبه 15:00-15:30\n"
+        "برای پایان، /done را بفرستید."
+    )
+    await callback.answer()
+
+
+@router.message(AdminState.waiting_online_slot)
+async def admin_online_slot_add(message: Message, state: FSMContext, db):
+    if not _is_owner(message.from_user.id):
+        return
+    text = (message.text or "").strip()
+    if text == "/done":
+        await state.clear()
+        await message.answer("✅ تنظیم زمان‌ها تمام شد.")
+        return
+    match = SLOT_INPUT.match(text)
+    if not match:
+        await message.answer("❌ فرمت نادرست. نمونه: شنبه 15:00-15:30")
+        return
+    day, start, end = match.groups()
+    try:
+        data = await state.get_data()
+        slot = online_schedule_service.add_slot(db, data["online_slot_course_id"], SLOT_DAYS[day], start, end)
+    except ValueError as exc:
+        await message.answer(f"❌ {exc}")
+        return
+    await message.answer(f"✅ زمان «{slot.label}» اضافه شد. زمان بعدی یا /done را بفرستید.")
 
 
 @router.callback_query(F.data.startswith("res_confirm_"))

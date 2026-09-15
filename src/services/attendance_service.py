@@ -1,3 +1,5 @@
+from datetime import date, timedelta
+
 from sqlalchemy.orm import Session
 
 from src.database.models.attendance import Attendance, AttendanceStatus
@@ -13,7 +15,8 @@ SESSIONS_PER_INSTALLMENT_CYCLE = 4
 class AttendanceService:
     """Records a reservation outcome exactly once.
 
-    Only PRESENT consumes a session. ABSENT and CANCELLED never consume one.
+    PRESENT consumes a session. The first ABSENT is a free extension; later
+    absences consume the reserved session. CANCELLED never consumes one.
     Re-clicking an attendance button is idempotent and cannot consume a second session.
     """
 
@@ -65,6 +68,43 @@ class AttendanceService:
             ):
                 self.installment_service.create_next_installment(db, enrollment)
 
+        elif status == AttendanceStatus.ABSENT:
+            previous_absences = (
+                db.query(Attendance)
+                .filter(
+                    Attendance.enrollment_id == enrollment.id,
+                    Attendance.status == AttendanceStatus.ABSENT,
+                )
+                .count()
+            ) - 1  # the current absence was inserted immediately above
+            if previous_absences >= 1:
+                enrollment.completed_sessions += 1
+                if enrollment.remaining_sessions > 0:
+                    enrollment.remaining_sessions -= 1
+                if enrollment.remaining_sessions <= 0:
+                    enrollment.status = EnrollmentStatus.ENDED
+            elif reservation_id is not None:
+                # Preserve the first missed lesson by adding one confirmed
+                # lesson after the current reservation run (same weekly day).
+                try:
+                    current = date.fromisoformat(str(session_date))
+                    replacement = current + timedelta(days=7)
+                    from src.database.repositories.reservation_repository import ReservationRepository
+                    repo = ReservationRepository()
+                    existing_dates = repo.get_for_enrollment(db, enrollment.id)
+                    while any(str(item.requested_date) == replacement.isoformat() for item in existing_dates):
+                        replacement += timedelta(days=7)
+                    from src.database.models.reservation import Reservation
+                    db.add(Reservation(
+                        enrollment_id=enrollment.id,
+                        requested_date=replacement.isoformat(),
+                        requested_time=reservation.requested_time,
+                        status=ReservationStatus.CONFIRMED,
+                        admin_notes="automatic extension for first absence",
+                    ))
+                except (TypeError, ValueError):
+                    pass
+            db.commit()
         else:
             db.commit()
 

@@ -7,6 +7,7 @@ from .telegram_account import TelegramAccount
 from .admin_log import AdminLog
 from .ai_provider import AIProvider
 from .ai_model import AIModel
+from .online_time_slot import OnlineTimeSlot
 
 
 __all__ = [
@@ -20,4 +21,5 @@ __all__ = [
     "AdminLog",
     "AIProvider",
     "AIModel",
+    "OnlineTimeSlot",
 ]

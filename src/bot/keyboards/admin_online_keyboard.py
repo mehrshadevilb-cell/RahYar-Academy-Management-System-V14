@@ -84,7 +84,10 @@ def admin_online_course_detail_keyboard(course):
                 InlineKeyboardButton(text="✏️ تعداد جلسات ترم", callback_data=f"admin_oc_edit_term_sessions_{course.id}"),
             ],
             [
-                InlineKeyboardButton(text=toggle_text, callback_data=f"admin_oc_toggle_{course.id}"),
+                InlineKeyboardButton(text="🕒 مدیریت زمان‌های هفتگی", callback_data=f"admin_oc_slot_{course.id}"),
+            ],
+            [
+                InlineKeyboardButton(text="🚫 غیرفعال کردن", callback_data=f"admin_oc_toggle_{course.id}"),
             ],
             [
                 InlineKeyboardButton(text="⬅️ بازگشت", callback_data="admin_online_manage"),

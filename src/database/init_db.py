@@ -16,6 +16,7 @@ from src.database.models.telegram_channel import TelegramChannel  # noqa: F401
 from src.database.models.license import License  # noqa: F401
 from src.database.models.invite_link import TelegramInviteLink  # noqa: F401
 from src.database.models.online_course import OnlineCourse  # noqa: F401
+from src.database.models.online_time_slot import OnlineTimeSlot  # noqa: F401
 from src.database.models.online_enrollment import OnlineEnrollment  # noqa: F401
 from src.database.models.reservation import Reservation  # noqa: F401
 from src.database.models.attendance import Attendance  # noqa: F401

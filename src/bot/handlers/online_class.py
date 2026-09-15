@@ -12,6 +12,7 @@ from src.services.online_course_service import OnlineCourseService
 from src.services.online_enrollment_service import OnlineEnrollmentService
 from src.services.reservation_service import ReservationService
 from src.services.profile_service import ProfileService
+from src.services.online_schedule_service import OnlineScheduleService
 from src.database.repositories.telegram_repository import TelegramRepository
 from src.core.config.settings import get_settings
 from src.core.utils.jalali import (
@@ -27,6 +28,7 @@ router = Router()
 online_course_service = OnlineCourseService()
 online_enrollment_service = OnlineEnrollmentService()
 reservation_service = ReservationService()
+schedule_service = OnlineScheduleService()
 profile_service = ProfileService()
 telegram_repository = TelegramRepository()
 
@@ -47,6 +49,13 @@ def _enrollment_keyboard(enrollment_id: int):
             ]
         ]
     )
+
+
+def _slot_keyboard(enrollment_id: int, slots):
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"🕒 {slot.label}", callback_data=f"reserve_slot_{enrollment_id}_{slot.id}")]
+        for slot in slots
+    ])
 
 
 @router.message(F.text == "🎼 کلاس آنلاین")
@@ -105,6 +114,16 @@ async def reservation_start(callback: CallbackQuery, state: FSMContext, db):
         await callback.answer("این کلاس دیگر جلسه قابل رزرو ندارد.", show_alert=True)
         return
 
+    slots = schedule_service.list_active_slots(db, enrollment.online_course_id)
+    if slots:
+        await state.update_data(enrollment_id=enrollment_id)
+        await callback.message.answer(
+            "🕒 زمان هفتگی کلاس را انتخاب کنید:",
+            reply_markup=_slot_keyboard(enrollment_id, slots),
+        )
+        await callback.answer()
+        return
+
     await state.update_data(enrollment_id=enrollment_id)
     await state.set_state(ReservationState.waiting_date)
 
@@ -120,6 +139,29 @@ async def reservation_start(callback: CallbackQuery, state: FSMContext, db):
 
 @router.callback_query(F.data == "jcal:noop")
 async def jalali_calendar_noop(callback: CallbackQuery):
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("reserve_slot_"))
+async def reservation_slot_pick(callback: CallbackQuery, state: FSMContext, db):
+    _, _, enrollment_raw, slot_raw = callback.data.split("_")
+    enrollment_id, slot_id = int(enrollment_raw), int(slot_raw)
+    enrollment = online_enrollment_service.get_by_id(db, enrollment_id)
+    user = profile_service.get_profile(db=db, telegram_id=str(callback.from_user.id))
+    if not enrollment or not user or enrollment.user_id != user.id:
+        await callback.answer("⛔️ این کلاس متعلق به شما نیست.", show_alert=True)
+        return
+    slots = schedule_service.list_active_slots(db, enrollment.online_course_id)
+    if not any(slot.id == slot_id for slot in slots):
+        await callback.answer("این زمان دیگر فعال نیست.", show_alert=True)
+        return
+    await state.update_data(enrollment_id=enrollment_id, slot_id=slot_id)
+    await state.set_state(ReservationState.waiting_date)
+    jy, jm, _ = today_jalali()
+    await callback.message.answer(
+        "📅 تاریخ شروع رزرو را انتخاب کنید:",
+        reply_markup=jalali_calendar_keyboard(enrollment_id, jy, jm),
+    )
     await callback.answer()
 
 

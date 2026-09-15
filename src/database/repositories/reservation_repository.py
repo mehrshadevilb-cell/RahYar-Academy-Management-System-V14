@@ -24,6 +24,14 @@ class ReservationRepository:
     def get_by_id(self, db: Session, reservation_id: int):
         return db.query(Reservation).filter(Reservation.id == reservation_id).first()
 
+    def get_for_enrollment(self, db: Session, enrollment_id: int):
+        return (
+            db.query(Reservation)
+            .filter(Reservation.enrollment_id == enrollment_id)
+            .order_by(Reservation.requested_date, Reservation.requested_time)
+            .all()
+        )
+
     def get_pending(self, db: Session):
         return (
             db.query(Reservation)
