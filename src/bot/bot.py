@@ -13,7 +13,7 @@ from src.bot.handlers import online_class, admin_online, admin_installments
 from src.bot.handlers import admin_discount, admin_logs, admin_broadcast, admin_reports
 from src.bot.handlers import admin_ai, referral, support, admin_support
 from src.bot.handlers import assignment, admin_assignments, progress
-from src.bot.handlers import music_generator
+from src.bot.handlers import music_generator, group_music_panel
 from src.bot.handlers import chat_assistant
 from src.bot.middlewares.database import DatabaseMiddleware
 from src.bot.middlewares.security import SecurityMiddleware
@@ -83,7 +83,7 @@ async def global_error_handler(event: ErrorEvent):
         try:
             await bot.send_message(chat_id=settings.OWNER_ID, text=f"🚨 خطای فنی در ربات\n\nنوع: {type(exc).__name__}\nپیام: {str(exc)[:500]}")
         except Exception:
-            logger.exception("Failed to notify owner: %s", settings.OWNER_ID)
+            logger.exception("Failed to notify owner: {settings.OWNER_ID}")
     return True
 
 
@@ -92,7 +92,7 @@ def setup_handlers():
         start, course, profile, my_courses, payment, admin, online_class,
         admin_online, admin_installments, admin_discount, admin_logs,
         admin_broadcast, admin_reports, admin_ai, referral, support, admin_support,
-        assignment, admin_assignments, progress, music_generator,
+        assignment, admin_assignments, progress, group_music_panel, music_generator,
         # AI Agent transport gateway; it owns the knowledge/support intelligence.
         ai_agent_knowledge,
         # chat_assistant MUST stay last: it is a free-text catch-all.
