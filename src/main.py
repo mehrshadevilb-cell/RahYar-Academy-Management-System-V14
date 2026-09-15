@@ -43,7 +43,7 @@ app.include_router(storefront_router)
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
     logger.exception("Unhandled error on %s %s", request.method, request.url.path)
-    return JSONResponse(status_code=500, content={"detail": "Internal Server Error", "path": request.url.path, "error_type": type(exc).__name__, "error": str(exc)[:500]})
+    return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
 
 
 @app.api_route("/health", methods=["GET", "HEAD"])
@@ -63,6 +63,12 @@ async def api_status():
 
 @app.get("/api/debug-storefront")
 async def debug_storefront():
+    # This endpoint exposes filesystem/template diagnostics and must never be
+    # reachable on a production deployment. Keep it available for local/debug
+    # troubleshooting only.
+    if not settings.DEBUG:
+        return JSONResponse(status_code=404, content={"detail": "Not Found"})
+
     from src.services.web_order_service import WebOrderService
     out: dict = {"ok": True, "build": _build_id(), "steps": []}
     db = SessionLocal()
