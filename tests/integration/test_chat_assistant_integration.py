@@ -7,6 +7,13 @@ from src.bot.handlers import chat_assistant as handler
 from src.services.chat_assistant_service import ChatAssistantError, ChatAssistantService
 
 
+def test_feedback_is_limited_to_questions_and_help_requests():
+    assert handler.should_show_feedback("سلام") is False
+    assert handler.should_show_feedback("ممنون، خیلی خوب بود") is False
+    assert handler.should_show_feedback("چطور وکال را تمیز میکس کنم؟") is True
+    assert handler.should_show_feedback("راهنمای Plugin") is True
+
+
 class FakeBot:
     async def send_chat_action(self, chat_id, action):
         self.last_action = (chat_id, action)

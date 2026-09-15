@@ -25,6 +25,17 @@ ASSISTANT_HINTS = ReplyKeyboardMarkup(
 )
 _recent_questions: dict[int, tuple[str, str]] = {}
 _MAX_RECENT_QUESTIONS = 200
+_CASUAL_MESSAGES = {
+    "سلام", "درود", "خوبی", "مرسی", "ممنون", "خداحافظ", "bye", "hi", "hello", "thanks",
+}
+_QUESTION_STARTERS = (
+    "چطور", "چگونه", "چرا", "آیا", "چی", "چه", "کجا", "کی", "میشه", "میتونی", "می‌توانی",
+    "how", "why", "what", "where", "when", "can you", "could you",
+)
+_QUESTION_CONTEXT = (
+    "سوال", "راهنما", "قیمت", "خرید", "پرداخت", "دسترسی", "دوره", "خطا", "ارور", "مشکل",
+    "میکس", "مستر", "ضبط", "plugin", "daw", "مقایسه", "پیشنهاد", "تنظیم",
+)
 
 
 def assistant_feedback_keyboard() -> InlineKeyboardMarkup:
@@ -37,6 +48,20 @@ def assistant_feedback_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="🔄 پاسخ بهتر", callback_data="assistant_retry")],
         ]
     )
+
+
+def should_show_feedback(question: str) -> bool:
+    """Show feedback only when the user asked for information or help."""
+    normalized = " ".join((question or "").casefold().strip().split())
+    if not normalized or normalized in _CASUAL_MESSAGES:
+        return False
+    if normalized.endswith(("!", "！")) and "?" not in normalized and "؟" not in normalized:
+        return False
+    if "؟" in normalized or "?" in normalized:
+        return True
+    if normalized.startswith(_QUESTION_STARTERS):
+        return True
+    return any(token in normalized for token in _QUESTION_CONTEXT)
 
 
 def _remember_question(sent_message: Message | None, telegram_id: str, question: str) -> None:
@@ -86,13 +111,15 @@ async def chat_fallback(message: Message, db):
         await message.answer(DISABLED_MESSAGE_FA, parse_mode="HTML")
         return
 
+    question_like = should_show_feedback(message.text)
     sent_message = await message.answer(
         format_assistant_answer(reply),
         parse_mode="HTML",
         disable_web_page_preview=True,
-        reply_markup=assistant_feedback_keyboard(),
+        reply_markup=assistant_feedback_keyboard() if question_like else None,
     )
-    _remember_question(sent_message, str(message.from_user.id), message.text)
+    if question_like:
+        _remember_question(sent_message, str(message.from_user.id), message.text)
 
 
 @router.callback_query(F.data.startswith("assistant_feedback:"))
