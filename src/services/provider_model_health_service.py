@@ -11,10 +11,11 @@ from src.ai.provider_router import AIProvider, AIProviderRouter
 
 
 class ProviderModelHealthService:
-    """Discover the provider's live model catalog, then health-test every model.
+    """Discover live catalogs and independently test model availability.
 
-    The configured model list is only a fallback. When a provider exposes a
-    standard /models endpoint, its live catalog is authoritative for the test.
+    Availability and pricing are intentionally separate signals: a paid model
+    may be healthy, and a model with unknown pricing must never be treated as
+    free merely because it answers successfully.
     """
 
     def __init__(self, router: AIProviderRouter | None = None) -> None:
@@ -40,7 +41,6 @@ class ProviderModelHealthService:
         return headers
 
     def discover(self, provider: AIProvider, *, timeout_seconds: int = 20) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
-        """Return live models and a sanitized discovery error, if any."""
         url = provider.base_url.rstrip("/") + "/models"
         if provider.provider_type == "google":
             url += "?key=" + quote(provider.api_key, safe="")
@@ -69,9 +69,8 @@ class ProviderModelHealthService:
                 "detail": str(exc)[:250],
             }
 
-        raw_items: list[dict[str, Any]]
+        raw_items: list[dict[str, Any]] = []
         if provider.provider_type == "google":
-            raw_items = []
             for item in payload.get("models", []) if isinstance(payload, dict) else []:
                 model_id = str(item.get("name", "")).removeprefix("models/").strip()
                 methods = item.get("supportedGenerationMethods") or []
@@ -104,26 +103,37 @@ class ProviderModelHealthService:
         }
 
     @staticmethod
-    def _free(model: dict[str, Any]) -> bool:
+    def pricing_status(model: dict[str, Any]) -> str:
+        """Return known_free, known_paid, or unknown; never infer price from health."""
         model_id = str(model.get("model_id") or "").lower()
         if model_id.endswith(":free") or "-free" in model_id:
-            return True
+            return "known_free"
+
+        values = []
         for key in ("pricing_input", "pricing_output"):
             value = model.get(key)
             if value is not None:
                 try:
-                    if float(value) != 0:
-                        return False
+                    values.append(float(value))
                 except (TypeError, ValueError):
-                    return False
+                    return "unknown"
+        if values:
+            return "known_free" if all(value == 0 for value in values) else "known_paid"
+
         raw = model.get("raw_metadata") or {}
         pricing = raw.get("pricing") if isinstance(raw, dict) else None
         if isinstance(pricing, dict):
-            try:
-                return float(pricing.get("prompt", pricing.get("input", 1))) == 0 and float(pricing.get("completion", pricing.get("output", 1))) == 0
-            except (TypeError, ValueError):
-                return False
-        return False
+            candidates = (pricing.get("prompt", pricing.get("input")), pricing.get("completion", pricing.get("output")))
+            if all(value is not None for value in candidates):
+                try:
+                    return "known_free" if all(float(value) == 0 for value in candidates) else "known_paid"
+                except (TypeError, ValueError):
+                    return "unknown"
+        return "unknown"
+
+    @classmethod
+    def _free(cls, model: dict[str, Any]) -> bool:
+        return cls.pricing_status(model) == "known_free"
 
     def test_all(self, *, timeout_seconds: int = 15) -> list[dict[str, Any]]:
         providers = self.router.providers()
@@ -150,11 +160,13 @@ class ProviderModelHealthService:
                     provider_type=provider.provider_type,
                 )
                 started = time.perf_counter()
+                pricing = self.pricing_status(item)
                 row = {
                     "provider": provider.name,
                     "model": model,
                     "display_name": item.get("display_name") or model,
-                    "free": self._free(item) or self.router._is_free_model(model),
+                    "free": pricing == "known_free",
+                    "pricing_status": pricing,
                     "discovered": bool(discovered),
                     "discovery": discovery,
                     "ok": False,
@@ -179,5 +191,5 @@ class ProviderModelHealthService:
                 finally:
                     row["latency_ms"] = row["latency_ms"] or round((time.perf_counter() - started) * 1000)
                 results.append(row)
-        results.sort(key=lambda row: (not row["free"], row["provider"], row["model"]))
+        results.sort(key=lambda row: (row["pricing_status"] != "known_free", not row["ok"], row["latency_ms"], row["provider"], row["model"]))
         return results
