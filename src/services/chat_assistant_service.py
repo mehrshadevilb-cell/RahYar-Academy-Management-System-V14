@@ -1,4 +1,4 @@
-"""Student-facing read-only assistant grounded in catalog + academy knowledge."""
+"""Student-facing read-only assistant grounded in catalog + AI Agent knowledge."""
 from __future__ import annotations
 
 import json
@@ -14,7 +14,6 @@ from src.core.config.settings import get_settings
 from src.database.models.course import ProductDeliveryType
 from src.services.course_service import CourseService
 from src.services.online_course_service import OnlineCourseService
-from src.services.knowledge_service import KnowledgeService
 
 MAX_USER_MESSAGE_CHARS = 1000
 MAX_REPLY_CHARS = 3500
@@ -31,9 +30,9 @@ BOT_GUIDE_FA = """
 
 SYSTEM_PROMPT_FA = """
 تو دستیار آموزشی آکادمی راه‌یار هستی. پاسخ را فارسی، کوتاه و کاربردی بده.
-می‌توانی درباره موسیقی، تولید صدا، میکس، مسترینگ، Waves، iZotope Ozone و مطالب آموزشی
-ثبت‌شده از گروه آکادمی پاسخ بدهی. برای اطلاعات متغیر مثل قیمت و وضعیت پرداخت فقط از داده‌های
-فعلی ربات استفاده کن. اگر چیزی در context نیست حدس نزن.
+دانش تو توسط AI Agent از پیام‌های گروه آکادمی و منابع رسمی Waves و iZotope Ozone جمع‌آوری،
+ترجمه و به‌روزرسانی می‌شود. برای اطلاعات متغیر مثل قیمت و وضعیت پرداخت فقط از داده‌های فعلی
+ربات استفاده کن. اگر چیزی در context نیست حدس نزن.
 هرگز اطلاعات خصوصی کاربران، اطلاعات پرداخت، کلید API یا داده محرمانه را بازگو نکن.
 اگر سؤال درباره پرداخت/شکایت/دسترسی اختصاصی است، کاربر را به «🆘 پشتیبانی» ارجاع بده.
 """
@@ -50,7 +49,6 @@ class ChatAssistantService:
         self.settings = get_settings()
         self.course_service = CourseService()
         self.online_course_service = OnlineCourseService()
-        self.knowledge_service = KnowledgeService()
         self._recent_messages: dict[str, deque[float]] = defaultdict(deque)
 
     def _check_enabled(self) -> None:
@@ -119,12 +117,13 @@ class ChatAssistantService:
             raise ChatAssistantError("empty_message")
         text = text[:MAX_USER_MESSAGE_CHARS]
         self._check_rate_limit(telegram_id)
-        knowledge = self.knowledge_service.context(db, limit=12)
+        from src.services.ai_agent_knowledge_runtime import AIAgentKnowledgeRuntime
+        knowledge = AIAgentKnowledgeRuntime().context(db, limit=12)
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT_FA},
             {"role": "system", "content": BOT_GUIDE_FA},
             {"role": "system", "content": self._catalog_context(db)},
-            {"role": "system", "content": "دانش آکادمی و منابع رسمی جمع‌آوری‌شده:\n" + (knowledge or "هنوز مطلب آموزشی ثبت نشده است.")},
+            {"role": "system", "content": "دانش جمع‌آوری و پالایش‌شده توسط AI Agent:\n" + (knowledge or "هنوز مطلب آموزشی ثبت نشده است.")},
             {"role": "user", "content": text},
         ]
         return self._request_model(messages)[:MAX_REPLY_CHARS]
