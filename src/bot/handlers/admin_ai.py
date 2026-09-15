@@ -7,6 +7,7 @@ from aiogram.types import CallbackQuery, Message
 from src.bot.keyboards.admin_ai_keyboard import admin_ai_keyboard
 from src.bot.keyboards.admin_menu_keyboard import admin_back_button
 from src.bot.states.admin_states import AdminState
+from src.core.admin_access import is_admin_user
 from src.core.config.settings import get_settings
 from src.services.ai_agent_runtime import runtime
 from src.services.ai_agent_service import AIAgentError
@@ -15,8 +16,8 @@ router = Router()
 settings = get_settings()
 
 
-def _owner(user_id: int) -> bool:
-    return bool(settings.OWNER_ID) and user_id == settings.OWNER_ID
+def _owner(user_id: int, username: str | None = None) -> bool:
+    return is_admin_user(user_id, username)
 
 
 def _chunk(text: str, size: int = 3900) -> list[str]:
@@ -49,7 +50,7 @@ def _home_text() -> str:
 
 @router.callback_query(F.data == "admin_ai")
 async def ai_home(callback: CallbackQuery, state: FSMContext):
-    if not _owner(callback.from_user.id):
+    if not _owner(callback.from_user.id, callback.from_user.username):
         await callback.answer("⛔️ دسترسی ندارید.", show_alert=True)
         return
     await state.clear()
@@ -59,7 +60,7 @@ async def ai_home(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "ai_status")
 async def ai_status(callback: CallbackQuery):
-    if not _owner(callback.from_user.id):
+    if not _owner(callback.from_user.id, callback.from_user.username):
         await callback.answer("⛔️", show_alert=True)
         return
     try:
@@ -84,7 +85,7 @@ async def ai_status(callback: CallbackQuery):
 
 @router.callback_query(F.data == "ai_test_models")
 async def ai_test_models(callback: CallbackQuery):
-    if not _owner(callback.from_user.id):
+    if not _owner(callback.from_user.id, callback.from_user.username):
         await callback.answer("⛔️", show_alert=True)
         return
     await callback.answer("🧪 در حال تست زنده همه مدل‌ها...", show_alert=False)
@@ -98,13 +99,13 @@ async def ai_test_models(callback: CallbackQuery):
 
 @router.callback_query(F.data == "ai_security")
 async def ai_security(callback: CallbackQuery):
-    if not _owner(callback.from_user.id):
+    if not _owner(callback.from_user.id, callback.from_user.username):
         await callback.answer("⛔️", show_alert=True)
         return
     text = (
         "🔐 <b>Security Guardrails</b>\n"
         "━━━━━━━━━━━━━━━━━━\n"
-        "✅ owner-only controls\n"
+        "✅ owner/admin-only controls\n"
         "✅ protected paths / secrets blocked\n"
         "✅ HTTPS provider endpoint\n"
         "✅ ai/* branch isolation\n"
@@ -120,7 +121,7 @@ async def ai_security(callback: CallbackQuery):
 
 @router.callback_query(F.data == "ai_task_status")
 async def ai_task_status(callback: CallbackQuery):
-    if not _owner(callback.from_user.id):
+    if not _owner(callback.from_user.id, callback.from_user.username):
         await callback.answer("⛔️", show_alert=True)
         return
     if runtime.active(callback.from_user.id):
@@ -132,7 +133,7 @@ async def ai_task_status(callback: CallbackQuery):
 
 @router.callback_query(F.data == "ai_analyze")
 async def ai_analyze(callback: CallbackQuery):
-    if not _owner(callback.from_user.id):
+    if not _owner(callback.from_user.id, callback.from_user.username):
         await callback.answer("⛔️", show_alert=True)
         return
     await callback.answer("در حال Audit...", show_alert=False)
@@ -146,7 +147,7 @@ async def ai_analyze(callback: CallbackQuery):
 
 @router.callback_query(F.data == "ai_assistant")
 async def ai_assistant_start(callback: CallbackQuery, state: FSMContext):
-    if not _owner(callback.from_user.id):
+    if not _owner(callback.from_user.id, callback.from_user.username):
         await callback.answer("⛔️", show_alert=True)
         return
     await state.set_state(AdminState.waiting_ai_consult)
@@ -163,7 +164,7 @@ async def ai_assistant_start(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "ai_debug")
 async def ai_debug_start(callback: CallbackQuery, state: FSMContext):
-    if not _owner(callback.from_user.id):
+    if not _owner(callback.from_user.id, callback.from_user.username):
         await callback.answer("⛔️", show_alert=True)
         return
     await state.set_state(AdminState.waiting_ai_consult)
@@ -179,7 +180,7 @@ async def ai_debug_start(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AdminState.waiting_ai_consult, F.text == "/cancel")
 async def ai_consult_cancel(message: Message, state: FSMContext):
-    if not _owner(message.from_user.id):
+    if not _owner(message.from_user.id, message.from_user.username):
         return
     await state.clear()
     await message.answer("🟢 حالت گفتگو بسته شد.", reply_markup=admin_ai_keyboard())
@@ -187,7 +188,7 @@ async def ai_consult_cancel(message: Message, state: FSMContext):
 
 @router.message(AdminState.waiting_ai_consult)
 async def ai_consult_message(message: Message, state: FSMContext):
-    if not _owner(message.from_user.id):
+    if not _owner(message.from_user.id, message.from_user.username):
         return
     text = (message.text or "").strip()
     if not text:
@@ -215,7 +216,7 @@ async def ai_consult_message(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "ai_fix")
 async def ai_fix_start(callback: CallbackQuery, state: FSMContext):
-    if not _owner(callback.from_user.id):
+    if not _owner(callback.from_user.id, callback.from_user.username):
         await callback.answer("⛔️", show_alert=True)
         return
     await state.set_state(AdminState.waiting_ai_task)
@@ -230,7 +231,7 @@ async def ai_fix_start(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "ai_feature")
 async def ai_feature_start(callback: CallbackQuery, state: FSMContext):
-    if not _owner(callback.from_user.id):
+    if not _owner(callback.from_user.id, callback.from_user.username):
         await callback.answer("⛔️", show_alert=True)
         return
     await state.set_state(AdminState.waiting_ai_task)
@@ -245,7 +246,7 @@ async def ai_feature_start(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AdminState.waiting_ai_task)
 async def ai_task(message: Message, state: FSMContext):
-    if not _owner(message.from_user.id):
+    if not _owner(message.from_user.id, message.from_user.username):
         return
     task = (message.text or "").strip()
     if not task:
@@ -263,7 +264,7 @@ async def ai_task(message: Message, state: FSMContext):
 
     await message.answer(
         "🛠 <b>Task Started</b>\n━━━━━━━━━━━━━━━━━━\n"
-        "🟡 وضعیت: در حال پردازش\n🔐 فقط owner\n🌿 branch: ai/*",
+        "🟡 وضعیت: در حال پردازش\n🔐 فقط owner/admin\n🌿 branch: ai/*",
         parse_mode="HTML",
     )
     try:
@@ -280,7 +281,7 @@ async def ai_task(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "ai_stop")
 async def ai_stop(callback: CallbackQuery, state: FSMContext):
-    if not _owner(callback.from_user.id):
+    if not _owner(callback.from_user.id, callback.from_user.username):
         await callback.answer("⛔️", show_alert=True)
         return
     cancelled = await runtime.cancel(callback.from_user.id)
