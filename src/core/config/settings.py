@@ -20,12 +20,12 @@ def normalize_database_url(url: str) -> str:
 def normalize_openai_compatible_base_url(url: str) -> str:
     raw = (url or "").strip().rstrip("/")
     if not raw:
-        return "https://api.openai.com/v1"
+        return "https://kiraai.vn/api/v1"
     for suffix in ("/chat/completions", "/v1/chat/completions", "/completions"):
         if raw.lower().endswith(suffix):
             raw = raw[: -len(suffix)].rstrip("/")
     host = (urlparse(raw).hostname or "").lower()
-    gateway_hosts = ("agentrouter.org", "co.agentrouter.org", "www.agentrouter.org", "api.orcarouter.ai", "orcarouter.ai", "www.orcarouter.ai")
+    gateway_hosts = ("agentrouter.org", "co.agentrouter.org", "www.agentrouter.org", "api.orcarouter.ai", "orcarouter.ai", "www.orcarouter.ai", "kiraai.vn", "www.kiraai.vn")
     if host in gateway_hosts and not raw.endswith("/v1"):
         raw += "/v1"
     return raw
@@ -50,8 +50,8 @@ class Settings(BaseSettings):
     AI_AGENT_ENABLED: bool = True
     AI_AGENT_REPO_PATH: str = "."
     AI_AGENT_API_KEY: str | None = None
-    AI_AGENT_BASE_URL: str = "https://api.openai.com/v1"
-    AI_AGENT_MODEL: str = "gpt-4o-mini"
+    AI_AGENT_BASE_URL: str = "https://kiraai.vn/api/v1"
+    AI_AGENT_MODEL: str = "gpt-5.6-terra"
     AI_AGENT_MAX_RETRIES: int = 2
     AI_AGENT_TIMEOUT_SECONDS: int = 180
     AI_API_KEY: str | None = None
@@ -65,8 +65,8 @@ class Settings(BaseSettings):
 
     CHAT_ASSISTANT_ENABLED: bool = True
     CHAT_ASSISTANT_API_KEY: str | None = None
-    CHAT_ASSISTANT_BASE_URL: str = "https://api.openai.com/v1"
-    CHAT_ASSISTANT_MODEL: str = "gpt-4o-mini"
+    CHAT_ASSISTANT_BASE_URL: str = "https://kiraai.vn/api/v1"
+    CHAT_ASSISTANT_MODEL: str = "gpt-5.6-terra"
     CHAT_ASSISTANT_TIMEOUT_SECONDS: int = 45
     CHAT_ASSISTANT_MAX_MESSAGES_PER_HOUR: int = 20
 
@@ -89,11 +89,11 @@ class Settings(BaseSettings):
 
     @property
     def effective_ai_base_url(self) -> str:
-        return normalize_openai_compatible_base_url(self.AI_BASE_URL or self.AI_AGENT_BASE_URL or "https://api.openai.com/v1")
+        return normalize_openai_compatible_base_url(self.AI_BASE_URL or self.AI_AGENT_BASE_URL or "https://kiraai.vn/api/v1")
 
     @property
     def effective_ai_model(self) -> str:
-        return (self.AI_MODEL or self.AI_AGENT_MODEL or "gpt-4o-mini").strip()
+        return (self.AI_MODEL or self.AI_AGENT_MODEL or "gpt-5.6-terra").strip()
 
     @property
     def effective_chat_api_key(self) -> str | None:
@@ -107,7 +107,7 @@ class Settings(BaseSettings):
             return normalize_openai_compatible_base_url(chat)
         if self.AI_BASE_URL or self.AI_AGENT_BASE_URL:
             return self.effective_ai_base_url
-        return normalize_openai_compatible_base_url(chat or "https://api.openai.com/v1")
+        return normalize_openai_compatible_base_url(chat or "https://kiraai.vn/api/v1")
 
     @property
     def effective_chat_model(self) -> str:
@@ -116,7 +116,7 @@ class Settings(BaseSettings):
             return chat_model
         if self.effective_ai_api_key:
             return self.effective_ai_model
-        return chat_model or "gpt-4o-mini"
+        return chat_model or "gpt-5.6-terra"
 
     @property
     def github_write_ready(self) -> bool:
