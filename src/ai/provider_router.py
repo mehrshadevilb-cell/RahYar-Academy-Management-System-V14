@@ -173,8 +173,22 @@ class AIProviderRouter:
     def providers(self) -> list[AIProvider]:
         return self._parse()
 
+    def reset_cooldowns(self) -> None:
+        """Clear transient in-memory health cooldowns after an admin health check or recovery."""
+        self._cooldown_until.clear()
+        self._model_cooldown_until.clear()
+
+    def cooldown_snapshot(self) -> dict[str, int]:
+        """Return remaining cooldown seconds for diagnostics without exposing credentials."""
+        now = time.time()
+        return {
+            key: max(0, int(round(until - now)))
+            for key, until in self._model_cooldown_until.items()
+            if until > now
+        }
+
     def _headers(self, provider: AIProvider) -> dict[str, str]:
-        headers = {"Authorization": f"Bearer {provider.api_key}", "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "RahYar-AIProviderRouter/1.4"}
+        headers = {"Authorization": f"Bearer {provider.api_key}", "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "RahYar-AIProviderRouter/1.5"}
         host = (urlparse(provider.base_url).hostname or "").lower()
         if host.endswith("agentrouter.org"):
             headers.update({"Originator": "codex_cli_rs", "Version": "0.101.0"})
@@ -182,7 +196,7 @@ class AIProviderRouter:
 
     @staticmethod
     def _anthropic_headers(provider: AIProvider) -> dict[str, str]:
-        return {"x-api-key": provider.api_key, "anthropic-version": "2023-06-01", "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "RahYar-AIProviderRouter/1.4"}
+        return {"x-api-key": provider.api_key, "anthropic-version": "2023-06-01", "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "RahYar-AIProviderRouter/1.5"}
 
     @staticmethod
     def _retry_after(headers: Any, body: str) -> int:
@@ -259,7 +273,7 @@ class AIProviderRouter:
             if generation:
                 payload["generationConfig"] = generation
             url = provider.base_url.rstrip("/") + f"/models/{quote(model, safe='')}:generateContent?key={quote(provider.api_key, safe='')}"
-            headers = {"Content-Type": "application/json", "Accept": "application/json", "User-Agent": "RahYar-AIProviderRouter/1.4"}
+            headers = {"Content-Type": "application/json", "Accept": "application/json", "User-Agent": "RahYar-AIProviderRouter/1.5"}
         elif provider.provider_type == "anthropic":
             system_parts = [str(m.get("content", "")) for m in messages if m.get("role") == "system"]
             anthropic_messages = [{"role": "assistant" if m.get("role") == "assistant" else "user", "content": str(m.get("content", ""))} for m in messages if m.get("role") != "system"]
@@ -288,7 +302,7 @@ class AIProviderRouter:
         if provider.provider_type == "google":
             url = provider.base_url.rstrip("/") + f"/models/{quote(model, safe='')}:generateContent?key={quote(provider.api_key, safe='')}"
             payload = {"contents": [{"role": "user", "parts": [{"text": "Reply with exactly: OK"}]}], "generationConfig": {"temperature": 0, "maxOutputTokens": 8}}
-            headers = {"Content-Type": "application/json", "Accept": "application/json", "User-Agent": "RahYar-AIProviderRouter/1.4"}
+            headers = {"Content-Type": "application/json", "Accept": "application/json", "User-Agent": "RahYar-AIProviderRouter/1.5"}
         elif provider.provider_type == "anthropic":
             url = provider.base_url.rstrip("/") + "/messages"
             payload = {"model": model, "max_tokens": 8, "temperature": 0, "messages": [{"role": "user", "content": "Reply with exactly: OK"}]}
@@ -309,16 +323,19 @@ class AIProviderRouter:
         return status_code, latency, text
 
     def test_models(self, *, timeout_seconds: int = 15) -> list[dict[str, Any]]:
-        """Live-test every configured provider/model independently and return its actual reply."""
+        """Live-test every configured provider/model independently and repair stale cooldown state."""
         providers = self.providers()
         results: list[dict[str, Any]] = []
         timeout = max(5, min(int(timeout_seconds), 60))
         for provider, model in self._ordered_candidates(providers):
             started = time.perf_counter()
+            model_key = f"{provider.name}:{model}"
             row = {"provider": provider.name, "model": model, "free": self._is_free_model(model), "ok": False, "latency_ms": 0, "status": "unknown", "response": ""}
             try:
                 http_status, latency, response_text = self._test_request(provider, model, timeout)
                 row.update(ok=True, status="ok", http_status=http_status, latency_ms=latency, response=response_text[:300])
+                self._model_cooldown_until.pop(model_key, None)
+                self._cooldown_until.pop(provider.name, None)
             except urllib.error.HTTPError as exc:
                 body = ""
                 try:
@@ -347,10 +364,17 @@ class AIProviderRouter:
         last: AIProviderError | None = None
         candidates = self._ordered_candidates(providers)
         now = time.time()
+        skipped_until: list[float] = []
+        attempted = 0
         for provider, model in candidates:
             model_key = f"{provider.name}:{model}"
-            if self._cooldown_until.get(provider.name, 0) > now or self._model_cooldown_until.get(model_key, 0) > now:
+            provider_until = self._cooldown_until.get(provider.name, 0)
+            model_until = self._model_cooldown_until.get(model_key, 0)
+            blocked_until = max(provider_until, model_until)
+            if blocked_until > now:
+                skipped_until.append(blocked_until)
                 continue
+            attempted += 1
             request_kwargs = dict(kwargs)
             try:
                 data = self._request(provider, model, messages, request_kwargs, timeout_seconds)
@@ -373,7 +397,7 @@ class AIProviderRouter:
                     continue
                 if exc.code in {401, 403}:
                     self._model_cooldown_until[model_key] = time.time() + 30
-                    last = AIProviderError(f"provider authentication failed: {provider.name}/{model}", retryable=True, retry_after=30, provider=provider.name)
+                    last = AIProviderError(f"provider authentication failed: {provider.name}/{model}", retryable=False, retry_after=30, provider=provider.name)
                     continue
                 last = AIProviderError(f"provider request failed: {provider.name}/{model} (HTTP {exc.code})", retryable=exc.code >= 500, provider=provider.name)
                 if exc.code >= 500:
@@ -389,4 +413,11 @@ class AIProviderRouter:
                 continue
         if last:
             raise last
+        if skipped_until and attempted == 0:
+            retry_after = max(1, int(round(min(skipped_until) - time.time())))
+            raise AIProviderError(
+                f"All configured AI models are cooling down; retry in {retry_after}s",
+                retryable=True,
+                retry_after=retry_after,
+            )
         raise AIProviderError("All configured AI models are temporarily unavailable", retryable=True, retry_after=30)
