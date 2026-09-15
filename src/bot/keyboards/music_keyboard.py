@@ -4,6 +4,17 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 CANCEL_BUTTON = InlineKeyboardButton(text="❌ انصراف", callback_data="music_cancel")
 
 
+def generator_panel_keyboard() -> InlineKeyboardMarkup:
+    """Compact AI Generator entry panel for Telegram groups."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🎵 ساخت Audio", callback_data="music_open:audio")],
+            [InlineKeyboardButton(text="🎹 ساخت MIDI", callback_data="music_open:midi")],
+            [InlineKeyboardButton(text="✨ AI انتخاب کند", callback_data="music_open:auto")],
+        ]
+    )
+
+
 def output_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
