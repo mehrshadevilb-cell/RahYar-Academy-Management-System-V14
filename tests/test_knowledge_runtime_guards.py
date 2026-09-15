@@ -26,9 +26,26 @@ def test_bot_target_requires_mention_or_reply_to_bot():
     assert runtime._bot_is_target(replied_to_bot) is True
 
 
+def test_production_bot_username_is_target_when_settings_is_empty():
+    runtime = _runtime("")
+    mentioned = SimpleNamespace(text="@Mb_tutorialbot درباره کمپرسور سوال دارم", caption=None, reply_to_message=None)
+    plain = SimpleNamespace(text="کمپرسور چطور کار میکند؟", caption=None, reply_to_message=None)
+    assert runtime._bot_is_target(mentioned) is True
+    assert runtime._bot_is_target(plain) is False
+
+
 def test_quiz_normalization_detects_same_question_with_formatting_changes():
     a = AIAgentKnowledgeRuntime._normalize_quiz_text("  کمپرسور چه کاری انجام می‌دهد؟  ")
     b = AIAgentKnowledgeRuntime._normalize_quiz_text("کمپرسور چه کاری انجام میدهد")
     assert a != ""
     assert b != ""
     assert AIAgentKnowledgeRuntime._normalize_quiz_text(a) == a
+
+
+def test_quiz_similarity_tokens_catch_near_duplicate_questions():
+    first = "کمپرسور برای کنترل داینامیک سیگنال چه کاری انجام می‌دهد"
+    near = "کمپرسور برای کنترل داینامیک سیگنال چه کاری انجام میدهد؟"
+    tokens_a = AIAgentKnowledgeRuntime._tokens(first)
+    tokens_b = AIAgentKnowledgeRuntime._tokens(near)
+    similarity = len(tokens_a & tokens_b) / max(1, len(tokens_a | tokens_b))
+    assert similarity >= 0.72
