@@ -5,7 +5,7 @@ import traceback
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.responses import JSONResponse, Response
 import uvicorn
 
 from src.bot.bot import bot, dp, setup_handlers, ai_agent_knowledge
@@ -14,6 +14,8 @@ from src.core.logging.logger import get_logger
 from src.database.seed_payment_card import seed_default_card
 from src.database.seed_products import seed_default_products
 from src.database.seed_online_courses import seed_default_online_courses
+from src.database.session import SessionLocal
+from src.services.ai.auto_configure import auto_configure_ai
 from src.services.reminder_scheduler import InstallmentReminderScheduler
 from src.web.router import router as storefront_router
 
@@ -61,7 +63,6 @@ async def api_status():
 
 @app.get("/api/debug-storefront")
 async def debug_storefront():
-    from src.database.session import SessionLocal
     from src.services.web_order_service import WebOrderService
     out: dict = {"ok": True, "build": _build_id(), "steps": []}
     db = SessionLocal()
@@ -95,11 +96,29 @@ async def debug_storefront():
     return JSONResponse(out)
 
 
+async def _auto_configure_ai_at_startup() -> None:
+    def run():
+        db = SessionLocal()
+        try:
+            return auto_configure_ai(db)
+        finally:
+            db.close()
+
+    try:
+        result = await asyncio.to_thread(run)
+        logger.info("AI auto-configuration completed: %s", result)
+    except Exception:
+        # AI providers are optional. The bot must still boot when no provider key
+        # is configured or a third-party gateway is temporarily unavailable.
+        logger.exception("AI auto-configuration failed; continuing startup")
+
+
 async def start_bot():
     logger.info("Starting RahYar Bot... build=%s", _build_id())
     seed_default_card()
     seed_default_products()
     seed_default_online_courses()
+    await _auto_configure_ai_at_startup()
     setup_handlers()
     try:
         await bot.delete_webhook(drop_pending_updates=True)
