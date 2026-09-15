@@ -1,0 +1,77 @@
+name: One-time admin access migration
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    if: github.event.head_commit.message != 'chore: migrate all admin handlers to shared access'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Migrate admin authorization
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+
+          root = Path('src/bot/handlers')
+          for path in sorted(root.glob('admin*.py')):
+              text = path.read_text(encoding='utf-8')
+              original = text
+
+              if 'from src.core.admin_access import is_admin_user' not in text:
+                  marker = 'from src.core.config.settings import get_settings\n'
+                  if marker in text:
+                      text = text.replace(marker, marker + 'from src.core.admin_access import is_admin_user\n', 1)
+
+              text = re.sub(
+                  r'def _is_owner\(user_id: int\) -> bool:\n\s+return user_id == settings\.OWNER_ID',
+                  'def _is_owner(user_id: int, username: str | None = None) -> bool:\n    return is_admin_user(user_id, username)',
+                  text,
+              )
+              text = re.sub(
+                  r'def _owner\(user_id: int\) -> bool:\n\s+return user_id == settings\.OWNER_ID',
+                  'def _owner(user_id: int, username: str | None = None) -> bool:\n    return is_admin_user(user_id, username)',
+                  text,
+              )
+
+              text = text.replace(
+                  '_is_owner(message.from_user.id)',
+                  '_is_owner(message.from_user.id, message.from_user.username)',
+              )
+              text = text.replace(
+                  '_is_owner(callback.from_user.id)',
+                  '_is_owner(callback.from_user.id, callback.from_user.username)',
+              )
+              text = text.replace(
+                  '_owner(message.from_user.id)',
+                  '_owner(message.from_user.id, message.from_user.username)',
+              )
+              text = text.replace(
+                  '_owner(callback.from_user.id)',
+                  '_owner(callback.from_user.id, callback.from_user.username)',
+              )
+
+              if text != original:
+                  path.write_text(text, encoding='utf-8')
+                  print(f'migrated {path}')
+
+      - name: Commit migration and remove one-time workflow
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/admin-access-migration.yml
+          git add src/bot/handlers/admin*.py
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m 'chore: migrate all admin handlers to shared access'
+          git push
