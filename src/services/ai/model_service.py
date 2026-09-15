@@ -16,14 +16,37 @@ class AIModelService:
 
     @staticmethod
     def _run_async(coro):
-        """Run provider I/O from both sync code and an active Telegram event loop."""
         try:
             asyncio.get_running_loop()
         except RuntimeError:
             return asyncio.run(coro)
-
         with ThreadPoolExecutor(max_workers=1) as executor:
             return executor.submit(asyncio.run, coro).result()
+
+    @staticmethod
+    def is_free(model: AIModel) -> bool:
+        raw = model.raw_metadata or {}
+        model_id = model.model_id.lower()
+        if model_id.endswith(":free") or "-free" in model_id:
+            return True
+        pricing = raw.get("pricing") if isinstance(raw, dict) else None
+        if isinstance(pricing, dict):
+            prompt = pricing.get("prompt", pricing.get("input"))
+            completion = pricing.get("completion", pricing.get("output"))
+            try:
+                if prompt is not None and completion is not None:
+                    return float(prompt) == 0.0 and float(completion) == 0.0
+            except (TypeError, ValueError):
+                pass
+        try:
+            return (
+                model.pricing_input is not None
+                and model.pricing_output is not None
+                and float(model.pricing_input) == 0.0
+                and float(model.pricing_output) == 0.0
+            )
+        except (TypeError, ValueError):
+            return False
 
     def sync_models_for_provider(self, provider_id) -> dict[str, int]:
         provider = self.session.get(AIProvider, provider_id)
@@ -31,28 +54,19 @@ class AIModelService:
             raise ValueError("AI provider not found")
         if not provider.is_active:
             raise ValueError("AI provider is inactive")
-
-        api_key = decrypt_api_key(provider.api_key_encrypted)
-        client = ProviderRegistry.get_client(provider, api_key)
+        client = ProviderRegistry.get_client(provider, decrypt_api_key(provider.api_key_encrypted))
         discovered = self._run_async(client.list_models())
         if not isinstance(discovered, list):
             raise ValueError("AI provider returned an invalid model discovery payload")
-
-        # Never interpret a transient/permission-limited empty response as proof
-        # that every previously known model disappeared.
-        valid_items = [item for item in discovered if isinstance(item, dict) and str(item.get("model_id") or "").strip()]
+        valid_items = [x for x in discovered if isinstance(x, dict) and str(x.get("model_id") or "").strip()]
         if not valid_items:
             raise ValueError("AI provider returned no usable models; existing models were left unchanged")
 
-        existing = {
-            model.model_id: model
-            for model in self.session.query(AIModel).filter(AIModel.provider_id == provider.id).all()
-        }
+        existing = {m.model_id: m for m in self.session.query(AIModel).filter(AIModel.provider_id == provider.id).all()}
         seen: set[str] = set()
-        added = updated = 0
-
+        added = updated = deactivated = 0
         for item in valid_items:
-            model_id = str(item.get("model_id") or "").strip()
+            model_id = str(item["model_id"]).strip()
             seen.add(model_id)
             model = existing.get(model_id)
             if model is None:
@@ -73,14 +87,11 @@ class AIModelService:
             model.is_active = True
             model.last_seen_at = datetime.now(timezone.utc)
 
-        deactivated = 0
         for model in existing.values():
             if model.model_id not in seen and model.is_active:
                 model.is_active = False
-                if model.is_default:
-                    model.is_default = False
+                model.is_default = False
                 deactivated += 1
-
         provider.last_models_sync_at = datetime.now(timezone.utc)
         self.session.commit()
         return {"added": added, "updated": updated, "deactivated": deactivated, "total": len(seen)}
@@ -97,60 +108,47 @@ class AIModelService:
         return results
 
     def check_model(self, model_id) -> bool:
-        """Make a minimal real completion to verify that a discovered model works."""
         model = self.session.get(AIModel, model_id)
         if model is None or not model.is_active:
             return False
         provider = self.session.get(AIProvider, model.provider_id)
         if provider is None or not provider.is_active:
             return False
-
         client = ProviderRegistry.get_client(provider, decrypt_api_key(provider.api_key_encrypted))
         try:
-            result = self._run_async(
-                client.chat_completion(
-                    model.model_id,
-                    [{"role": "user", "content": "Reply with OK."}],
-                    max_tokens=4,
-                    temperature=0,
-                )
-            )
+            result = self._run_async(client.chat_completion(model.model_id, [{"role": "user", "content": "Reply with OK."}], max_tokens=4, temperature=0))
             return isinstance(result, dict) and bool(result)
         except Exception:
             return False
 
     def select_working_default(self) -> AIModel | None:
-        """Prefer an actually responding model; fall back to capability/name ranking."""
         candidates = (
             self.session.query(AIModel)
-            .filter(AIModel.is_active.is_(True))
-            .order_by(AIModel.is_default.desc(), AIModel.context_window.desc().nullslast())
+            .join(AIProvider, AIProvider.id == AIModel.provider_id)
+            .filter(AIModel.is_active.is_(True), AIProvider.is_active.is_(True))
+            .order_by(AIModel.context_window.desc().nullslast())
             .all()
         )
-        for model in candidates:
+        free = [m for m in candidates if self.is_free(m)]
+        paid = [m for m in candidates if not self.is_free(m)]
+        # Free models are always tested first. A paid model is only used if no free model works.
+        for model in free + paid:
             if self.check_model(model.id):
                 return self.set_default(model.id)
         return None
 
     def set_default(self, model_id) -> AIModel:
         model = self.session.get(AIModel, model_id)
-        if model is None:
-            raise ValueError("AI model not found")
-        if not model.is_active:
-            raise ValueError("Inactive model cannot be default")
-        self.session.query(AIModel).filter(
-            AIModel.provider_id == model.provider_id,
-            AIModel.id != model.id,
-        ).update({AIModel.is_default: False}, synchronize_session=False)
+        if model is None or not model.is_active:
+            raise ValueError("Active AI model not found")
+        self.session.query(AIModel).filter(AIModel.provider_id == model.provider_id, AIModel.id != model.id).update({AIModel.is_default: False}, synchronize_session=False)
         model.is_default = True
         self.session.commit()
         self.session.refresh(model)
         return model
 
     def get_default(self, provider_id=None) -> AIModel | None:
-        query = self.session.query(AIModel).filter(
-            AIModel.is_active.is_(True), AIModel.is_default.is_(True)
-        )
+        query = self.session.query(AIModel).filter(AIModel.is_active.is_(True), AIModel.is_default.is_(True))
         if provider_id is not None:
             query = query.filter(AIModel.provider_id == provider_id)
         return query.order_by(AIModel.updated_at.desc()).first()
