@@ -1,4 +1,5 @@
 import json
+import urllib.error
 
 from src.ai.provider_router import AIProvider, AIProviderRouter
 
@@ -67,6 +68,30 @@ def test_base_url_is_normalized_for_gateway_env(monkeypatch):
     router._from_database = lambda: []
     providers = router.providers()
     assert providers[0].base_url == "https://api.orcarouter.ai/v1"
+    _clear_settings()
+
+
+def test_router_fails_over_from_broken_free_model_to_next_route(monkeypatch):
+    monkeypatch.setenv("AI_PROVIDERS_JSON", json.dumps([
+        {"name": "free", "api_key": "free-key", "base_url": "https://free.example/v1", "model": "broken:free", "priority": 1},
+        {"name": "backup", "api_key": "backup-key", "base_url": "https://backup.example/v1", "model": "working-model", "priority": 2},
+    ]))
+    _clear_settings()
+    router = AIProviderRouter()
+    calls = []
+
+    def fake_request(provider, model, messages, kwargs, timeout):
+        calls.append((provider.name, model))
+        if model == "broken:free":
+            raise urllib.error.URLError("provider down")
+        return {"choices": [{"message": {"content": "OK"}}]}
+
+    monkeypatch.setattr(router, "_request", fake_request)
+    data = router.chat([{"role": "user", "content": "ping"}], timeout_seconds=5)
+    assert calls == [("free", "broken:free"), ("backup", "working-model")]
+    assert data["_rahyar_provider"] == "backup"
+    assert data["_rahyar_model"] == "working-model"
+    assert "free:broken:free" in router.cooldown_snapshot()
     _clear_settings()
 
 
