@@ -89,6 +89,7 @@ class Settings(BaseSettings):
 
     KNOWLEDGE_ENABLED: bool = True
     KNOWLEDGE_GROUP_IDS: str = ""
+    KNOWLEDGE_GROUP_TOPIC_ID: int = 21308
     KNOWLEDGE_FETCH_INTERVAL_HOURS: int = 24
     KNOWLEDGE_AUTO_QUIZ: bool = True
     KNOWLEDGE_QUIZ_INTERVAL_HOURS: int = 24
