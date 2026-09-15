@@ -8,13 +8,13 @@ def reservation_review_keyboard(reservation_id: int):
             [
                 InlineKeyboardButton(
                     text="💳 تایید پرداخت و رزرو زمان",
-                    callback_data=f"res_payment_confirm_{reservation_id}",
+                    callback_data=f"res_confirm_{reservation_id}",
                 ),
             ],
             [
                 InlineKeyboardButton(
                     text="❌ رد پرداخت",
-                    callback_data=f"res_payment_reject_{reservation_id}",
+                    callback_data=f"res_reject_{reservation_id}",
                 ),
             ]
         ]

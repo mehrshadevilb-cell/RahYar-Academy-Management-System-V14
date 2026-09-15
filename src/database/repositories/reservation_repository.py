@@ -13,6 +13,12 @@ _OPEN_STATUSES = (
     ReservationStatus.CONFIRMED,
 )
 
+# Reservations the admin must review (receipt uploaded, or legacy pending).
+_PENDING_REVIEW_STATUSES = (
+    ReservationStatus.PAYMENT_SUBMITTED,
+    ReservationStatus.PENDING,
+)
+
 
 class ReservationRepository:
     def create(self, db: Session, reservation: Reservation):
@@ -27,7 +33,7 @@ class ReservationRepository:
     def get_pending(self, db: Session):
         return (
             db.query(Reservation)
-            .filter(Reservation.status == ReservationStatus.PENDING)
+            .filter(Reservation.status.in_(_PENDING_REVIEW_STATUSES))
             .order_by(Reservation.requested_date, Reservation.requested_time)
             .all()
         )
