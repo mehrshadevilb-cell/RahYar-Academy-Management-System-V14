@@ -39,6 +39,20 @@ def test_safe_path_rejects_secrets_token(tmp_path):
         agent._safe_path("config/secrets.yaml")
 
 
+def test_safe_path_rejects_protected_workflow_secret(tmp_path):
+    agent = AIAgentService()
+    agent.repo = Path(tmp_path)
+    with pytest.raises(AIAgentError):
+        agent._safe_path(".github/workflows/secrets.yml")
+
+
+def test_safe_path_rejects_git_internal_paths(tmp_path):
+    agent = AIAgentService()
+    agent.repo = Path(tmp_path)
+    with pytest.raises(AIAgentError):
+        agent._safe_path(".git/config")
+
+
 def test_parse_plan_accepts_fenced_json():
     agent = AIAgentService()
     raw = '```json\n{"summary": "ok", "files": [{"path": "a.py", "content": "x"}]}\n```'
