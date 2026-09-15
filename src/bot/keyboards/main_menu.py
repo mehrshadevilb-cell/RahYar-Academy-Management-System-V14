@@ -17,7 +17,7 @@ def get_main_menu(role: UserRole | None = None):
         [KeyboardButton(text="📈 پیشرفت من")],
         [KeyboardButton(text="👤 پروفایل")],
         [KeyboardButton(text="🎁 دعوت از دوستان")],
-        [KeyboardButton(text="🆘 پشتیبانی")],
+        [KeyboardButton(text="🤖 دستیار هوشمند"), KeyboardButton(text="🆘 پشتیبانی")],
     ]
 
     if role == UserRole.ADMIN:
