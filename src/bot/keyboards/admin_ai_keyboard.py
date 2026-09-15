@@ -21,9 +21,10 @@ def admin_ai_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="⚙️ Reliability Audit", callback_data="ai_analyze:reliability"),
             ],
             [
+                InlineKeyboardButton(text="🩺 Self-Check", callback_data="ai_self_check"),
                 InlineKeyboardButton(text="📊 API Status", callback_data="ai_status"),
-                InlineKeyboardButton(text="🔐 Security", callback_data="ai_security"),
             ],
+            [InlineKeyboardButton(text="🔐 Security", callback_data="ai_security")],
             [InlineKeyboardButton(text="📋 Task Status", callback_data="ai_task_status")],
             [InlineKeyboardButton(text="🛑 Stop Task", callback_data="ai_stop")],
             [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="admin_home")],
