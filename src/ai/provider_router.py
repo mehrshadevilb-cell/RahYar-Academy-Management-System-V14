@@ -35,11 +35,12 @@ class AIProviderError(RuntimeError):
 
 
 class AIProviderRouter:
-    """AI provider pool with DB-backed discovery, active-model selection and failover."""
+    """AI provider pool with DB discovery, global free-first routing and model failover."""
 
     def __init__(self) -> None:
         self.settings = get_settings()
         self._cooldown_until: dict[str, float] = {}
+        self._model_cooldown_until: dict[str, float] = {}
 
     @staticmethod
     def _provider_from_env(name: str, key_var: str, url_var: str, model_var: str, priority: int) -> AIProvider | None:
@@ -50,8 +51,36 @@ class AIProviderRouter:
             return None
         return AIProvider(name=name, api_key=key, base_url=base_url, models=(model,), priority=priority)
 
+    @staticmethod
+    def _is_free_model(model: Any) -> bool:
+        if isinstance(model, str):
+            model_id = model.lower()
+            return model_id.endswith(":free") or "-free" in model_id
+        model_id = str(getattr(model, "model_id", "") or "").lower()
+        if model_id.endswith(":free") or "-free" in model_id:
+            return True
+        raw = getattr(model, "raw_metadata", None) or {}
+        pricing = raw.get("pricing") if isinstance(raw, dict) else None
+        if isinstance(pricing, dict):
+            prompt = pricing.get("prompt", pricing.get("input"))
+            completion = pricing.get("completion", pricing.get("output"))
+            try:
+                if prompt is not None and completion is not None:
+                    return float(prompt) == 0.0 and float(completion) == 0.0
+            except (TypeError, ValueError):
+                pass
+        try:
+            return (
+                getattr(model, "pricing_input", None) is not None
+                and getattr(model, "pricing_output", None) is not None
+                and float(model.pricing_input) == 0.0
+                and float(model.pricing_output) == 0.0
+            )
+        except (TypeError, ValueError):
+            return False
+
     def _from_database(self) -> list[AIProvider]:
-        """Load only active providers/models discovered by the AI management layer."""
+        """Load active DB providers and order their models free-first."""
         try:
             from src.database.models.ai_model import AIModel
             from src.database.models.ai_provider import AIProvider as DBProvider
@@ -66,7 +95,14 @@ class AIProviderRouter:
                     active_models = [m for m in provider.models if m.is_active]
                     if not active_models:
                         continue
-                    active_models.sort(key=lambda m: (not m.is_default, -(m.context_window or 0), m.model_id))
+                    active_models.sort(
+                        key=lambda m: (
+                            not self._is_free_model(m),
+                            not m.is_default,
+                            -(m.context_window or 0),
+                            m.model_id,
+                        )
+                    )
                     try:
                         api_key = decrypt_api_key(provider.api_key_encrypted)
                     except Exception:
@@ -84,7 +120,6 @@ class AIProviderRouter:
             finally:
                 db.close()
         except Exception:
-            # DB-backed AI configuration is optional; env fallback keeps legacy deployments working.
             return []
 
     def _parse(self) -> list[AIProvider]:
@@ -165,6 +200,15 @@ class AIProviderRouter:
         lowered = body.lower()
         return code in {402, 403} and any(x in lowered for x in ("rate", "capacity", "quota", "limit"))
 
+    def _ordered_candidates(self, providers: list[AIProvider]) -> list[tuple[AIProvider, str]]:
+        """Flatten the pool so no paid model can run before an available free model."""
+        candidates: list[tuple[AIProvider, str]] = []
+        for provider in providers:
+            for model in provider.models:
+                candidates.append((provider, model))
+        candidates.sort(key=lambda item: (not self._is_free_model(item[1]), item[0].priority, item[1]))
+        return candidates
+
     def chat(self, messages: list[dict[str, Any]], **kwargs: Any) -> dict[str, Any]:
         providers = self.providers()
         if not providers:
@@ -176,49 +220,78 @@ class AIProviderRouter:
             timeout_seconds = max(5, min(int(timeout_seconds), 180))
         except (TypeError, ValueError):
             timeout_seconds = min(max(self.settings.AI_AGENT_TIMEOUT_SECONDS, 5), 180)
+
         last: AIProviderError | None = None
-        for provider in providers:
-            if self._cooldown_until.get(provider.name, 0) > time.time():
+        now = time.time()
+        candidates = self._ordered_candidates(providers)
+        attempted_free = False
+        for provider, model in candidates:
+            model_key = f"{provider.name}:{model}"
+            if self._cooldown_until.get(provider.name, 0) > now:
                 continue
-            provider_rate_limited = False
-            max_retry_after = 0
-            for model in provider.models:
-                payload = {"model": model, "messages": messages, **kwargs}
-                request = urllib.request.Request(provider.base_url.rstrip("/") + "/chat/completions", data=json.dumps(payload).encode("utf-8"), headers=self._headers(provider), method="POST")
+            if self._model_cooldown_until.get(model_key, 0) > now:
+                continue
+            if self._is_free_model(model):
+                attempted_free = True
+            elif attempted_free is False and any(self._is_free_model(m) for _, m in candidates):
+                # Defensive guard: never enter paid while a free candidate is still eligible.
+                continue
+
+            payload = {"model": model, "messages": messages, **kwargs}
+            request = urllib.request.Request(
+                provider.base_url.rstrip("/") + "/chat/completions",
+                data=json.dumps(payload).encode("utf-8"),
+                headers=self._headers(provider),
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+                    data = json.loads(response.read().decode("utf-8"))
+                if not isinstance(data, dict):
+                    raise AIProviderError(f"Invalid AI provider response: {provider.name}/{model}", provider=provider.name)
+                self._model_cooldown_until.pop(model_key, None)
+                data["_rahyar_provider"] = provider.name
+                data["_rahyar_model"] = model
+                data["_rahyar_is_free"] = self._is_free_model(model)
+                return data
+            except urllib.error.HTTPError as exc:
+                body = ""
                 try:
-                    with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
-                        data = json.loads(response.read().decode("utf-8"))
-                    if not isinstance(data, dict):
-                        raise AIProviderError(f"Invalid AI provider response: {provider.name}/{model}", provider=provider.name)
-                    data["_rahyar_provider"] = provider.name
-                    data["_rahyar_model"] = model
-                    return data
-                except urllib.error.HTTPError as exc:
-                    body = ""
-                    try:
-                        body = exc.read().decode("utf-8", errors="replace")[:1000]
-                    except Exception:
-                        pass
-                    retry_after = self._retry_after(exc.headers, body)
-                    if self._is_rate_limited(exc.code, body):
-                        provider_rate_limited = True
-                        max_retry_after = max(max_retry_after, retry_after or 300)
-                        last = AIProviderError(f"model rate limited: {provider.name}/{model}", retryable=True, retry_after=retry_after or 300, provider=provider.name)
-                        continue
+                    body = exc.read().decode("utf-8", errors="replace")[:1000]
+                except Exception:
+                    pass
+                retry_after = self._retry_after(exc.headers, body)
+                if self._is_rate_limited(exc.code, body):
+                    cooldown = min(retry_after or 300, 86400)
+                    self._model_cooldown_until[model_key] = time.time() + cooldown
+                    last = AIProviderError(f"model rate limited: {provider.name}/{model}", retryable=True, retry_after=cooldown, provider=provider.name)
+                    continue
+                if exc.code in {408, 409, 500, 502, 503, 504}:
+                    self._model_cooldown_until[model_key] = time.time() + 30
+                    last = AIProviderError(f"provider HTTP {exc.code}: {provider.name}/{model}", retryable=True, provider=provider.name)
+                else:
                     last = AIProviderError(f"provider HTTP {exc.code}: {provider.name}/{model}", provider=provider.name)
-                    continue
-                except (urllib.error.URLError, TimeoutError):
-                    last = AIProviderError(f"provider unavailable: {provider.name}/{model}", retryable=True, provider=provider.name)
-                    continue
-                except (json.JSONDecodeError, ValueError, TypeError):
-                    last = AIProviderError(f"provider returned invalid response: {provider.name}/{model}", provider=provider.name)
-                    continue
-            if provider_rate_limited:
-                cooldown = max_retry_after or 300
-                self._cooldown_until[provider.name] = time.time() + min(cooldown, 86400)
-                last = AIProviderError(f"provider rate limited: {provider.name}", retryable=True, retry_after=cooldown, provider=provider.name)
-        raise last or AIProviderError("All configured AI providers are cooling down", retryable=True)
+                continue
+            except (urllib.error.URLError, TimeoutError):
+                self._model_cooldown_until[model_key] = time.time() + 30
+                last = AIProviderError(f"provider unavailable: {provider.name}/{model}", retryable=True, provider=provider.name)
+                continue
+            except (json.JSONDecodeError, ValueError, TypeError):
+                self._model_cooldown_until[model_key] = time.time() + 30
+                last = AIProviderError(f"provider returned invalid response: {provider.name}/{model}", provider=provider.name)
+                continue
+
+        raise last or AIProviderError("All configured AI models are cooling down", retryable=True)
 
     def status(self) -> list[dict[str, Any]]:
         now = time.time()
-        return [{"name": p.name, "models": list(p.models), "model": p.model, "priority": p.priority, "cooldown_seconds": max(0, int(self._cooldown_until.get(p.name, 0) - now))} for p in self.providers()]
+        return [
+            {
+                "name": p.name,
+                "models": list(p.models),
+                "model": p.model,
+                "priority": p.priority,
+                "cooldown_seconds": max(0, int(self._cooldown_until.get(p.name, 0) - now)),
+            }
+            for p in self.providers()
+        ]
