@@ -69,8 +69,6 @@ class Settings(BaseSettings):
     AGENTROUTER_API_KEY: str | None = None
     GOOGLE_API_KEY: str | None = None
 
-    # Native music/audio generation endpoint. Leave blank to reuse the primary
-    # AI provider credentials and model with MUSIC_AUDIO_PATH.
     MUSIC_AUDIO_API_KEY: str | None = None
     MUSIC_AUDIO_BASE_URL: str | None = None
     MUSIC_AUDIO_MODEL: str | None = None
@@ -78,6 +76,7 @@ class Settings(BaseSettings):
     MUSIC_AUDIO_MAX_SECONDS: int = 90
     MUSIC_AUDIO_FORMAT: str = "wav"
     MUSIC_AUDIO_TIMEOUT_SECONDS: int = 240
+    # Product limits: RahYar students = 15/day, everyone else = 8/day.
     MUSIC_GENERATION_RAHYAR_DAILY_LIMIT: int = 15
     MUSIC_GENERATION_PUBLIC_DAILY_LIMIT: int = 8
 
@@ -162,11 +161,7 @@ class Settings(BaseSettings):
 
     @property
     def admin_usernames(self) -> set[str]:
-        return {
-            value.strip().lstrip("@").casefold()
-            for value in self.ADMIN_USERNAMES.split(",")
-            if value.strip()
-        }
+        return {value.strip().lstrip("@").casefold() for value in self.ADMIN_USERNAMES.split(",") if value.strip()}
 
     @property
     def bot_deep_link_base(self) -> str | None:
