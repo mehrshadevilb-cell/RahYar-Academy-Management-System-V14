@@ -8,6 +8,7 @@ from src.bot.keyboards.admin_ai_keyboard import admin_ai_keyboard
 from src.bot.keyboards.admin_menu_keyboard import admin_back_button
 from src.bot.states.admin_states import AdminState
 from src.core.config.settings import get_settings
+from src.services.ai_activity import activity_tracker
 from src.services.ai_agent_runtime import runtime
 from src.services.ai_agent_service import AIAgentError
 
@@ -43,7 +44,8 @@ def _home_text() -> str:
         "🔐 Security: محافظت‌شده\n"
         "📂 Repository: متصل\n\n"
         "برای شروع یک عملیات انتخاب کنید.\n"
-        "<i>Write taskها → Plan → Code → Test → PR</i>"
+        "<i>Write taskها → Plan → Code → Test → PR</i>\n\n"
+        "👁 برای دیدن جزئیات کار Agent از «فعالیت Agent» استفاده کنید."
     )
 
 
@@ -53,7 +55,26 @@ async def ai_home(callback: CallbackQuery, state: FSMContext):
         await callback.answer("⛔️ دسترسی ندارید.", show_alert=True)
         return
     await state.clear()
-    await callback.message.edit_text(_home_text(), reply_markup=admin_ai_keyboard(), parse_mode="HTML")
+    await callback.message.edit_text(
+        _home_text(), reply_markup=admin_ai_keyboard(), parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "ai_activity")
+async def ai_activity(callback: CallbackQuery):
+    if not _owner(callback.from_user.id):
+        await callback.answer("⛔️", show_alert=True)
+        return
+    try:
+        repo = getattr(runtime.agent, "repo", None)
+        if repo is not None:
+            activity_tracker.load_persisted(repo)
+        result = activity_tracker.report_text()
+    except Exception as exc:
+        result = f"❌ {_safe_error(exc)}"
+    for part in _chunk(result):
+        await callback.message.answer(part)
     await callback.answer()
 
 
@@ -78,7 +99,9 @@ async def ai_status(callback: CallbackQuery):
         result = "\n".join(lines)
     except AIAgentError as exc:
         result = f"❌ {_safe_error(exc)}"
-    await callback.message.answer(f"🧪 <b>AI API / Agent Status</b>\n\n<code>{result}</code>", parse_mode="HTML")
+    await callback.message.answer(
+        f"🧪 <b>AI API / Agent Status</b>\n\n<code>{result}</code>", parse_mode="HTML"
+    )
     await callback.answer()
 
 
@@ -104,30 +127,35 @@ async def ai_security(callback: CallbackQuery):
     await callback.answer()
 
 
-@router.callback_query(F.data == "ai_task_status")
-async def ai_task_status(callback: CallbackQuery):
-    if not _owner(callback.from_user.id):
-        await callback.answer("⛔️", show_alert=True)
-        return
-    if runtime.active(callback.from_user.id):
-        label = runtime.active_label(callback.from_user.id) or "task"
-        await callback.answer(f"🟡 Task فعال است: {label}", show_alert=True)
-    else:
-        await callback.answer("🟢 Task فعالی وجود ندارد.", show_alert=True)
-
-
 @router.callback_query(F.data == "ai_analyze")
 async def ai_analyze(callback: CallbackQuery):
     if not _owner(callback.from_user.id):
         await callback.answer("⛔️", show_alert=True)
         return
     await callback.answer("در حال Audit...", show_alert=False)
+    req = "Audit the repository for bugs, risks, missing tests and architecture issues."
+    activity_tracker.start(kind="analyze", mode="audit", request=req)
+    activity_tracker.step("درخواست Audit از پنل ادمین")
     try:
         result = await asyncio.to_thread(runtime.agent.analyze)
+        activity_tracker.finish(
+            success=True,
+            outcome=result[:1500],
+            persist_dir=getattr(runtime.agent, "repo", None),
+        )
     except AIAgentError as exc:
+        activity_tracker.finish(
+            success=False,
+            error=_safe_error(exc),
+            persist_dir=getattr(runtime.agent, "repo", None),
+        )
         result = f"❌ {_safe_error(exc)}"
     for part in _chunk(f"🔎 <b>AI Audit</b>\n\n{result}"):
         await callback.message.answer(part, parse_mode="HTML")
+    await callback.message.answer(
+        "👁 برای دیدن مراحل: دکمه «فعالیت Agent»",
+        reply_markup=admin_ai_keyboard(),
+    )
 
 
 @router.callback_query(F.data == "ai_assistant")
@@ -140,6 +168,7 @@ async def ai_assistant_start(callback: CallbackQuery, state: FSMContext):
     await callback.message.answer(
         "💬 <b>Assistant</b>\n\nسؤال فنی بپرسید. Agent با context پروژه پاسخ می‌دهد.\n\n"
         "⚠️ API key، BOT_TOKEN، DATABASE_URL یا .env را ارسال نکنید.\n"
+        "👁 وضعیت اجرا: «فعالیت Agent»\n"
         "برای خروج: /cancel",
         reply_markup=admin_back_button("admin_ai"),
         parse_mode="HTML",
@@ -156,7 +185,8 @@ async def ai_debug_start(callback: CallbackQuery, state: FSMContext):
     await state.update_data(ai_consult_mode="debug")
     await callback.message.answer(
         "🐞 <b>Debug</b>\n\nلاگ یا خطا را بفرستید. این حالت فقط تحلیل می‌کند و کد را تغییر نمی‌دهد.\n"
-        "کلیدها و اطلاعات حساس را حذف کنید.",
+        "کلیدها و اطلاعات حساس را حذف کنید.\n"
+        "👁 وضعیت اجرا: «فعالیت Agent»",
         reply_markup=admin_back_button("admin_ai"),
         parse_mode="HTML",
     )
@@ -190,13 +220,32 @@ async def ai_consult_message(message: Message, state: FSMContext):
         + ("DEBUG MODE: give root cause, exact paths, fix steps and tests.\n" if mode == "debug" else "")
         + f"OWNER INPUT:\n{text}"
     )
-    await message.answer("⏳ در حال تحلیل...")
+    await message.answer(
+        "⏳ Agent شروع کرد...\n"
+        "برای دیدن پیشرفت لحظه‌ای می‌توانید «👁 فعالیت Agent» را بزنید."
+    )
+    activity_tracker.start(kind="consult", mode=mode, request=text)
+    activity_tracker.step(f"حالت={mode} · ارسال به API")
     try:
         result = await asyncio.to_thread(runtime.agent.analyze, prompt)
+        activity_tracker.finish(
+            success=True,
+            outcome=result[:1500],
+            persist_dir=getattr(runtime.agent, "repo", None),
+        )
     except AIAgentError as exc:
+        activity_tracker.finish(
+            success=False,
+            error=_safe_error(exc),
+            persist_dir=getattr(runtime.agent, "repo", None),
+        )
         result = f"❌ {_safe_error(exc)}"
     for part in _chunk(f"{'🐞' if mode == 'debug' else '💬'} نتیجه\n\n{result}"):
         await message.answer(part)
+    await message.answer(
+        "می‌توانید سؤال بعدی را بفرستید، /cancel، یا «👁 فعالیت Agent».",
+        reply_markup=admin_ai_keyboard(),
+    )
 
 
 @router.callback_query(F.data == "ai_fix")
@@ -208,7 +257,8 @@ async def ai_fix_start(callback: CallbackQuery, state: FSMContext):
     await state.update_data(ai_task_type="fix")
     await callback.message.answer(
         "🐞 <b>Fix Task</b>\n\nباگ را دقیق توضیح بدهید.\n"
-        "Agent ابتدا Plan می‌سازد، سپس روی ai/* تغییر می‌دهد، تست می‌کند و در صورت موفقیت PR می‌سازد.",
+        "Agent ابتدا Plan می‌سازد، سپس روی ai/* تغییر می‌دهد، تست می‌کند و در صورت موفقیت PR می‌سازد.\n"
+        "👁 وضعیت زنده: «فعالیت Agent»",
         parse_mode="HTML",
     )
     await callback.answer()
@@ -223,7 +273,8 @@ async def ai_feature_start(callback: CallbackQuery, state: FSMContext):
     await state.update_data(ai_task_type="feature")
     await callback.message.answer(
         "✨ <b>Feature Task</b>\n\nقابلیت را با رفتار مورد انتظار توضیح بدهید.\n"
-        "Agent → Planner → Skills → Code → Tests → PR",
+        "Agent → Planner → Skills → Code → Tests → PR\n"
+        "👁 وضعیت زنده: «فعالیت Agent»",
         parse_mode="HTML",
     )
     await callback.answer()
@@ -249,11 +300,14 @@ async def ai_task(message: Message, state: FSMContext):
 
     await message.answer(
         "🛠 <b>Task Started</b>\n━━━━━━━━━━━━━━━━━━\n"
-        "🟡 وضعیت: در حال پردازش\n🔐 فقط owner\n🌿 branch: ai/*",
+        "🟡 وضعیت: در حال پردازش\n🔐 فقط owner\n🌿 branch: ai/*\n"
+        "👁 جزئیات زنده: دکمه «فعالیت Agent»",
         parse_mode="HTML",
     )
     try:
-        result = await runtime.run_write(message.from_user.id, task, task_type, progress)
+        result = await runtime.run_write(
+            message.from_user.id, task, task_type, progress
+        )
     except asyncio.CancelledError:
         await message.answer("🛑 Task لغو شد. تغییرات ناقص commit/PR نمی‌شوند.")
         return
@@ -261,7 +315,10 @@ async def ai_task(message: Message, state: FSMContext):
         result = f"❌ {_safe_error(exc)}"
     for part in _chunk(result):
         await message.answer(part)
-    await message.answer("🤖 Agent آماده Task بعدی است.", reply_markup=admin_ai_keyboard())
+    await message.answer(
+        "برای مرور دقیق مراحل: «👁 فعالیت Agent»",
+        reply_markup=admin_ai_keyboard(),
+    )
 
 
 @router.callback_query(F.data == "ai_stop")
@@ -272,10 +329,20 @@ async def ai_stop(callback: CallbackQuery, state: FSMContext):
     cancelled = await runtime.cancel(callback.from_user.id)
     await state.clear()
     if cancelled:
+        activity_tracker.finish(
+            success=False,
+            cancelled=True,
+            outcome="Task توسط کاربر لغو شد.",
+            persist_dir=getattr(runtime.agent, "repo", None),
+        )
         await callback.answer("🛑 Task واقعاً لغو شد.", show_alert=True)
     else:
         await callback.answer("🟢 Task فعالی وجود نداشت.", show_alert=True)
     try:
-        await callback.message.edit_text(_home_text(), reply_markup=admin_ai_keyboard(), parse_mode="HTML")
+        await callback.message.edit_text(
+            _home_text(), reply_markup=admin_ai_keyboard(), parse_mode="HTML"
+        )
     except Exception:
-        await callback.message.answer(_home_text(), reply_markup=admin_ai_keyboard(), parse_mode="HTML")
+        await callback.message.answer(
+            _home_text(), reply_markup=admin_ai_keyboard(), parse_mode="HTML"
+        )

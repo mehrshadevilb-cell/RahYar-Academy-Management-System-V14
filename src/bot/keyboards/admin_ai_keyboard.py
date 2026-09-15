@@ -18,7 +18,9 @@ def admin_ai_keyboard() -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(text="🔐 Security", callback_data="ai_security"),
-                InlineKeyboardButton(text="📋 Task Status", callback_data="ai_task_status"),
+                InlineKeyboardButton(
+                    text="👁 فعالیت Agent", callback_data="ai_activity"
+                ),
             ],
             [InlineKeyboardButton(text="🛑 Stop Task", callback_data="ai_stop")],
             [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="admin_home")],

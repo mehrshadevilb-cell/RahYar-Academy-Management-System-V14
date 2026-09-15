@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Awaitable, Callable
 
+from src.services.ai_activity import activity_tracker
 from src.services.ai_agent_service import AIAgentError, AIAgentService
 
 
@@ -177,7 +178,9 @@ only in the normal agent JSON schema."""
             current = self._tasks.get(user_id)
             if current and not current.done():
                 raise AIAgentError("یک Task دیگر برای شما در حال اجراست.")
-            task_handle = asyncio.create_task(self._run_write_inner(task, task_type, progress))
+            task_handle = asyncio.create_task(
+                self._run_write_inner(task, task_type, progress)
+            )
             self._tasks[user_id] = task_handle
             self._task_labels[user_id] = task_type
         try:
@@ -195,17 +198,61 @@ only in the normal agent JSON schema."""
         progress: Callable[[str], Awaitable[None]] | None,
     ) -> str:
         async def report(text: str) -> None:
+            activity_tracker.step(text)
             if progress:
                 await progress(text)
 
-        await report("🔎 بررسی ساختار پروژه و انتخاب Skillها...")
-        plan = await asyncio.to_thread(self.plan, task, task_type)
-        await report("🧠 Planner آماده شد؛ وابستگی‌ها و ریسک‌ها مشخص شدند.")
-        await report("✏️ اجرای تغییرات روی branch ایزوله...")
-        implementation_task = self.build_implementation_task(task, task_type, plan)
-        result = await asyncio.to_thread(self.agent.implement, implementation_task, task_type)
-        await report("🧪 compile و pytest و کنترل‌های نهایی انجام شد.")
-        return result
+        activity_tracker.start(kind="implement", mode=task_type, request=task)
+        activity_tracker.step("درخواست از پنل ادمین دریافت شد")
+        try:
+            await report("🔎 بررسی ساختار پروژه و انتخاب Skillها...")
+            selected = self.select_skills(task)
+            if selected:
+                activity_tracker.tool("skills", ", ".join(selected))
+            plan = await asyncio.to_thread(self.plan, task, task_type)
+            activity_tracker.step(f"Planner: {plan.objective[:120]}")
+            await report("🧠 Planner آماده شد؛ وابستگی‌ها و ریسک‌ها مشخص شدند.")
+            await report("✏️ اجرای تغییرات روی branch ایزوله...")
+            implementation_task = self.build_implementation_task(task, task_type, plan)
+            result = await asyncio.to_thread(
+                self.agent.implement, implementation_task, task_type
+            )
+            await report("🧪 compile و pytest و کنترل‌های نهایی انجام شد.")
+
+            # Light signals from result text
+            pr_url = ""
+            if "http" in result and ("github.com" in result or "pull" in result.lower()):
+                for token in result.split():
+                    if token.startswith("http") and "github.com" in token:
+                        pr_url = token.strip("()[].,")
+                        break
+            if "branch" in result.lower() or "ai/" in result:
+                activity_tracker.step("branch/commit در خروجی گزارش شد")
+
+            failed = result.startswith("❌") or "Failed" in result or "failed" in result.lower()
+            activity_tracker.finish(
+                success=not failed,
+                outcome=result[:1500],
+                error=result[:800] if failed else "",
+                pr_url=pr_url,
+                persist_dir=getattr(self.agent, "repo", None),
+            )
+            return result
+        except asyncio.CancelledError:
+            activity_tracker.finish(
+                success=False,
+                cancelled=True,
+                outcome="Task توسط کاربر لغو شد.",
+                persist_dir=getattr(self.agent, "repo", None),
+            )
+            raise
+        except Exception as exc:
+            activity_tracker.finish(
+                success=False,
+                error=str(exc)[:1000],
+                persist_dir=getattr(self.agent, "repo", None),
+            )
+            raise
 
     async def cancel(self, user_id: int) -> bool:
         async with self._lock:
