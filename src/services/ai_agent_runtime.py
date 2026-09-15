@@ -10,10 +10,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Awaitable, Callable
 
+from src.core.config.settings import get_settings
 from src.database.models.admin_log import AdminLog
 from src.database.session import SessionLocal
-from src.services.ai_agent_service import AIAgentError, AIAgentService
-from src.core.config.settings import get_settings
+from src.services.ai_agent_service import AIAgentError
+from src.services.routed_ai_agent_service import RoutedAIAgentService
 
 try:
     import redis.asyncio as redis
@@ -45,8 +46,8 @@ class AIAgentRuntime:
     REDIS_LOCK_KEY = "rahyar:ai-agent:single-flight"
     REDIS_LOCK_TTL = 45 * 60
 
-    def __init__(self, agent: AIAgentService | None = None) -> None:
-        self.agent = agent or AIAgentService()
+    def __init__(self, agent: RoutedAIAgentService | None = None) -> None:
+        self.agent = agent or RoutedAIAgentService()
         self.settings = get_settings()
         self._tasks: dict[int, asyncio.Task] = {}
         self._task_labels: dict[int, str] = {}
@@ -79,9 +80,8 @@ class AIAgentRuntime:
         chunks: list[str] = []
         used = 0
         for name in self.select_skills(task):
-            path = self.skills_dir / name
             try:
-                content = path.read_text(encoding="utf-8")
+                content = (self.skills_dir / name).read_text(encoding="utf-8")
             except OSError:
                 continue
             remaining = self.MAX_SKILL_CHARS - used
@@ -117,8 +117,7 @@ Keep the plan minimal, specific and safe. Never request secrets."""
 
     @staticmethod
     def _parse_plan(raw: str) -> AgentPlan:
-        text = raw.strip()
-        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.I)
+        text = re.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=re.I)
         text = re.sub(r"\s*```$", "", text)
         try:
             data = json.loads(text)
@@ -129,64 +128,34 @@ Keep the plan minimal, specific and safe. Never request secrets."""
 
         def strings(key: str) -> list[str]:
             value = data.get(key, [])
-            if not isinstance(value, list):
-                return []
-            return [str(item).strip() for item in value if str(item).strip()][:12]
+            return [str(item).strip() for item in value if str(item).strip()][:12] if isinstance(value, list) else []
 
         objective = str(data.get("objective", "")).strip()
         if not objective:
             raise AIAgentError("Planner did not return an objective.")
-        return AgentPlan(
-            objective=objective,
-            approach=strings("approach"),
-            skills=strings("skills"),
-            inspect=strings("inspect"),
-            risks=strings("risks"),
-            tests=strings("tests"),
-        )
+        return AgentPlan(objective, strings("approach"), strings("skills"), strings("inspect"), strings("risks"), strings("tests"))
 
     def plan(self, task: str, task_type: str = "feature") -> AgentPlan:
-        raw = self.agent._request_model(self._plan_prompt(task, task_type))
-        return self._parse_plan(raw)
+        return self._parse_plan(self.agent._request_model(self._plan_prompt(task, task_type)))
 
     def build_implementation_task(self, task: str, task_type: str, plan: AgentPlan) -> str:
-        skill_text = self.skill_context(task)
-        return f"""ORCHESTRATED TASK
-
-Original owner request:
-{task}
-
-Task type: {task_type}
-
-Approved read-only plan:
-Objective: {plan.objective}
-Approach:
-- """ + "\n- ".join(plan.approach or ["Inspect the relevant existing code, implement the smallest safe change, and test it."]) + f"""
-Inspect:
-- """ + "\n- ".join(plan.inspect or ["the relevant source and tests"]) + f"""
-Risks:
-- """ + "\n- ".join(plan.risks or ["regression and security exposure"]) + f"""
-Required tests:
-- """ + "\n- ".join(plan.tests or ["compileall and the full pytest suite"]) + f"""
-
-Selected skills:
-{skill_text or '(skills unavailable)'}
-
-Implement this plan. Preserve the existing architecture. Do not expose secrets,
-modify protected files, weaken tests, or target main. Return complete file contents
-only in the normal agent JSON schema."""
+        return (
+            f"ORCHESTRATED TASK\n\nOriginal owner request:\n{task}\n\nTask type: {task_type}\n\n"
+            f"Approved read-only plan:\nObjective: {plan.objective}\nApproach:\n- "
+            + "\n- ".join(plan.approach or ["Inspect the relevant existing code, implement the smallest safe change, and test it."])
+            + "\nInspect:\n- " + "\n- ".join(plan.inspect or ["the relevant source and tests"])
+            + "\nRisks:\n- " + "\n- ".join(plan.risks or ["regression and security exposure"])
+            + "\nRequired tests:\n- " + "\n- ".join(plan.tests or ["compileall and the full pytest suite"])
+            + f"\n\nSelected skills:\n{self.skill_context(task) or '(skills unavailable)'}\n\n"
+            "Implement this plan. Preserve the existing architecture. Do not expose secrets, "
+            "modify protected files, weaken tests, or target main. Return complete file contents "
+            "only in the normal agent JSON schema."
+        )
 
     def _audit(self, user_id: int, action: str, description: str) -> None:
-        """Best-effort audit logging: a logging failure must never break the agent."""
         db = SessionLocal()
         try:
-            db.add(
-                AdminLog(
-                    admin_telegram_id=str(user_id),
-                    action=action[:50],
-                    description=description[:500],
-                )
-            )
+            db.add(AdminLog(admin_telegram_id=str(user_id), action=action[:50], description=description[:500]))
             db.commit()
         except Exception:
             db.rollback()
@@ -198,20 +167,13 @@ only in the normal agent JSON schema."""
             return None
         token = secrets.token_urlsafe(24)
         try:
-            acquired = await self._redis.set(
-                self.REDIS_LOCK_KEY,
-                token,
-                nx=True,
-                ex=self.REDIS_LOCK_TTL,
-            )
+            acquired = await self._redis.set(self.REDIS_LOCK_KEY, token, nx=True, ex=self.REDIS_LOCK_TTL)
             if not acquired:
                 raise AIAgentError("یک Task مربوط به AI Agent در instance دیگری در حال اجراست. صبر کنید.")
             return token
         except AIAgentError:
             raise
         except Exception:
-            # Redis outage falls back to the per-instance asyncio lock and the
-            # existing filesystem guard; local/dev operation remains available.
             self._redis = None
             return None
 
@@ -229,13 +191,7 @@ only in the normal agent JSON schema."""
         except Exception:
             pass
 
-    async def run_write(
-        self,
-        user_id: int,
-        task: str,
-        task_type: str,
-        progress: Callable[[str], Awaitable[None]] | None = None,
-    ) -> str:
+    async def run_write(self, user_id: int, task: str, task_type: str, progress: Callable[[str], Awaitable[None]] | None = None) -> str:
         async with self._lock:
             current = self._tasks.get(user_id)
             if current and not current.done():
@@ -251,13 +207,7 @@ only in the normal agent JSON schema."""
                     self._tasks.pop(user_id, None)
                     self._task_labels.pop(user_id, None)
 
-    async def _run_write_inner(
-        self,
-        user_id: int,
-        task: str,
-        task_type: str,
-        progress: Callable[[str], Awaitable[None]] | None,
-    ) -> str:
+    async def _run_write_inner(self, user_id: int, task: str, task_type: str, progress: Callable[[str], Awaitable[None]] | None) -> str:
         async def report(text: str) -> None:
             if progress:
                 await progress(text)
@@ -269,8 +219,7 @@ only in the normal agent JSON schema."""
             plan = await asyncio.to_thread(self.plan, task, task_type)
             await report("🧠 Planner آماده شد؛ وابستگی‌ها و ریسک‌ها مشخص شدند.")
             await report("✏️ اجرای تغییرات روی branch ایزوله...")
-            implementation_task = self.build_implementation_task(task, task_type, plan)
-            result = await asyncio.to_thread(self.agent.implement, implementation_task, task_type)
+            result = await asyncio.to_thread(self.agent.implement, self.build_implementation_task(task, task_type, plan), task_type)
             await report("🧪 compile و pytest و کنترل‌های نهایی انجام شد.")
             self._audit(user_id, "AI_AGENT_SUCCESS", f"AI Agent completed: {result[:400]}")
             return result
