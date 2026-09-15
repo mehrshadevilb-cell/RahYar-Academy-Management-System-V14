@@ -58,7 +58,20 @@ class AIModelService:
         discovered = self._run_async(client.list_models())
         if not isinstance(discovered, list):
             raise ValueError("AI provider returned an invalid model discovery payload")
-        valid_items = [x for x in discovered if isinstance(x, dict) and str(x.get("model_id") or "").strip()]
+
+        # Providers are allowed to return either the canonical model_id used by
+        # our discovery layer or the common OpenAI/Google-style `id` field.
+        valid_items: list[dict] = []
+        for item in discovered:
+            if not isinstance(item, dict):
+                continue
+            model_id = str(item.get("model_id") or item.get("id") or "").strip()
+            if not model_id:
+                continue
+            normalized = dict(item)
+            normalized["model_id"] = model_id
+            valid_items.append(normalized)
+
         if not valid_items:
             raise ValueError("AI provider returned no usable models; existing models were left unchanged")
 
@@ -66,7 +79,7 @@ class AIModelService:
         seen: set[str] = set()
         added = updated = deactivated = 0
         for item in valid_items:
-            model_id = str(item["model_id"]).strip()
+            model_id = item["model_id"]
             seen.add(model_id)
             model = existing.get(model_id)
             if model is None:
