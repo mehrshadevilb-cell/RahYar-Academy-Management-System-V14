@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import re
+import time
 import urllib.request
 from typing import Any
 
@@ -18,9 +19,59 @@ class MusicAIGeneratorError(RuntimeError):
 class MusicAIGeneratorService:
     """Prompt -> production-oriented MIDI plan, plus explicitly configured native AI audio."""
 
+    MAX_PLAN_ATTEMPTS = 3
+
     def __init__(self) -> None:
         self.settings = get_settings()
         self.router = AIProviderRouter()
+
+    @staticmethod
+    def _extract_json_object(content: str) -> dict[str, Any] | None:
+        text = re.sub(r"^```(?:json)?\s*|\s*```$", "", content.strip(), flags=re.I | re.S).strip()
+        try:
+            value = json.loads(text)
+            return value if isinstance(value, dict) else None
+        except json.JSONDecodeError:
+            pass
+        start = text.find("{")
+        end = text.rfind("}")
+        if start < 0 or end <= start:
+            return None
+        try:
+            value = json.loads(text[start : end + 1])
+            return value if isinstance(value, dict) else None
+        except json.JSONDecodeError:
+            return None
+
+    @staticmethod
+    def _validate_plan(plan: dict[str, Any]) -> None:
+        tracks = plan.get("tracks")
+        if not isinstance(tracks, list) or not tracks:
+            raise MusicAIGeneratorError("برنامه موسیقی تولیدشده ترک قابل استفاده ندارد.")
+        valid_notes = 0
+        for raw_track in tracks[:8]:
+            if not isinstance(raw_track, dict):
+                continue
+            notes = raw_track.get("notes")
+            if not isinstance(notes, list):
+                continue
+            for raw in notes[:512]:
+                if not isinstance(raw, dict):
+                    continue
+                try:
+                    start = float(raw.get("start", 0))
+                    duration = float(raw.get("duration", 0))
+                    note = int(float(raw.get("note", 60)))
+                    velocity = int(float(raw.get("velocity", 90)))
+                    if start >= 0 and 0.01 <= duration <= 32 and 0 <= note <= 127 and 1 <= velocity <= 127:
+                        valid_notes += 1
+                except (TypeError, ValueError):
+                    continue
+        if valid_notes == 0:
+            raise MusicAIGeneratorError("مدل AI هیچ نت معتبر و قابل تبدیل به MIDI تولید نکرد.")
+        plan["tracks"] = tracks[:8]
+        plan["bpm"] = max(40, min(240, int(float(plan.get("bpm", 120)))))
+        plan["bars"] = max(1, min(64, int(float(plan.get("bars", 16)))))
 
     def _plan(self, prompt: str, output: str, variation: int = 0) -> dict[str, Any]:
         system = """You are RahYar's professional music-production composer.
@@ -32,25 +83,35 @@ start/duration are beats. Notes 0-127, velocity 1-127, program 0-127,
 channel 0-15. Maximum 8 tracks, 64 bars, 512 notes/track. Write coherent
 phrases with repetition, development, correct harmony, voice leading and groove;
 never random note soup. Respect explicit constraints over defaults. Keep the
-result useful in a real DAW."""
-        # Do not force response_format: several OpenAI-compatible gateways accept
-        # normal chat completions but reject the JSON-mode parameter.
-        result = self.router.chat([
-            {"role": "system", "content": system},
-            {"role": "user", "content": f"Output type: {output}\nVariation: {variation}\nUser request: {prompt}"},
-        ], temperature=0.35, timeout_seconds=180)
-        choices = result.get("choices") or []
-        content = ((choices[0].get("message") or {}).get("content") if choices else "")
-        if isinstance(content, list):
-            content = "".join(str(x.get("text", "")) for x in content if isinstance(x, dict))
-        content = re.sub(r"^```(?:json)?\s*|\s*```$", "", str(content or "").strip(), flags=re.I | re.S).strip()
-        try:
-            plan = json.loads(content)
-        except json.JSONDecodeError as exc:
-            raise MusicAIGeneratorError("مدل AI پاسخ موسیقایی قابل‌خواندن تولید نکرد.") from exc
-        if not isinstance(plan, dict) or not isinstance(plan.get("tracks"), list):
-            raise MusicAIGeneratorError("برنامه موسیقی تولیدشده ناقص است.")
-        return plan
+result useful in a real DAW. Never return markdown, commentary, or code fences."""
+        last_error: Exception | None = None
+        for _ in range(self.MAX_PLAN_ATTEMPTS):
+            try:
+                result = self.router.chat([
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": f"Output type: {output}\nVariation: {variation}\nUser request: {prompt}"},
+                ], temperature=0.35, timeout_seconds=90)
+                content = self.router._extract_text(result, str(result.get("_rahyar_provider_type") or "openai_compatible"))
+                if not content:
+                    choices = result.get("choices") or []
+                    content = ((choices[0].get("message") or {}).get("content") if choices else "")
+                    if isinstance(content, list):
+                        content = "".join(str(x.get("text", "")) for x in content if isinstance(x, dict))
+                plan = self._extract_json_object(str(content or ""))
+                if plan is None:
+                    raise MusicAIGeneratorError("مدل AI پاسخ موسیقایی قابل‌خواندن تولید نکرد.")
+                self._validate_plan(plan)
+                return plan
+            except (MusicAIGeneratorError, ValueError, TypeError) as exc:
+                last_error = exc
+                provider = str(result.get("_rahyar_provider") or "") if "result" in locals() and isinstance(result, dict) else ""
+                model = str(result.get("_rahyar_model") or "") if "result" in locals() and isinstance(result, dict) else ""
+                if provider and model:
+                    self.router._model_cooldown_until[f"{provider}:{model}"] = time.time() + 20
+                continue
+        if isinstance(last_error, MusicAIGeneratorError):
+            raise last_error
+        raise MusicAIGeneratorError("مدل‌های AI نتوانستند یک برنامه موسیقی معتبر بسازند.") from last_error
 
     @staticmethod
     def _clamp_note(value: Any) -> int:
@@ -59,6 +120,7 @@ result useful in a real DAW."""
     def _midi_from_plan(self, plan: dict[str, Any]) -> bytes:
         bpm = max(40, min(240, int(plan.get("bpm", 120))))
         midi = MidiFile(ticks_per_beat=480)
+        total_notes = 0
         for index, raw_track in enumerate(plan.get("tracks", [])[:8]):
             if not isinstance(raw_track, dict):
                 continue
@@ -80,14 +142,15 @@ result useful in a real DAW."""
                     start = max(0.0, float(raw.get("start", 0)))
                     duration = max(0.05, min(32.0, float(raw.get("duration", 1))))
                     note = self._clamp_note(raw.get("note", 60))
-                    velocity = max(1, min(127, int(raw.get("velocity", 90))))
+                    velocity = max(1, min(127, int(float(raw.get("velocity", 90)))))
                 except (TypeError, ValueError):
                     continue
                 on = int(round(start * midi.ticks_per_beat))
                 off = max(on + 1, int(round((start + duration) * midi.ticks_per_beat)))
                 track.note_on(on, channel, note, velocity)
                 track.note_off(off, channel, note, 0)
-        if not midi.tracks:
+                total_notes += 1
+        if not midi.tracks or total_notes == 0:
             raise MusicAIGeneratorError("هیچ نت معتبری برای MIDI تولید نشد.")
         return midi.to_bytes()
 
@@ -115,7 +178,7 @@ result useful in a real DAW."""
                 url = data.get(key)
                 if isinstance(url, str):
                     try:
-                        with urllib.request.urlopen(url, timeout=180) as response:
+                        with urllib.request.urlopen(url, timeout=90) as response:
                             return response.read()
                     except Exception:
                         pass
@@ -126,7 +189,7 @@ result useful in a real DAW."""
                 continue
             if item.startswith("http"):
                 try:
-                    with urllib.request.urlopen(item, timeout=180) as response:
+                    with urllib.request.urlopen(item, timeout=90) as response:
                         return response.read()
                 except Exception:
                     continue
@@ -137,8 +200,6 @@ result useful in a real DAW."""
         return None
 
     def _audio_candidates(self) -> list[tuple[str, str, str]]:
-        # Audio is a separate integration. Never send a normal text-model API key
-        # to /audio/generations just because that provider happens to be configured.
         explicit_key = (self.settings.MUSIC_AUDIO_API_KEY or "").strip()
         explicit_base = (self.settings.MUSIC_AUDIO_BASE_URL or "").strip()
         explicit_model = (self.settings.MUSIC_AUDIO_MODEL or "").strip()
@@ -171,7 +232,7 @@ result useful in a real DAW."""
                 method="POST",
             )
             try:
-                with urllib.request.urlopen(request, timeout=max(30, int(settings.MUSIC_AUDIO_TIMEOUT_SECONDS))) as response:
+                with urllib.request.urlopen(request, timeout=max(30, min(120, int(settings.MUSIC_AUDIO_TIMEOUT_SECONDS)))) as response:
                     audio = self._decode_audio_response(response.read(), str(response.headers.get_content_type() or ""))
                 if audio and len(audio) >= 256:
                     return audio, {"model": model, "provider": base_url}
