@@ -317,7 +317,9 @@ async def admin_online_enroll_start(
     await state.set_state(AdminState.waiting_student_phone)
 
     await callback.message.answer(
-        "شماره تماس هنرجو را بفرستید (باید قبلاً با /start ثبت‌نام کرده باشد):"
+        "شماره هنرجویی یا شماره تماس هنرجو را بفرستید.\n"
+        "شماره هنرجویی در پیام /start با قالب RH000123 نمایش داده می‌شود "
+        "و هنرجو باید قبلاً /start را زده باشد:"
     )
 
     await callback.answer()
@@ -331,14 +333,20 @@ async def admin_online_enroll_phone(
     if not _is_owner(message.from_user.id):
         return
 
-    phone = (message.text or "").strip()
+    identifier = (message.text or "").strip()
+    normalized = identifier.upper().replace(" ", "")
 
-    student = profile_service.get_profile_by_phone(db, phone)
+    # Phone numbers remain supported.  RH000123 (or a bare numeric id) is the
+    # stable student number shown to the student after /start.
+    if normalized.startswith("RH") or (normalized.isdigit() and not normalized.startswith("09")):
+        student = profile_service.get_profile_by_student_number(db, normalized)
+    else:
+        student = profile_service.get_profile_by_phone(db, identifier)
 
     if not student:
         await message.answer(
-            "❌ هنرجویی با این شماره پیدا نشد. "
-            "مطمئن شوید قبلاً با /start ثبت‌نام کرده باشد. دوباره بفرستید:"
+            "❌ هنرجویی با این شماره پیدا نشد. شماره هنرجویی را از پیام /start "
+            "یا شماره موبایلی که ثبت کرده است ارسال کنید:"
         )
         return
 

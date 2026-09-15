@@ -49,6 +49,18 @@ class ProfileService:
         )
 
 
+    def get_profile_by_student_number(
+        self,
+        db: Session,
+        student_number: str,
+    ):
+
+        return self.repository.get_by_student_number(
+            db,
+            student_number,
+        )
+
+
     def update_contact_info(
         self,
         db: Session,

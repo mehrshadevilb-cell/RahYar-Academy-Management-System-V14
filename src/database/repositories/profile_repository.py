@@ -62,6 +62,27 @@ class ProfileRepository:
             .first()
         )
 
+    def get_by_student_number(self, db: Session, student_number: str):
+        """Resolve the public student number shown by the bot.
+
+        Student numbers are deliberately derived from the immutable user id,
+        so this feature needs no extra column or migration.  Both ``RH000123``
+        and the numeric id are accepted for admin convenience.
+        """
+        from src.database.models.user import User
+
+        value = (student_number or "").strip().upper()
+        if value.startswith("RH"):
+            value = value[2:]
+        if not value.isdigit():
+            return None
+
+        return (
+            db.query(User)
+            .filter(User.id == int(value))
+            .first()
+        )
+
 
     def update_contact_info(
         self,

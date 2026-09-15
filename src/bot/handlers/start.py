@@ -93,8 +93,10 @@ async def start_handler(
 
     await message.answer(
         f"سلام {user.full_name} 👋\n"
-        "به آکادمی راه‌یار خوش آمدید.",
+        "به آکادمی راه‌یار خوش آمدید.\n"
+        f"شماره هنرجویی شما: <code>RH{user.id:06d}</code>",
         reply_markup=PHONE_REQUEST_KEYBOARD if not user.phone else get_main_menu(user.role),
+        parse_mode="HTML",
     )
 
     if not user.phone:
