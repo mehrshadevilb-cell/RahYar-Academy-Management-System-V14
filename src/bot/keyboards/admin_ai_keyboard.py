@@ -17,6 +17,9 @@ def admin_ai_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="🧪 Test Models", callback_data="ai_test_models"),
             ],
             [
+                InlineKeyboardButton(text="♻️ اتصال مدل سالم", callback_data="ai_auto_connect"),
+            ],
+            [
                 InlineKeyboardButton(text="🔐 Security Audit", callback_data="ai_analyze:security"),
                 InlineKeyboardButton(text="⚙️ Reliability Audit", callback_data="ai_analyze:reliability"),
             ],

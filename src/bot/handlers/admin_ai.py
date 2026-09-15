@@ -135,6 +135,22 @@ async def ai_test_models(callback: CallbackQuery):
         await callback.message.answer(_safe_html(part), parse_mode="HTML")
 
 
+@router.callback_query(F.data == "ai_auto_connect")
+async def ai_auto_connect(callback: CallbackQuery):
+    """Owner action: find a live model and pin the agent to it."""
+    if not _owner(callback.from_user.id, callback.from_user.username):
+        await callback.answer("⛔️", show_alert=True)
+        return
+    await callback.answer("♻️ در حال پیدا کردن مدل سالم...", show_alert=False)
+    try:
+        result = await asyncio.to_thread(runtime.agent.auto_connect_working_model)
+    except AIAgentError as exc:
+        result = f"❌ {_safe_error(exc)}"
+    except Exception as exc:
+        result = f"❌ {_safe_error(exc)}"
+    await callback.message.answer(result, parse_mode="HTML")
+
+
 @router.callback_query(F.data == "ai_security")
 async def ai_security(callback: CallbackQuery):
     if not _owner(callback.from_user.id, callback.from_user.username):
