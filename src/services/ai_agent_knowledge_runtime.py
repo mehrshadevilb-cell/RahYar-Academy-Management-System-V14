@@ -31,6 +31,8 @@ MAX_SOURCE_CHARS = 12000
 MAX_QUIZZES_PER_DAY = 2
 QUIZ_CORPUS_ITEMS = 36
 QUIZ_PREVIOUS_QUESTIONS = 120
+QUIZ_NOTE_CHARS = 300
+QUIZ_PREVIOUS_CHARS = 220
 
 OFFICIAL_SOURCES = {
     "waves_news": "https://www.waves.com/news",
@@ -224,12 +226,7 @@ class AIAgentKnowledgeRuntime:
         return len(db.scalars(select(QuizQuestion.id).where(QuizQuestion.created_at >= start)).all())
 
     def _quiz_corpus(self, db: Session) -> list[KnowledgeItem]:
-        """Select knowledge across the entire corpus, not just the latest items.
-
-        Items are spread evenly across creation order. This makes daily quizzes
-        rotate through old and new group material, while still including official
-        knowledge and plugin/DAW notes when they exist.
-        """
+        """Select knowledge across the entire corpus, not just the latest items."""
         items = db.scalars(
             select(KnowledgeItem)
             .where(KnowledgeItem.quiz_ready.is_(True))
@@ -265,14 +262,12 @@ class AIAgentKnowledgeRuntime:
             return 0
         existing_questions = db.scalars(select(QuizQuestion.question).order_by(desc(QuizQuestion.created_at)).limit(QUIZ_PREVIOUS_QUESTIONS)).all()
         existing_normalized = {self._normalize_quiz_text(q) for q in existing_questions}
-        # Compact representation of a corpus spanning the whole group. The AI
-        # gets the full-topic coverage signal without exceeding request limits.
         notes = []
         for item in items:
             body = (item.translated_text or item.summary or item.raw_text).strip()
-            notes.append(f"TOPIC={item.tags or item.title or 'group'}\n{body[:650]}")
+            notes.append(f"TOPIC={item.tags or item.title or 'group'}\n{body[:QUIZ_NOTE_CHARS]}")
         context = "\n\n---\n\n".join(notes)
-        previous = "\n".join(f"- {q[:500]}" for q in existing_questions[:40])
+        previous = "\n".join(f"- {q[:QUIZ_PREVIOUS_CHARS]}" for q in existing_questions[:40])
         topic = self._quiz_topic(items)
         raw = self._request_ai(
             "Create exactly %d Persian multiple-choice quiz question from the supplied RahYar GROUP KNOWLEDGE CORPUS. "
@@ -305,13 +300,9 @@ class AIAgentKnowledgeRuntime:
                 continue
             if not isinstance(options, list) or len(options) != 4 or correct not in (1, 2, 3, 4):
                 continue
-            # Link the quiz to a representative corpus item; the actual prompt
-            # is grounded in the whole corpus, not this single row.
             db.add(QuizQuestion(
-                knowledge_item_id=items[0].id,
-                question=question[:4000],
-                option_a=str(options[0])[:500], option_b=str(options[1])[:500],
-                option_c=str(options[2])[:500], option_d=str(options[3])[:500],
+                knowledge_item_id=items[0].id, question=question[:4000],
+                option_a=str(options[0])[:500], option_b=str(options[1])[:500], option_c=str(options[2])[:500], option_d=str(options[3])[:500],
                 correct_option=correct, explanation=str(row.get("explanation", ""))[:3000],
             ))
             existing_normalized.add(normalized)
@@ -335,8 +326,6 @@ class AIAgentKnowledgeRuntime:
         text = (message.text or message.caption or "").strip()
         if len(text) < 5:
             return
-        # Every useful group message is ingested, regardless of whether it is
-        # a question. Targeting only controls whether the bot speaks.
         self.ingest_group_message(db, message.chat.id, message.message_id, text)
         if not self._bot_is_target(message):
             return
@@ -352,9 +341,8 @@ class AIAgentKnowledgeRuntime:
             reply = ChatAssistantService().answer(db=db, telegram_id=str(message.from_user.id), user_message=expert_request)
             from src.services.telegram_answer_ui import format_assistant_answer
             await message.reply(format_assistant_answer(reply), parse_mode="HTML", disable_web_page_preview=True)
-        except Exception as exc:
-            if exc.__class__.__name__ == "ChatAssistantError" and str(exc).startswith("تعداد پیام"):
-                await message.reply(str(exc))
+        except Exception:
+            pass
 
     def _sync_in_thread(self, since: datetime) -> tuple[list[dict], dict | None, set[int]]:
         db = SessionLocal()
