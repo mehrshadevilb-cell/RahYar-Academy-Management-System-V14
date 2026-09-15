@@ -64,6 +64,36 @@ class AIAgentSelfChecker:
             return CheckResult("syntax", False, " | ".join(errors))
         return CheckResult("syntax", True, f"AST parse passed ({len(files)} Python files)")
 
+    def _check_migration_ids(self) -> CheckResult:
+        root = self.repo / "alembic" / "versions"
+        if not root.is_dir():
+            return CheckResult("migrations", False, "alembic/versions is missing")
+        seen: dict[str, str] = {}
+        duplicates: list[str] = []
+        for path in sorted(root.glob("*.py")):
+            try:
+                tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            except (OSError, SyntaxError):
+                continue
+            for node in tree.body:
+                if not isinstance(node, ast.Assign):
+                    continue
+                for target in node.targets:
+                    if isinstance(target, ast.Name) and target.id == "revision":
+                        try:
+                            value = ast.literal_eval(node.value)
+                        except (ValueError, TypeError):
+                            continue
+                        if isinstance(value, str):
+                            previous = seen.get(value)
+                            if previous:
+                                duplicates.append(f"{value}: {previous}, {path.name}")
+                            else:
+                                seen[value] = path.name
+        if duplicates:
+            return CheckResult("migrations", False, "duplicate revision ids: " + " | ".join(duplicates[:6]))
+        return CheckResult("migrations", True, f"unique revision ids ({len(seen)})")
+
     def _check_imports(self) -> CheckResult:
         probe = (
             "import src.main; import src.bot.bot; import src.services.ai_agent_runtime; "
@@ -110,6 +140,7 @@ class AIAgentSelfChecker:
         return [
             self._check_layout(),
             self._check_python_syntax(),
+            self._check_migration_ids(),
             self._check_imports(),
             self._check_git(),
         ]
