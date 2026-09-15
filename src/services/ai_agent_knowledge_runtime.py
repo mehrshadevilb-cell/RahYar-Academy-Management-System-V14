@@ -27,6 +27,7 @@ from src.database.models.knowledge import KnowledgeItem, QuizQuestion
 from src.database.session import SessionLocal
 
 MAX_SOURCE_CHARS = 12000
+MAX_QUIZZES_PER_DAY = 2
 
 OFFICIAL_SOURCES = {
     "waves_news": "https://www.waves.com/news",
@@ -206,27 +207,56 @@ class AIAgentKnowledgeRuntime:
             for item in items
         )
 
-    def generate_quiz(self, db: Session, count: int = 5) -> int:
-        items = db.scalars(select(KnowledgeItem).where(KnowledgeItem.quiz_ready.is_(True)).order_by(desc(KnowledgeItem.created_at)).limit(15)).all()
+    @staticmethod
+    def _normalize_quiz_text(value: str) -> str:
+        value = re.sub(r"[^\w\u0600-\u06ff]+", " ", (value or "").casefold())
+        return re.sub(r"\s+", " ", value).strip()
+
+    def _quiz_questions_today(self, db: Session) -> int:
+        start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        return int(db.scalar(select(QuizQuestion.id).where(QuizQuestion.created_at >= start).count() if False else select(QuizQuestion.id).where(QuizQuestion.created_at >= start).with_only_columns(QuizQuestion.id).order_by(None).limit(MAX_QUIZZES_PER_DAY)) is not None)
+
+    def _quiz_count_today(self, db: Session) -> int:
+        start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        rows = db.scalars(select(QuizQuestion.id).where(QuizQuestion.created_at >= start)).all()
+        return len(rows)
+
+    def generate_quiz(self, db: Session, count: int = 1) -> int:
+        if self._quiz_count_today(db) >= MAX_QUIZZES_PER_DAY:
+            return 0
+        items = db.scalars(select(KnowledgeItem).where(KnowledgeItem.quiz_ready.is_(True)).order_by(desc(KnowledgeItem.created_at)).limit(20)).all()
         if not items:
             return 0
+        existing_questions = db.scalars(select(QuizQuestion.question).order_by(desc(QuizQuestion.created_at)).limit(100)).all()
+        existing_normalized = {self._normalize_quiz_text(q) for q in existing_questions}
         context = "\n\n".join((item.translated_text or item.summary or item.raw_text)[:2500] for item in items)
+        previous = "\n".join(f"- {q[:500]}" for q in existing_questions[-30:])
         raw = self._request_ai(
-            "Create exactly %d Persian multiple-choice quiz questions from the supplied learning notes. Return ONLY JSON array. Each item: question, options (exactly 4 strings), correct_option (1-4), explanation. Test understanding, not obscure trivia.\n\nNOTES:\n%s" % (count, context),
+            "Create exactly %d Persian multiple-choice quiz question from the supplied learning notes. "
+            "Return ONLY a JSON array. Each item: question, options (exactly 4 strings), correct_option (1-4), explanation. "
+            "The question MUST test a concept that is not already asked in the previous questions. Do not paraphrase or repeat them. "
+            "Test understanding, not obscure trivia.\n\nPREVIOUS QUESTIONS TO AVOID:\n%s\n\nNOTES:\n%s" % (count, previous, context),
             1800,
         )
         data = json.loads(re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.I))
         made = 0
         for row in data[:count]:
+            if self._quiz_count_today(db) >= MAX_QUIZZES_PER_DAY:
+                break
+            question = str(row.get("question", "")).strip() if isinstance(row, dict) else ""
+            normalized = self._normalize_quiz_text(question)
             options = row.get("options", []) if isinstance(row, dict) else []
             correct = int(row.get("correct_option", 0)) if isinstance(row, dict) else 0
+            if not question or normalized in existing_normalized:
+                continue
             if not isinstance(options, list) or len(options) != 4 or correct not in (1, 2, 3, 4):
                 continue
             db.add(QuizQuestion(
-                knowledge_item_id=items[0].id, question=str(row.get("question", ""))[:4000],
+                knowledge_item_id=items[0].id, question=question[:4000],
                 option_a=str(options[0])[:500], option_b=str(options[1])[:500], option_c=str(options[2])[:500], option_d=str(options[3])[:500],
                 correct_option=correct, explanation=str(row.get("explanation", ""))[:3000],
             ))
+            existing_normalized.add(normalized)
             made += 1
         db.commit()
         return made
@@ -238,8 +268,11 @@ class AIAgentKnowledgeRuntime:
     def _bot_is_target(self, message: Message) -> bool:
         if message.reply_to_message and message.reply_to_message.from_user and message.reply_to_message.from_user.is_bot:
             return True
-        username = (self.settings.BOT_USERNAME or "").lstrip("@").lower()
-        return bool(username and f"@{username}" in (message.text or "").lower())
+        username = (self.settings.BOT_USERNAME or "").lstrip("@").casefold()
+        if not username:
+            return False
+        text = (message.text or message.caption or "").casefold()
+        return bool(re.search(rf"(?:^|\s)@{re.escape(username)}(?:\b|$)", text))
 
     async def observe_telegram_message(self, message: Message, db: Session) -> None:
         if not self.settings.KNOWLEDGE_ENABLED:
@@ -251,13 +284,13 @@ class AIAgentKnowledgeRuntime:
         if len(text) < 5:
             return
         self.ingest_group_message(db, message.chat.id, message.message_id, text)
-        if not (self._looks_like_question(text) or self._bot_is_target(message)):
+        # The knowledge worker must stay quiet in group chat unless the user
+        # explicitly addresses the bot. It still ingests ordinary messages.
+        if not self._bot_is_target(message):
             return
         try:
             from src.services.chat_assistant_service import ChatAssistantError, ChatAssistantService
             await message.bot.send_chat_action(message.chat.id, "typing")
-            # Give the assistant an explicit expert brief so group questions are
-            # answered from evidence, not a shallow one-line guess.
             expert_request = (
                 "به‌عنوان مدرس و کارشناس حرفه‌ای موسیقی پاسخ بده. سؤال را کامل بررسی کن، "
                 "منظور کاربر و زمینه فنی آن را استخراج کن و اگر اطلاعات نسخه‌ای/فنی لازم است "
@@ -291,9 +324,9 @@ class AIAgentKnowledgeRuntime:
             if not groups:
                 groups = {int(x) for x in db.scalars(select(KnowledgeItem.source_chat_id).where(KnowledgeItem.source_type == "telegram", KnowledgeItem.source_chat_id.is_not(None)).distinct()).all()}
             quiz = None
-            if self.settings.KNOWLEDGE_AUTO_QUIZ:
+            if self.settings.KNOWLEDGE_AUTO_QUIZ and self._quiz_count_today(db) < MAX_QUIZZES_PER_DAY:
                 before = db.scalar(select(QuizQuestion.id).order_by(desc(QuizQuestion.created_at)))
-                self.generate_quiz(db, 5)
+                self.generate_quiz(db, 1)
                 after = db.scalar(select(QuizQuestion).order_by(desc(QuizQuestion.created_at)))
                 if after and (before is None or after.id != before):
                     quiz = {"question": after.question[:280], "options": [after.option_a, after.option_b, after.option_c, after.option_d], "correct": after.correct_option - 1, "explanation": (after.explanation or "")[:200]}
