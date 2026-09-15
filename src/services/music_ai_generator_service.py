@@ -44,6 +44,31 @@ class MusicAIGeneratorService:
             return None
 
     @staticmethod
+    def _response_text(data: dict[str, Any]) -> str:
+        choices = data.get("choices") or []
+        if choices and isinstance(choices[0], dict):
+            message = choices[0].get("message") or {}
+            content = message.get("content", "") if isinstance(message, dict) else ""
+            if isinstance(content, str):
+                return content
+            if isinstance(content, list):
+                return "".join(str(x.get("text", "")) for x in content if isinstance(x, dict))
+        # Google Gemini native response.
+        parts: list[str] = []
+        for candidate in data.get("candidates", []) if isinstance(data.get("candidates"), list) else []:
+            content = candidate.get("content", {}) if isinstance(candidate, dict) else {}
+            for part in content.get("parts", []) if isinstance(content, dict) else []:
+                if isinstance(part, dict) and part.get("text"):
+                    parts.append(str(part["text"]))
+        if parts:
+            return "".join(parts)
+        # Anthropic native response.
+        content = data.get("content")
+        if isinstance(content, list):
+            return "".join(str(part.get("text", "")) for part in content if isinstance(part, dict) and part.get("text"))
+        return ""
+
+    @staticmethod
     def _validate_plan(plan: dict[str, Any]) -> None:
         tracks = plan.get("tracks")
         if not isinstance(tracks, list) or not tracks:
@@ -86,26 +111,22 @@ never random note soup. Respect explicit constraints over defaults. Keep the
 result useful in a real DAW. Never return markdown, commentary, or code fences."""
         last_error: Exception | None = None
         for _ in range(self.MAX_PLAN_ATTEMPTS):
+            result: dict[str, Any] = {}
             try:
                 result = self.router.chat([
                     {"role": "system", "content": system},
                     {"role": "user", "content": f"Output type: {output}\nVariation: {variation}\nUser request: {prompt}"},
                 ], temperature=0.35, timeout_seconds=90)
-                content = self.router._extract_text(result, str(result.get("_rahyar_provider_type") or "openai_compatible"))
-                if not content:
-                    choices = result.get("choices") or []
-                    content = ((choices[0].get("message") or {}).get("content") if choices else "")
-                    if isinstance(content, list):
-                        content = "".join(str(x.get("text", "")) for x in content if isinstance(x, dict))
-                plan = self._extract_json_object(str(content or ""))
+                content = self._response_text(result)
+                plan = self._extract_json_object(content)
                 if plan is None:
                     raise MusicAIGeneratorError("مدل AI پاسخ موسیقایی قابل‌خواندن تولید نکرد.")
                 self._validate_plan(plan)
                 return plan
             except (MusicAIGeneratorError, ValueError, TypeError) as exc:
                 last_error = exc
-                provider = str(result.get("_rahyar_provider") or "") if "result" in locals() and isinstance(result, dict) else ""
-                model = str(result.get("_rahyar_model") or "") if "result" in locals() and isinstance(result, dict) else ""
+                provider = str(result.get("_rahyar_provider") or "")
+                model = str(result.get("_rahyar_model") or "")
                 if provider and model:
                     self.router._model_cooldown_until[f"{provider}:{model}"] = time.time() + 20
                 continue
