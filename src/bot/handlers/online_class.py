@@ -12,6 +12,7 @@ from src.services.online_course_service import OnlineCourseService
 from src.services.online_enrollment_service import OnlineEnrollmentService
 from src.services.reservation_service import ReservationService
 from src.services.profile_service import ProfileService
+from src.services.payment_card_service import PaymentCardService
 from src.database.repositories.telegram_repository import TelegramRepository
 from src.core.config.settings import get_settings
 from src.core.utils.jalali import (
@@ -28,6 +29,7 @@ online_course_service = OnlineCourseService()
 online_enrollment_service = OnlineEnrollmentService()
 reservation_service = ReservationService()
 profile_service = ProfileService()
+payment_card_service = PaymentCardService()
 telegram_repository = TelegramRepository()
 
 settings = get_settings()
@@ -191,7 +193,7 @@ async def reservation_date_typed_fallback(message: Message):
 
 
 @router.message(ReservationState.waiting_time)
-async def reservation_get_time(message: Message, state: FSMContext, bot: Bot, db):
+async def reservation_get_time(message: Message, state: FSMContext, db):
 
     text = (message.text or "").strip()
 
@@ -222,23 +224,88 @@ async def reservation_get_time(message: Message, state: FSMContext, bot: Bot, db
         await message.answer("⚠️ این زمان را قبلاً درخواست کرده‌اید و هنوز باز است.")
         return
 
-    await state.clear()
+    card = payment_card_service.get_active_card(db)
+    if not card:
+        await state.clear()
+        await message.answer(
+            "⚠️ رزرو ثبت شد ولی کارت پرداخت فعال نیست. "
+            "لطفاً با پشتیبانی تماس بگیرید."
+        )
+        return
 
-    student = profile_service.get_profile_by_id(db, enrollment.user_id)
+    await state.update_data(reservation_id=reservation.id)
+    await state.set_state(ReservationState.waiting_payment_proof)
 
     await message.answer(
-        "✅ درخواست رزرو شما ثبت شد و پس از تایید ادمین به شما اطلاع داده می‌شود."
+        f"✅ زمان رزرو ثبت شد.\n\n"
+        f"📆 {requested_date} - ⏰ {text}\n\n"
+        f"💳 برای تکمیل رزرو، مبلغ جلسه را به کارت زیر واریز کنید:\n\n"
+        f"شماره کارت:\n{card.card_number}\n\n"
+        f"به نام:\n{card.card_holder}\n\n"
+        f"پس از واریز، عکس یا فایل رسید را همینجا ارسال کنید."
     )
 
-    await bot.send_message(
-        chat_id=settings.OWNER_ID,
-        text=f"""
-📅 درخواست رزرو جدید
 
-🎼 کلاس: {enrollment.online_course.name}
-👤 هنرجو: {student.full_name if student else enrollment.user_id}
-📆 تاریخ: {requested_date}
-⏰ ساعت: {text}
-""",
-        reply_markup=reservation_review_keyboard(reservation.id),
+@router.message(
+    ReservationState.waiting_payment_proof,
+    F.photo | F.document,
+)
+async def reservation_receive_proof(message: Message, state: FSMContext, bot: Bot, db):
+
+    data = await state.get_data()
+    reservation_id = data.get("reservation_id")
+
+    reservation = reservation_service.get_by_id(db, reservation_id) if reservation_id else None
+    if not reservation:
+        await message.answer("❌ رزرو پیدا نشد. لطفاً دوباره از منوی کلاس آنلاین اقدام کنید.")
+        await state.clear()
+        return
+
+    file_id = (
+        message.photo[-1].file_id
+        if message.photo
+        else message.document.file_id
+    )
+
+    reservation = reservation_service.submit_payment(db, reservation.id, proof=file_id)
+    await state.clear()
+
+    enrollment = online_enrollment_service.get_by_id(db, reservation.enrollment_id)
+    student = profile_service.get_profile_by_id(db, enrollment.user_id) if enrollment else None
+    course_name = enrollment.online_course.name if enrollment and enrollment.online_course else "—"
+
+    await message.answer(
+        "✅ رسید شما دریافت شد.\n"
+        "پس از تایید ادمین، نتیجه رزرو به شما اطلاع داده می‌شود."
+    )
+
+    admin_caption = (
+        f"📅 درخواست رزرو + رسید پرداخت\n\n"
+        f"🎼 کلاس: {course_name}\n"
+        f"👤 هنرجو: {student.full_name if student else enrollment.user_id}\n"
+        f"📆 تاریخ: {reservation.requested_date}\n"
+        f"⏰ ساعت: {reservation.requested_time}\n"
+        f"🆔 رزرو: #{reservation.id}"
+    )
+
+    if message.photo:
+        await bot.send_photo(
+            chat_id=settings.OWNER_ID,
+            photo=file_id,
+            caption=admin_caption,
+            reply_markup=reservation_review_keyboard(reservation.id),
+        )
+    else:
+        await bot.send_document(
+            chat_id=settings.OWNER_ID,
+            document=file_id,
+            caption=admin_caption,
+            reply_markup=reservation_review_keyboard(reservation.id),
+        )
+
+
+@router.message(ReservationState.waiting_payment_proof)
+async def reservation_payment_proof_fallback(message: Message):
+    await message.answer(
+        "لطفاً عکس یا فایل رسید پرداخت را ارسال کنید."
     )
