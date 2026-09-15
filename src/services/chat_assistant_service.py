@@ -30,7 +30,7 @@ SYSTEM_PROMPT_FA = """
 دانش تو توسط AI Agent از پیام‌های گروه آکادمی و منابع رسمی Waves و iZotope Ozone جمع‌آوری،
 ترجمه و به‌روزرسانی می‌شود. برای اطلاعات متغیر مثل قیمت و وضعیت پرداخت فقط از داده‌های فعلی
 ربات استفاده کن. اگر چیزی در context نیست حدس نزن.
-هرگز اطلاعات خصوصی کاربران، اطلاعات پرداخت، کلید API یا داده محرمانه را بازگو نکن.
+هرگز اطلاعات خصوصی کاربران، اطلاعات پرداخت، شماره کارت، کلید API یا داده محرمانه را بازگو نکن.
 اگر سؤال درباره پرداخت/شکایت/دسترسی اختصاصی است، کاربر را به «🆘 پشتیبانی» ارجاع بده.
 """
 
@@ -51,6 +51,8 @@ class ChatAssistantService:
         if not self.settings.CHAT_ASSISTANT_ENABLED:
             raise ChatAssistantError("disabled")
         if not self.router.providers():
+            if not getattr(self.settings, "effective_chat_api_key", None):
+                raise ChatAssistantError("API_KEY not configured")
             raise ChatAssistantError("not_configured")
 
     def _check_rate_limit(self, telegram_id: str) -> None:
@@ -69,7 +71,7 @@ class ChatAssistantService:
         lines = ["دوره‌های دیجیتال فعال فعلی:"]
         courses = self.course_service.get_courses(db)
         if not courses:
-            lines.append("- فعلاً دوره دیجیتالی فعالی نیست.")
+            lines.append("- در حال حاضر دوره دیجیتالی فعال نیست.")
         for course in courses:
             price = f"{course.price:,} تومان" if course.price else "رایگان"
             delivery = "SpotPlayer" if course.delivery_type == ProductDeliveryType.SPOTPLAYER else "کانال تلگرام"
@@ -77,7 +79,7 @@ class ChatAssistantService:
         lines.append("\nکلاس‌های آنلاین فعال فعلی:")
         online_courses = self.online_course_service.get_active_courses(db)
         if not online_courses:
-            lines.append("- فعلاً کلاس آنلاینی تعریف نشده است.")
+            lines.append("- در حال حاضر کلاس آنلاین فعالی تعریف نشده است.")
         for oc in online_courses:
             monthly = f"{oc.monthly_price:,} تومان" if oc.monthly_price else "-"
             term = f"{oc.term_price:,} تومان" if oc.term_price else "-"
@@ -96,10 +98,10 @@ class ChatAssistantService:
             raise ChatAssistantError("provider_unavailable") from exc
 
     def answer(self, db: Session, telegram_id: str, user_message: str) -> str:
-        self._check_enabled()
         text = (user_message or "").strip()
         if not text:
             raise ChatAssistantError("empty_message")
+        self._check_enabled()
         text = text[:MAX_USER_MESSAGE_CHARS]
         self._check_rate_limit(telegram_id)
         from src.services.ai_agent_knowledge_runtime import AIAgentKnowledgeRuntime
