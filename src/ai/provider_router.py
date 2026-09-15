@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 import urllib.error
 import urllib.request
@@ -32,25 +33,27 @@ class AIProviderError(RuntimeError):
 class AIProviderRouter:
     """OpenAI-compatible provider pool with automatic failover.
 
-    Configure AI_PROVIDERS_JSON as an array of provider objects. API keys should
-    normally be referenced through api_key_env so secrets stay outside source:
-
-    [{"name":"provider-a","api_key_env":"AI_PROVIDER_A_KEY",
-      "base_url":"https://example.com/v1","model":"model-a","priority":10},
-     {"name":"provider-b","api_key_env":"AI_PROVIDER_B_KEY",
-      "base_url":"https://example.org/v1","model":"model-b","priority":20}]
-
-    The legacy AI_API_KEY/AI_BASE_URL/AI_MODEL configuration remains a single
-    implicit provider when AI_PROVIDERS_JSON is empty.
+    Supports explicit AI_PROVIDERS_JSON plus the convenient Render ENV pairs:
+    AI_* (primary) and AI2_* (secondary). Providers are tried by priority.
     """
 
     def __init__(self) -> None:
         self.settings = get_settings()
         self._cooldown_until: dict[str, float] = {}
 
+    @staticmethod
+    def _provider_from_env(name: str, key_var: str, url_var: str, model_var: str, priority: int) -> AIProvider | None:
+        key = (os.getenv(key_var) or "").strip()
+        base_url = (os.getenv(url_var) or "").strip().rstrip("/")
+        model = (os.getenv(model_var) or "").strip()
+        if not (key and base_url and model):
+            return None
+        return AIProvider(name, key, base_url, model, priority)
+
     def _parse(self) -> list[AIProvider]:
         raw = (self.settings.AI_PROVIDERS_JSON or "").strip()
         providers: list[AIProvider] = []
+
         if raw:
             try:
                 rows = json.loads(raw)
@@ -61,7 +64,6 @@ class AIProviderRouter:
             for index, row in enumerate(rows):
                 if not isinstance(row, dict) or row.get("enabled", True) is False:
                     continue
-                import os
                 key = str(row.get("api_key", "") or "")
                 key_env = str(row.get("api_key_env", "") or "")
                 if key_env:
@@ -71,8 +73,31 @@ class AIProviderRouter:
                 name = str(row.get("name", f"provider-{index + 1}") or f"provider-{index + 1}")
                 if key and base_url and model:
                     providers.append(AIProvider(name, key, base_url, model, int(row.get("priority", 100))))
+
+        # Explicit JSON pool wins; otherwise build the pool directly from ENV.
+        if not providers:
+            primary = self._provider_from_env(
+                "primary", "AI_API_KEY", "AI_BASE_URL", "AI_MODEL", 10
+            )
+            if primary:
+                providers.append(primary)
+            secondary = self._provider_from_env(
+                "secondary", "AI2_API_KEY", "AI2_BASE_URL", "AI2_MODEL", 20
+            )
+            if secondary:
+                providers.append(secondary)
+
+        # Legacy AI_AGENT_* remains a fallback when AI_* is not configured.
         if not providers and self.settings.effective_ai_api_key:
-            providers.append(AIProvider("primary", self.settings.effective_ai_api_key, self.settings.effective_ai_base_url, self.settings.effective_ai_model, 100))
+            providers.append(
+                AIProvider(
+                    "primary",
+                    self.settings.effective_ai_api_key,
+                    self.settings.effective_ai_base_url,
+                    self.settings.effective_ai_model,
+                    10,
+                )
+            )
         return sorted(providers, key=lambda p: p.priority)
 
     def providers(self) -> list[AIProvider]:
@@ -110,7 +135,7 @@ class AIProviderRouter:
         if code == 429:
             return True
         lowered = body.lower()
-        return code in {402, 403} and ("rate" in lowered or "capacity" in lowered or "quota" in lowered)
+        return code in {402, 403} and any(x in lowered for x in ("rate", "capacity", "quota", "limit"))
 
     def chat(self, messages: list[dict[str, Any]], **kwargs: Any) -> dict[str, Any]:
         providers = self.providers()
@@ -118,14 +143,14 @@ class AIProviderRouter:
             raise AIProviderError("No AI provider is configured")
         last: AIProviderError | None = None
         for provider in providers:
-            now = time.time()
-            if self._cooldown_until.get(provider.name, 0) > now:
+            if self._cooldown_until.get(provider.name, 0) > time.time():
                 continue
             payload = {"model": provider.model, "messages": messages, **kwargs}
             request = urllib.request.Request(
                 provider.base_url.rstrip("/") + "/chat/completions",
                 data=json.dumps(payload).encode("utf-8"),
-                headers=self._headers(provider), method="POST",
+                headers=self._headers(provider),
+                method="POST",
             )
             try:
                 with urllib.request.urlopen(request, timeout=min(max(self.settings.AI_AGENT_TIMEOUT_SECONDS, 5), 180)) as response:
@@ -145,18 +170,31 @@ class AIProviderRouter:
                 if self._is_rate_limited(exc.code, body):
                     cooldown = retry_after or 300
                     self._cooldown_until[provider.name] = time.time() + min(cooldown, 86400)
-                    last = AIProviderError(f"provider rate limited: {provider.name}", retryable=True, retry_after=cooldown, provider=provider.name)
+                    last = AIProviderError(
+                        f"provider rate limited: {provider.name}",
+                        retryable=True,
+                        retry_after=cooldown,
+                        provider=provider.name,
+                    )
                     continue
                 last = AIProviderError(f"provider HTTP {exc.code}: {provider.name}", provider=provider.name)
                 continue
-            except (urllib.error.URLError, TimeoutError) as exc:
+            except (urllib.error.URLError, TimeoutError):
                 last = AIProviderError(f"provider unavailable: {provider.name}", retryable=True, provider=provider.name)
                 continue
-            except (json.JSONDecodeError, ValueError, TypeError) as exc:
+            except (json.JSONDecodeError, ValueError, TypeError):
                 last = AIProviderError(f"provider returned invalid response: {provider.name}", provider=provider.name)
                 continue
         raise last or AIProviderError("All configured AI providers are cooling down", retryable=True)
 
     def status(self) -> list[dict[str, Any]]:
         now = time.time()
-        return [{"name": p.name, "model": p.model, "priority": p.priority, "cooldown_seconds": max(0, int(self._cooldown_until.get(p.name, 0) - now))} for p in self.providers()]
+        return [
+            {
+                "name": p.name,
+                "model": p.model,
+                "priority": p.priority,
+                "cooldown_seconds": max(0, int(self._cooldown_until.get(p.name, 0) - now)),
+            }
+            for p in self.providers()
+        ]
