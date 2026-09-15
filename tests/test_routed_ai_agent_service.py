@@ -5,6 +5,8 @@ from src.ai.provider_router import AIProviderError
 class FakeRouter:
     def __init__(self):
         self.calls = []
+        self._cooldown_until = {}
+        self._model_cooldown_until = {}
         self.provider = type("Provider", (), {"name": "fake", "base_url": "https://free.example/v1", "model": "free-model", "models": ("free-model",)})()
 
     def providers(self):
@@ -82,11 +84,12 @@ def test_routed_agent_status_uses_router_without_legacy_ping(monkeypatch):
     monkeypatch.setattr(service, "_check_enabled", lambda **kwargs: None)
     monkeypatch.setattr(service, "_write_capable", lambda: False)
     monkeypatch.setattr(service, "_has_git", lambda: False)
+    monkeypatch.setattr(service, "_live_agent_probe", lambda: ("fake", "free-model"))
     monkeypatch.setattr(service.settings, "AI_AGENT_ENABLED", True, raising=False)
     result = service.status()
     assert "router_candidates=['fake/free-model [free]']" in result
     assert "router_free_candidates=1" in result
-    assert "provider_ping=deferred_to_router_request" in result
+    assert "model=fake/free-model" in result
 
 
 def test_runtime_agent_is_routed():
