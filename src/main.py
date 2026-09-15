@@ -4,6 +4,7 @@ import threading
 import traceback
 from pathlib import Path
 
+from aiogram.exceptions import TelegramConflictError, TelegramUnauthorizedError
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 import uvicorn
@@ -36,7 +37,7 @@ def _build_id() -> str:
     return "unknown"
 
 
-app = FastAPI(title="RahYar Academy Management System", description="Telegram bot + public sales website sharing one database")
+app = FastAPI(title="RahYar Academy Management System", description="Telegram bot + Web sharing one database")
 app.include_router(storefront_router)
 
 
@@ -58,14 +59,20 @@ async def head_root():
 
 @app.get("/api/status")
 async def api_status():
-    return JSONResponse({"status": "running", "service": "RahYar Bot + Web", "site": settings.SITE_NAME, "build": _build_id(), "chat_assistant": settings.CHAT_ASSISTANT_ENABLED, "knowledge": settings.KNOWLEDGE_ENABLED, "ai_agent_knowledge_runtime": True})
+    return JSONResponse({
+        "status": "running",
+        "service": "RahYar Bot + Web",
+        "site": settings.SITE_NAME,
+        "build": _build_id(),
+        "chat_assistant": settings.CHAT_ASSISTANT_ENABLED,
+        "knowledge": settings.KNOWLEDGE_ENABLED,
+        "ai_agent_knowledge_runtime": True,
+        "telegram_polling": True,
+    })
 
 
 @app.get("/api/debug-storefront")
 async def debug_storefront():
-    # This endpoint exposes filesystem/template diagnostics and must never be
-    # reachable on a production deployment. Keep it available for local/debug
-    # troubleshooting only.
     if not settings.DEBUG:
         return JSONResponse(status_code=404, content={"detail": "Not Found"})
 
@@ -114,9 +121,53 @@ async def _auto_configure_ai_at_startup() -> None:
         result = await asyncio.to_thread(run)
         logger.info("AI auto-configuration completed: %s", result)
     except Exception:
-        # AI providers are optional. The bot must still boot when no provider key
-        # is configured or a third-party gateway is temporarily unavailable.
         logger.exception("AI auto-configuration failed; continuing startup")
+
+
+async def _prepare_telegram_polling() -> None:
+    """Validate the token and clear webhook state before starting getUpdates."""
+    me = await bot.get_me()
+    logger.info("Telegram bot authenticated: @%s (id=%s)", me.username or "unknown", me.id)
+    await bot.delete_webhook(drop_pending_updates=True)
+    logger.info("Telegram webhook cleared; polling can start")
+
+
+async def _poll_telegram_forever() -> None:
+    """Keep polling alive through transient Telegram/network failures."""
+    restart_delay = max(2, int(os.getenv("TELEGRAM_POLLING_RESTART_DELAY_SECONDS", "5")))
+    max_delay = max(restart_delay, int(os.getenv("TELEGRAM_POLLING_MAX_RESTART_DELAY_SECONDS", "60")))
+    consecutive_failures = 0
+
+    while True:
+        try:
+            await _prepare_telegram_polling()
+            consecutive_failures = 0
+            logger.info("Starting Telegram long-polling; build=%s", _build_id())
+            await dp.start_polling(
+                bot,
+                allowed_updates=dp.resolve_used_update_types(),
+                handle_signals=False,
+            )
+            logger.warning("Telegram polling stopped without an exception; restarting")
+            consecutive_failures += 1
+        except TelegramUnauthorizedError:
+            logger.critical("Telegram bot token is invalid or revoked; polling cannot continue")
+            raise
+        except TelegramConflictError:
+            consecutive_failures += 1
+            logger.error(
+                "Telegram polling conflict (another getUpdates consumer is active); "
+                "retrying after %ss",
+                min(max_delay, restart_delay * min(2 ** (consecutive_failures - 1), 8)),
+            )
+        except (asyncio.CancelledError, KeyboardInterrupt):
+            raise
+        except Exception:
+            consecutive_failures += 1
+            logger.exception("Telegram polling crashed; will restart")
+
+        delay = min(max_delay, restart_delay * min(2 ** max(consecutive_failures - 1, 0), 8))
+        await asyncio.sleep(delay)
 
 
 async def start_bot():
@@ -126,18 +177,13 @@ async def start_bot():
     seed_default_online_courses()
     await _auto_configure_ai_at_startup()
     setup_handlers()
-    try:
-        await bot.delete_webhook(drop_pending_updates=True)
-        logger.info("Telegram webhook cleared; starting long-polling")
-    except Exception:
-        logger.exception("Failed to delete Telegram webhook; continuing to poll")
 
     installment_scheduler = InstallmentReminderScheduler(bot)
     installment_scheduler.start()
     ai_agent_knowledge.start()
 
     try:
-        await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types(), handle_signals=False)
+        await _poll_telegram_forever()
     finally:
         await ai_agent_knowledge.stop()
         if installment_scheduler._task:
