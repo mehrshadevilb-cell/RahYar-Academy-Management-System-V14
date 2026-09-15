@@ -4,7 +4,6 @@ from src.database.base import Base
 from src.database.session import engine
 
 # Import all models so SQLAlchemy registers them on Base.metadata.
-# Keep in sync with alembic/env.py.
 from src.database.models.user import User  # noqa: F401
 from src.database.models.telegram_account import TelegramAccount  # noqa: F401
 from src.database.models.course import Course  # noqa: F401
@@ -26,16 +25,14 @@ from src.database.models.admin_log import AdminLog  # noqa: F401
 from src.database.models.referral import Referral  # noqa: F401
 from src.database.models.support_request import SupportRequest  # noqa: F401
 from src.database.models.assignment import Assignment, AssignmentSubmission  # noqa: F401
+from src.database.models.knowledge import KnowledgeItem, QuizQuestion  # noqa: F401
 
 
 def init_database():
     """Dev/test helper only. Production schema is owned by Alembic."""
     env = (os.getenv("APP_ENV") or os.getenv("ENVIRONMENT") or "").strip().lower()
     if env in {"production", "prod", "staging"}:
-        raise RuntimeError(
-            "init_database() is blocked when APP_ENV/ENVIRONMENT is production/staging. "
-            "Use: alembic upgrade head"
-        )
+        raise RuntimeError("init_database() is blocked in production/staging. Use: alembic upgrade head")
     Base.metadata.create_all(bind=engine)
 
 
