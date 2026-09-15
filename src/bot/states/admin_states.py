@@ -40,3 +40,4 @@ class AdminState(StatesGroup):
 
     # --- AI Developer Agent ---
     waiting_ai_task = State()
+    waiting_ai_consult = State()
