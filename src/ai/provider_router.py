@@ -84,7 +84,6 @@ class AIProviderRouter:
             return False
 
     def _from_database(self) -> list[AIProvider]:
-        """Load active DB providers and order their models free-first."""
         try:
             from src.database.models.ai_provider import AIProvider as DBProvider
             from src.database.session import SessionLocal
@@ -126,11 +125,6 @@ class AIProviderRouter:
             return []
 
     def _env_providers(self) -> list[AIProvider]:
-        """Load explicit legacy env providers even when DB providers exist.
-
-        This prevents a stale DB pool from silently shadowing a corrected
-        deployment credential configured through AI_API_KEY/AI2_API_KEY.
-        """
         providers: list[AIProvider] = []
         primary = self._provider_from_env("primary", "AI_API_KEY", "AI_BASE_URL", "AI_MODEL", 10)
         if primary:
@@ -152,7 +146,6 @@ class AIProviderRouter:
 
     @staticmethod
     def _merge_providers(providers: list[AIProvider]) -> list[AIProvider]:
-        """Deduplicate equivalent provider/model routes while preserving priority."""
         merged: dict[tuple[str, str, str], AIProvider] = {}
         for provider in providers:
             for model in provider.models:
@@ -171,7 +164,6 @@ class AIProviderRouter:
 
     def _parse(self) -> list[AIProvider]:
         db_providers = self._from_database()
-
         raw = (self.settings.AI_PROVIDERS_JSON or "").strip()
         configured: list[AIProvider] = []
         if raw:
@@ -208,10 +200,6 @@ class AIProviderRouter:
                             priority=int(row.get("priority", 100)),
                         )
                     )
-
-        # Explicit JSON routes are authoritative for that route, but DB and
-        # legacy env routes remain available as failover candidates. This is
-        # especially important when a deployment rotates an API credential.
         candidates = configured + db_providers + self._env_providers()
         if not candidates:
             raise AIProviderError("No AI provider is configured")
@@ -255,13 +243,67 @@ class AIProviderRouter:
         return code in {402, 403} and any(x in lowered for x in ("rate", "capacity", "quota", "limit"))
 
     def _ordered_candidates(self, providers: list[AIProvider]) -> list[tuple[AIProvider, str]]:
-        """Flatten the pool so no paid model is attempted before free candidates."""
         candidates: list[tuple[AIProvider, str]] = []
         for provider in providers:
             for model in provider.models:
                 candidates.append((provider, model))
         candidates.sort(key=lambda item: (not self._is_free_model(item[1]), item[0].priority, item[1]))
         return candidates
+
+    def test_models(self, *, timeout_seconds: int = 15) -> list[dict[str, Any]]:
+        """Live-test every configured provider/model route independently.
+
+        This intentionally bypasses normal routing/cooldowns: the purpose is
+        to answer "what can work right now?" rather than "what would routing
+        choose?". It sends a tiny deterministic completion request and never
+        returns credentials or endpoint URLs.
+        """
+        providers = self.providers()
+        results: list[dict[str, Any]] = []
+        timeout = max(5, min(int(timeout_seconds), 60))
+        for provider, model in self._ordered_candidates(providers):
+            started = time.perf_counter()
+            payload = {
+                "model": model,
+                "messages": [{"role": "user", "content": "Reply with exactly: OK"}],
+                "max_tokens": 8,
+                "temperature": 0,
+            }
+            request = urllib.request.Request(
+                provider.base_url.rstrip("/") + "/chat/completions",
+                data=json.dumps(payload).encode("utf-8"),
+                headers=self._headers(provider),
+                method="POST",
+            )
+            row: dict[str, Any] = {
+                "provider": provider.name,
+                "model": model,
+                "free": self._is_free_model(model),
+                "ok": False,
+                "latency_ms": 0,
+                "status": "unknown",
+            }
+            try:
+                with urllib.request.urlopen(request, timeout=timeout) as response:
+                    data = json.loads(response.read().decode("utf-8"))
+                content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                row.update(ok=True, status="ok", response="OK" if str(content).strip() else "empty")
+            except urllib.error.HTTPError as exc:
+                body = ""
+                try:
+                    body = exc.read().decode("utf-8", errors="replace")[:300]
+                except Exception:
+                    pass
+                retry_after = self._retry_after(exc.headers, body)
+                row.update(status=f"http_{exc.code}", retry_after=retry_after)
+            except (urllib.error.URLError, TimeoutError, OSError) as exc:
+                row.update(status=f"unavailable:{type(exc).__name__}")
+            except (json.JSONDecodeError, KeyError, IndexError, TypeError) as exc:
+                row.update(status=f"invalid_response:{type(exc).__name__}")
+            finally:
+                row["latency_ms"] = round((time.perf_counter() - started) * 1000)
+            results.append(row)
+        return results
 
     def chat(self, messages: list[dict[str, Any]], **kwargs: Any) -> dict[str, Any]:
         providers = self.providers()
@@ -282,7 +324,6 @@ class AIProviderRouter:
                 continue
             if self._model_cooldown_until.get(model_key, 0) > now:
                 continue
-
             payload = {"model": model, "messages": messages, **kwargs}
             request = urllib.request.Request(
                 provider.base_url.rstrip("/") + "/chat/completions",
@@ -310,40 +351,18 @@ class AIProviderRouter:
                 if self._is_rate_limited(exc.code, body):
                     cooldown = min(retry_after or 300, 86400)
                     self._model_cooldown_until[model_key] = time.time() + cooldown
-                    last = AIProviderError(
-                        f"model rate limited: {provider.name}/{model}",
-                        retryable=True,
-                        retry_after=cooldown,
-                        provider=provider.name,
-                    )
+                    last = AIProviderError(f"model rate limited: {provider.name}/{model}", retryable=True, retry_after=cooldown, provider=provider.name)
                     continue
                 if exc.code in {401, 403}:
-                    # Authentication failures are route-specific. Do not poison
-                    # the whole provider pool: a corrected env route or another
-                    # configured provider must still be allowed to answer.
                     self._model_cooldown_until[model_key] = time.time() + 30
-                    last = AIProviderError(
-                        f"provider authentication failed: {provider.name}/{model}",
-                        retryable=True,
-                        retry_after=30,
-                        provider=provider.name,
-                    )
+                    last = AIProviderError(f"provider authentication failed: {provider.name}/{model}", retryable=True, retry_after=30, provider=provider.name)
                     continue
-                last = AIProviderError(
-                    f"provider request failed: {provider.name}/{model} (HTTP {exc.code})",
-                    retryable=exc.code >= 500,
-                    provider=provider.name,
-                )
+                last = AIProviderError(f"provider request failed: {provider.name}/{model} (HTTP {exc.code})", retryable=exc.code >= 500, provider=provider.name)
                 if exc.code >= 500:
                     self._model_cooldown_until[model_key] = time.time() + 60
                 continue
-            except (urllib.error.URLError, TimeoutError, OSError) as exc:
-                last = AIProviderError(
-                    f"provider unavailable: {provider.name}/{model}",
-                    retryable=True,
-                    retry_after=30,
-                    provider=provider.name,
-                )
+            except (urllib.error.URLError, TimeoutError, OSError):
+                last = AIProviderError(f"provider unavailable: {provider.name}/{model}", retryable=True, retry_after=30, provider=provider.name)
                 self._model_cooldown_until[model_key] = time.time() + 30
                 continue
 
