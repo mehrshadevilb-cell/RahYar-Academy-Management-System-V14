@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 from src.ai.provider_router import AIProviderError, AIProviderRouter
 from src.services.ai_agent_service import AIAgentError, AIAgentService
 from src.services.provider_model_health_service import ProviderModelHealthService
@@ -31,23 +33,64 @@ class RoutedAIAgentService(AIAgentService):
         return super()._model()
 
     def _request_model(self, prompt: str) -> str:
-        try:
-            data = self.router.chat(
-                [
-                    {"role": "system", "content": "You are the RahYar senior software engineer. Follow project architecture. Never include secrets. Return concise engineering output."},
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=0.1,
-                timeout_seconds=self.settings.AI_AGENT_TIMEOUT_SECONDS,
-            )
-            return str(data["choices"][0]["message"]["content"])
-        except AIProviderError as exc:
-            detail = str(exc)
-            if exc.retry_after:
-                detail += f" (retry_after={exc.retry_after}s)"
-            raise AIAgentError(f"AI provider router failed: {detail}") from exc
-        except (KeyError, IndexError, TypeError) as exc:
-            raise AIAgentError("AI provider returned an unexpected response.") from exc
+        messages = [
+            {"role": "system", "content": "You are the RahYar senior software engineer. Follow project architecture. Never include secrets. Return concise engineering output."},
+            {"role": "user", "content": prompt},
+        ]
+        attempts = 0
+        max_attempts = max(1, min(len(self.router.providers()), 12))
+        last_empty_model = ""
+
+        while attempts < max_attempts:
+            attempts += 1
+            try:
+                data = self.router.chat(
+                    messages,
+                    temperature=0.1,
+                    timeout_seconds=self.settings.AI_AGENT_TIMEOUT_SECONDS,
+                )
+                content = data.get("choices", [{}])[0].get("message", {}).get("content")
+                if isinstance(content, list):
+                    content = " ".join(
+                        str(part.get("text", ""))
+                        for part in content
+                        if isinstance(part, dict) and part.get("text")
+                    )
+                content = str(content or "").strip()
+
+                # A HTTP 2xx with an empty/invalid answer is not considered success.
+                # Put that exact model on a short cooldown and immediately ask the
+                # router for the next healthy candidate (free-first ordering remains).
+                if not content:
+                    provider_name = str(data.get("_rahyar_provider") or "")
+                    model_name = str(data.get("_rahyar_model") or "")
+                    model_key = f"{provider_name}:{model_name}"
+                    if model_name and model_key != last_empty_model:
+                        self.router._model_cooldown_until[model_key] = time.time() + 60
+                        last_empty_model = model_key
+                    else:
+                        raise AIProviderError(
+                            "AI provider returned an empty response",
+                            retryable=True,
+                            retry_after=60,
+                            provider=provider_name,
+                        )
+                    continue
+
+                return content
+            except AIProviderError as exc:
+                detail = str(exc)
+                if exc.retry_after:
+                    detail += f" (retry_after={exc.retry_after}s)"
+                # The router already skips failed/rate-limited/auth-failed models
+                # and continues to the next candidate. Do not stop the agent early.
+                if attempts < max_attempts and exc.retryable:
+                    continue
+                raise AIAgentError(f"AI provider router failed: {detail}") from exc
+            except (KeyError, IndexError, TypeError) as exc:
+                raise AIAgentError("AI provider returned an unexpected response.") from exc
+
+        raise AIAgentError("All configured AI models returned no usable output.")
 
     def test_provider_models(self) -> str:
         """Discover the provider catalog and live-test every model it exposes."""
