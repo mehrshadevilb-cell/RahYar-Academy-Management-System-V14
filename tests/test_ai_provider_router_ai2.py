@@ -59,5 +59,5 @@ def test_rate_limit_fails_over_to_ai2(monkeypatch):
         "https://primary.example/v1/chat/completions",
         "https://secondary.example/v1/chat/completions",
     ]
-    assert router.status()[0]["cooldown_seconds"] > 0
+    assert router._model_cooldown_until["primary:primary-model"] > 0
     _clear_settings()
