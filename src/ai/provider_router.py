@@ -115,14 +115,7 @@ class AIProviderRouter:
                     active_models = [m for m in provider.models if m.is_active]
                     if not active_models:
                         continue
-                    active_models.sort(
-                        key=lambda m: (
-                            not self._is_free_model(m),
-                            not m.is_default,
-                            -(m.context_window or 0),
-                            m.model_id,
-                        )
-                    )
+                    active_models.sort(key=lambda m: (not self._is_free_model(m), not m.is_default, -(m.context_window or 0), m.model_id))
                     try:
                         api_key = decrypt_api_key(provider.api_key_encrypted)
                     except Exception:
@@ -153,16 +146,7 @@ class AIProviderRouter:
             providers.append(secondary)
         if not providers and self.settings.effective_ai_api_key:
             base_url = self._normalize_base_url(self.settings.effective_ai_base_url)
-            providers.append(
-                AIProvider(
-                    name="primary",
-                    api_key=self.settings.effective_ai_api_key,
-                    base_url=base_url,
-                    models=(self.settings.effective_ai_model,),
-                    priority=100,
-                    provider_type=self._infer_provider_type("primary", base_url),
-                )
-            )
+            providers.append(AIProvider(name="primary", api_key=self.settings.effective_ai_api_key, base_url=base_url, models=(self.settings.effective_ai_model,), priority=100, provider_type=self._infer_provider_type("primary", base_url)))
         return providers
 
     @staticmethod
@@ -173,15 +157,7 @@ class AIProviderRouter:
                 key = (provider.name.lower(), provider.base_url.rstrip("/"), model)
                 current = merged.get(key)
                 if current is None or provider.priority < current.priority:
-                    merged[key] = AIProvider(
-                        name=provider.name,
-                        api_key=provider.api_key,
-                        base_url=provider.base_url,
-                        models=(model,),
-                        priority=provider.priority,
-                        enabled=provider.enabled,
-                        provider_type=provider.provider_type,
-                    )
+                    merged[key] = AIProvider(name=provider.name, api_key=provider.api_key, base_url=provider.base_url, models=(model,), priority=provider.priority, enabled=provider.enabled, provider_type=provider.provider_type)
         return sorted(merged.values(), key=lambda p: (p.priority, p.name, p.model))
 
     def _parse(self) -> list[AIProvider]:
@@ -204,25 +180,13 @@ class AIProviderRouter:
                     key = os.getenv(key_env, "")
                 base_url = self._normalize_base_url(str(row.get("base_url", "") or ""))
                 name = str(row.get("name", f"provider-{index + 1}") or f"provider-{index + 1}")
-                models: list[str] = []
-                raw_models = row.get("models")
-                if isinstance(raw_models, list):
-                    models = [str(m).strip() for m in raw_models if str(m).strip()]
-                else:
+                models = [str(m).strip() for m in row.get("models", []) if str(m).strip()] if isinstance(row.get("models"), list) else []
+                if not models:
                     single = str(row.get("model", "") or "").strip()
                     if single:
                         models = [single]
                 if key and base_url and models:
-                    configured.append(
-                        AIProvider(
-                            name=name,
-                            api_key=key,
-                            base_url=base_url,
-                            models=tuple(models),
-                            priority=int(row.get("priority", 100)),
-                            provider_type=str(row.get("provider_type", "") or cls._infer_provider_type(name, base_url)) if False else self._infer_provider_type(name, base_url),
-                        )
-                    )
+                    configured.append(AIProvider(name=name, api_key=key, base_url=base_url, models=tuple(models), priority=int(row.get("priority", 100)), provider_type=str(row.get("provider_type", "") or self._infer_provider_type(name, base_url))))
         candidates = configured + db_providers + self._env_providers()
         if not candidates:
             raise AIProviderError("No AI provider is configured")
@@ -232,12 +196,7 @@ class AIProviderRouter:
         return self._parse()
 
     def _headers(self, provider: AIProvider) -> dict[str, str]:
-        headers = {
-            "Authorization": f"Bearer {provider.api_key}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "User-Agent": "RahYar-AIProviderRouter/1.2",
-        }
+        headers = {"Authorization": f"Bearer {provider.api_key}", "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "RahYar-AIProviderRouter/1.2"}
         host = (urlparse(provider.base_url).hostname or "").lower()
         if host.endswith("agentrouter.org"):
             headers.update({"Originator": "codex_cli_rs", "Version": "0.101.0"})
@@ -266,17 +225,14 @@ class AIProviderRouter:
         return code in {402, 403} and any(x in lowered for x in ("rate", "capacity", "quota", "limit"))
 
     def _ordered_candidates(self, providers: list[AIProvider]) -> list[tuple[AIProvider, str]]:
-        candidates: list[tuple[AIProvider, str]] = []
-        for provider in providers:
-            for model in provider.models:
-                candidates.append((provider, model))
+        candidates = [(provider, model) for provider in providers for model in provider.models]
         candidates.sort(key=lambda item: (not self._is_free_model(item[1]), item[0].priority, item[1]))
         return candidates
 
     @staticmethod
     def _extract_text(data: Any, provider_type: str) -> str:
         if provider_type == "google":
-            parts = []
+            parts: list[str] = []
             for candidate in data.get("candidates", []) if isinstance(data, dict) else []:
                 content = candidate.get("content", {}) if isinstance(candidate, dict) else {}
                 for part in content.get("parts", []) if isinstance(content, dict) else []:
@@ -294,22 +250,14 @@ class AIProviderRouter:
             return " ".join(str(part.get("text", "")) for part in content if isinstance(part, dict)).strip()
         return str(content).strip() if content else ""
 
-    def _test_request(self, provider: AIProvider, model: str, timeout: int) -> tuple[str, int, int, str]:
+    def _test_request(self, provider: AIProvider, model: str, timeout: int) -> tuple[int, int, str]:
         if provider.provider_type == "google":
             url = provider.base_url.rstrip("/") + f"/models/{quote(model, safe='')}:generateContent?key={quote(provider.api_key, safe='')}"
-            payload = {
-                "contents": [{"role": "user", "parts": [{"text": "Reply with exactly: OK"}]}],
-                "generationConfig": {"temperature": 0, "maxOutputTokens": 8},
-            }
+            payload = {"contents": [{"role": "user", "parts": [{"text": "Reply with exactly: OK"}]}], "generationConfig": {"temperature": 0, "maxOutputTokens": 8}}
             headers = {"Content-Type": "application/json", "Accept": "application/json", "User-Agent": "RahYar-AIProviderRouter/1.2"}
         else:
             url = provider.base_url.rstrip("/") + "/chat/completions"
-            payload = {
-                "model": model,
-                "messages": [{"role": "user", "content": "Reply with exactly: OK"}],
-                "max_tokens": 8,
-                "temperature": 0,
-            }
+            payload = {"model": model, "messages": [{"role": "user", "content": "Reply with exactly: OK"}], "max_tokens": 8, "temperature": 0}
             headers = self._headers(provider)
         request = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
         started = time.perf_counter()
@@ -320,7 +268,7 @@ class AIProviderRouter:
         text = self._extract_text(data, provider.provider_type)
         if not text:
             raise ValueError("empty model response")
-        return "ok", status_code, latency, text
+        return status_code, latency, text
 
     def test_models(self, *, timeout_seconds: int = 15) -> list[dict[str, Any]]:
         """Live-test every configured provider/model independently and return its actual reply."""
@@ -329,26 +277,17 @@ class AIProviderRouter:
         timeout = max(5, min(int(timeout_seconds), 60))
         for provider, model in self._ordered_candidates(providers):
             started = time.perf_counter()
-            row: dict[str, Any] = {
-                "provider": provider.name,
-                "model": model,
-                "free": self._is_free_model(model),
-                "ok": False,
-                "latency_ms": 0,
-                "status": "unknown",
-                "response": "",
-            }
+            row = {"provider": provider.name, "model": model, "free": self._is_free_model(model), "ok": False, "latency_ms": 0, "status": "unknown", "response": ""}
             try:
-                status, http_status, latency, response_text = self._test_request(provider, model, timeout)
-                row.update(ok=True, status=status, http_status=http_status, latency_ms=latency, response=response_text[:300])
+                http_status, latency, response_text = self._test_request(provider, model, timeout)
+                row.update(ok=True, status="ok", http_status=http_status, latency_ms=latency, response=response_text[:300])
             except urllib.error.HTTPError as exc:
                 body = ""
                 try:
                     body = exc.read().decode("utf-8", errors="replace")[:300]
                 except Exception:
                     pass
-                retry_after = self._retry_after(exc.headers, body)
-                row.update(status=f"http_{exc.code}", http_status=exc.code, retry_after=retry_after)
+                row.update(status=f"http_{exc.code}", http_status=exc.code, retry_after=self._retry_after(exc.headers, body))
             except (urllib.error.URLError, TimeoutError, OSError) as exc:
                 row.update(status=f"unavailable:{type(exc).__name__}")
             except (json.JSONDecodeError, KeyError, IndexError, TypeError, ValueError) as exc:
@@ -367,23 +306,15 @@ class AIProviderRouter:
             timeout_seconds = max(5, min(int(timeout_seconds), 180))
         except (TypeError, ValueError):
             timeout_seconds = min(max(self.settings.AI_AGENT_TIMEOUT_SECONDS, 5), 180)
-
         last: AIProviderError | None = None
         candidates = self._ordered_candidates(providers)
         now = time.time()
         for provider, model in candidates:
             model_key = f"{provider.name}:{model}"
-            if self._cooldown_until.get(provider.name, 0) > now:
-                continue
-            if self._model_cooldown_until.get(model_key, 0) > now:
+            if self._cooldown_until.get(provider.name, 0) > now or self._model_cooldown_until.get(model_key, 0) > now:
                 continue
             payload = {"model": model, "messages": messages, **kwargs}
-            request = urllib.request.Request(
-                provider.base_url.rstrip("/") + "/chat/completions",
-                data=json.dumps(payload).encode("utf-8"),
-                headers=self._headers(provider),
-                method="POST",
-            )
+            request = urllib.request.Request(provider.base_url.rstrip("/") + "/chat/completions", data=json.dumps(payload).encode("utf-8"), headers=self._headers(provider), method="POST")
             try:
                 with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
                     data = json.loads(response.read().decode("utf-8"))
@@ -418,7 +349,6 @@ class AIProviderRouter:
                 last = AIProviderError(f"provider unavailable: {provider.name}/{model}", retryable=True, retry_after=30, provider=provider.name)
                 self._model_cooldown_until[model_key] = time.time() + 30
                 continue
-
         if last:
             raise last
         raise AIProviderError("All configured AI models are temporarily unavailable", retryable=True, retry_after=30)
