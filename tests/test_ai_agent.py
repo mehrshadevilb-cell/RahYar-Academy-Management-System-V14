@@ -5,6 +5,7 @@ import pytest
 
 from src.services.ai_agent_service import AIAgentError, AIAgentService
 from src.bot.handlers.admin_ai import _safe_html
+from src.bot.handlers.admin_ai import audit_request, debug_request
 
 
 def test_safe_path_rejects_empty_and_parent_paths(tmp_path):
@@ -89,3 +90,17 @@ def test_lock_blocks_second_acquire(tmp_path):
 
 def test_ai_audit_output_is_safe_for_telegram_html():
     assert _safe_html("<script>alert('x')</script> & details") == "&lt;script&gt;alert('x')&lt;/script&gt; &amp; details"
+
+
+def test_audit_profiles_are_specific_and_actionable():
+    assert "security" in audit_request("security").lower()
+    assert "reliability" in audit_request("reliability").lower()
+    assert "regression test" in audit_request("full").lower()
+
+
+def test_debug_contract_requires_evidence_and_safe_recovery():
+    prompt = debug_request("HTTP 504 in AI Audit")
+    assert "ROOT CAUSE HYPOTHESES" in prompt
+    assert "EVIDENCE" in prompt
+    assert "REGRESSION TESTS" in prompt
+    assert "Never request secrets" in prompt

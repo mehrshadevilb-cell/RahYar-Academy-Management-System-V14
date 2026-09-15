@@ -6,7 +6,7 @@ def admin_ai_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(text="💬 Assistant", callback_data="ai_assistant"),
-                InlineKeyboardButton(text="🔎 Audit", callback_data="ai_analyze"),
+                InlineKeyboardButton(text="🔎 Audit", callback_data="ai_analyze:full"),
             ],
             [
                 InlineKeyboardButton(text="🐞 Debug", callback_data="ai_debug"),
@@ -15,6 +15,10 @@ def admin_ai_keyboard() -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(text="✨ Feature", callback_data="ai_feature"),
                 InlineKeyboardButton(text="🧪 Test Models", callback_data="ai_test_models"),
+            ],
+            [
+                InlineKeyboardButton(text="🔐 Security Audit", callback_data="ai_analyze:security"),
+                InlineKeyboardButton(text="⚙️ Reliability Audit", callback_data="ai_analyze:reliability"),
             ],
             [
                 InlineKeyboardButton(text="📊 API Status", callback_data="ai_status"),

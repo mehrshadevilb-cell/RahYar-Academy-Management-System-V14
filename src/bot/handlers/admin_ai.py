@@ -41,6 +41,35 @@ def _safe_html(text: str) -> str:
     return html.escape(text or "", quote=False)
 
 
+AUDIT_PROFILES = {
+    "full": "Audit the entire repository for correctness, security, reliability, data integrity, UX and test gaps.",
+    "security": "Audit only security, authentication, authorization, secrets, privacy, injection and data exposure risks.",
+    "reliability": "Audit provider failover, background tasks, error handling, retries, migrations and operational reliability.",
+}
+
+
+def audit_request(profile: str = "full") -> str:
+    selected = AUDIT_PROFILES.get(profile, AUDIT_PROFILES["full"])
+    return (
+        f"{selected}\n"
+        "Return an evidence-based prioritized report. Include confirmed findings, "
+        "needs-verification items, severity, exact paths/symbols, impact, smallest safe fix, "
+        "and a regression test for each finding. End with counts and next action."
+    )
+
+
+def debug_request(user_input: str) -> str:
+    return (
+        "DEBUG MODE: Analyze only; do not modify files or propose unverified facts.\n"
+        "Return exactly these sections:\n"
+        "1. INCIDENT SUMMARY\n2. REPRODUCTION / MISSING DATA\n3. ROOT CAUSE HYPOTHESES "
+        "(ranked with confidence)\n4. EVIDENCE (exact repository paths/symbols)\n"
+        "5. SAFE FIX STEPS\n6. REGRESSION TESTS\n7. ROLLBACK / RISK NOTES\n"
+        "If evidence is insufficient, say what to collect next. Never request secrets.\n\n"
+        f"OWNER DEBUG INPUT:\n{user_input}"
+    )
+
+
 def _home_text() -> str:
     return (
         "🤖 <b>RahYar AI Developer</b>\n"
@@ -140,14 +169,15 @@ async def ai_task_status(callback: CallbackQuery):
         await callback.answer("🟢 Task فعالی وجود ندارد.", show_alert=True)
 
 
-@router.callback_query(F.data == "ai_analyze")
+@router.callback_query(F.data.startswith("ai_analyze:"))
 async def ai_analyze(callback: CallbackQuery):
     if not _owner(callback.from_user.id, callback.from_user.username):
         await callback.answer("⛔️", show_alert=True)
         return
     await callback.answer("در حال Audit...", show_alert=False)
     try:
-        result = await asyncio.to_thread(runtime.agent.analyze)
+        profile = callback.data.rsplit(":", 1)[-1]
+        result = await asyncio.to_thread(runtime.agent.analyze, audit_request(profile))
     except AIAgentError as exc:
         result = f"❌ {_safe_error(exc)}"
     for index, part in enumerate(_chunk(result)):
@@ -181,6 +211,7 @@ async def ai_debug_start(callback: CallbackQuery, state: FSMContext):
     await state.update_data(ai_consult_mode="debug")
     await callback.message.answer(
         "🐞 <b>Debug</b>\n\nلاگ یا خطا را بفرستید. این حالت فقط تحلیل می‌کند و کد را تغییر نمی‌دهد.\n"
+        "برای نتیجه بهتر این موارد را بنویسید: رفتار فعلی، رفتار مورد انتظار، مراحل بازتولید، زمان شروع مشکل و مسیر مربوطه.\n"
         "کلیدها و اطلاعات حساس را حذف کنید.",
         reply_markup=admin_back_button("admin_ai"),
         parse_mode="HTML",
@@ -212,8 +243,7 @@ async def ai_consult_message(message: Message, state: FSMContext):
     prompt = (
         "You are the owner's coding assistant for RahYar. Use repository architecture and skills. "
         "Do not modify files or expose secrets. Answer in Persian; paths/symbols in English.\n\n"
-        + ("DEBUG MODE: give root cause, exact paths, fix steps and tests.\n" if mode == "debug" else "")
-        + f"OWNER INPUT:\n{text}"
+        + (debug_request(text) if mode == "debug" else f"OWNER INPUT:\n{text}")
     )
     await message.answer("⏳ در حال تحلیل...")
     try:
