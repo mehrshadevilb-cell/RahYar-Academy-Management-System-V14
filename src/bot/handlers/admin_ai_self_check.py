@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from aiogram import F, Router
 from aiogram.types import CallbackQuery
 
@@ -16,7 +18,7 @@ async def ai_self_check(callback: CallbackQuery) -> None:
         return
     await callback.answer("🩺 در حال بررسی...", show_alert=False)
     try:
-        result = await __import__("asyncio").to_thread(runtime.self_check)
+        result = await asyncio.to_thread(runtime.self_check)
     except Exception as exc:
         result = f"🔴 Self-check failed: {type(exc).__name__}: {str(exc)[:700]}"
     await callback.message.answer(result, parse_mode="HTML")
