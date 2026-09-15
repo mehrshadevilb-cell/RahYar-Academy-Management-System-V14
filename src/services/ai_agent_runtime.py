@@ -228,9 +228,26 @@ Keep the plan minimal, specific and safe. Never request secrets."""
             if failures:
                 detail = " | ".join(f"{item.name}: {item.detail}" for item in failures[:3])
                 raise AIAgentError(f"Preflight failed before code changes: {detail}")
+
             await report("✏️ اجرای تغییرات روی branch ایزوله...")
-            result = await asyncio.to_thread(self.agent.implement, self.build_implementation_task(task, task_type, plan), task_type)
-            await report("🧪 compile و pytest و کنترل‌های نهایی انجام شد.")
+            result = await asyncio.to_thread(
+                self.agent.implement,
+                self.build_implementation_task(task, task_type, plan),
+                task_type,
+            )
+
+            # The agent's implement() performs its own compile/test cycle. The
+            # second deterministic pass is intentionally independent: it catches
+            # structural/import/migration/git regressions after the write and
+            # prevents reporting success when the final tree is unhealthy.
+            await report("🩺 اجرای postflight بعد از تغییرات...")
+            postflight = await asyncio.to_thread(AIAgentSelfChecker(self.agent.repo).run)
+            post_failures = [item for item in postflight if not item.ok]
+            if post_failures:
+                detail = " | ".join(f"{item.name}: {item.detail}" for item in post_failures[:3])
+                raise AIAgentError(f"Postflight failed after code changes: {detail}")
+
+            await report("🧪 compile، تست‌ها و کنترل‌های نهایی تأیید شدند.")
             self._audit(user_id, "AI_AGENT_SUCCESS", f"AI Agent completed: {result[:400]}")
             return result
         except asyncio.CancelledError:
