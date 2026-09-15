@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from sqlalchemy import or_
-
 from src.core.config.settings import get_settings
 from src.database.models.ai_model import AIModel
 from src.database.models.ai_provider import AIProvider
@@ -30,17 +28,21 @@ class AIProviderBootstrapService:
         return str(value or "").strip()
 
     def _repair_stale_models(self, provider: AIProvider) -> None:
-        """Remove known-dead AgentRouter model IDs from persisted runtime state.
-
-        Older deployments persisted mimo-v2.5(-free), which now returns HTTP 404.
-        Keeping it active makes every Agent request hit the dead model before any
-        healthy provider can be considered. Prefer the configured fallback model
-        when one is explicitly available, otherwise deactivate the stale row.
-        """
+        """Remove known-dead AgentRouter model IDs from persisted runtime state."""
         if provider.name.strip().lower() != "agentrouter":
             return
 
         fallback = (self.settings.AI_FALLBACK_MODEL or "").strip()
+        fallback_valid = bool(fallback) and fallback.lower() not in STALE_AGENTROUTER_MODELS
+        existing_fallback = None
+        if fallback_valid:
+            existing_fallback = (
+                self.session.query(AIModel)
+                .filter(AIModel.provider_id == provider.id)
+                .filter(AIModel.model_id == fallback)
+                .first()
+            )
+
         stale_rows = (
             self.session.query(AIModel)
             .filter(AIModel.provider_id == provider.id)
@@ -51,18 +53,28 @@ class AIProviderBootstrapService:
         if not stale_rows:
             return
 
-        for model in stale_rows:
-            if fallback and fallback.lower() not in STALE_AGENTROUTER_MODELS:
-                model.model_id = fallback
-                model.display_name = fallback
-                model.is_active = True
-                model.is_default = True
-            else:
+        if existing_fallback is not None:
+            existing_fallback.is_active = True
+            existing_fallback.is_default = True
+            for model in stale_rows:
+                model.is_active = False
+                model.is_default = False
+        elif fallback_valid:
+            # Safe because no row currently owns this provider/model unique key.
+            replacement = stale_rows[0]
+            replacement.model_id = fallback
+            replacement.display_name = fallback
+            replacement.is_active = True
+            replacement.is_default = True
+            for model in stale_rows[1:]:
+                model.is_active = False
+                model.is_default = False
+        else:
+            for model in stale_rows:
                 model.is_active = False
                 model.is_default = False
 
-        # Never leave multiple defaults after replacing a stale model.
-        if fallback and fallback.lower() not in STALE_AGENTROUTER_MODELS:
+        if fallback_valid:
             others = (
                 self.session.query(AIModel)
                 .filter(AIModel.provider_id == provider.id)
