@@ -1,8 +1,12 @@
 import json
-import os
 import urllib.error
 
 from src.ai.provider_router import AIProviderRouter
+
+
+def _clear_settings():
+    from src.core.config.settings import get_settings
+    get_settings.cache_clear()
 
 
 def test_provider_pool_uses_priority_and_env_keys(monkeypatch):
@@ -15,26 +19,37 @@ def test_provider_pool_uses_priority_and_env_keys(monkeypatch):
             {"name": "a", "api_key_env": "A_KEY", "base_url": "https://a.example/v1", "model": "a-model", "priority": 10},
         ]),
     )
-    from src.core.config.settings import get_settings
-    get_settings.cache_clear()
+    _clear_settings()
     router = AIProviderRouter()
     assert [p.name for p in router.providers()] == ["a", "b"]
     assert router.providers()[0].api_key == "secret-a"
-    get_settings.cache_clear()
+    _clear_settings()
+
+
+def test_ai_and_ai2_env_form_automatic_failover(monkeypatch):
+    monkeypatch.delenv("AI_PROVIDERS_JSON", raising=False)
+    monkeypatch.setenv("AI_API_KEY", "primary-key")
+    monkeypatch.setenv("AI_BASE_URL", "https://primary.example/v1")
+    monkeypatch.setenv("AI_MODEL", "primary-model")
+    monkeypatch.setenv("AI2_API_KEY", "secondary-key")
+    monkeypatch.setenv("AI2_BASE_URL", "https://secondary.example/v1")
+    monkeypatch.setenv("AI2_MODEL", "secondary-model")
+    _clear_settings()
+    router = AIProviderRouter()
+    assert [p.name for p in router.providers()] == ["primary", "secondary"]
+    assert [p.model for p in router.providers()] == ["primary-model", "secondary-model"]
+    _clear_settings()
 
 
 def test_rate_limit_fails_over(monkeypatch):
-    monkeypatch.setenv("A_KEY", "a")
-    monkeypatch.setenv("B_KEY", "b")
-    monkeypatch.setenv(
-        "AI_PROVIDERS_JSON",
-        json.dumps([
-            {"name": "a", "api_key_env": "A_KEY", "base_url": "https://a.example/v1", "model": "a-model", "priority": 10},
-            {"name": "b", "api_key_env": "B_KEY", "base_url": "https://b.example/v1", "model": "b-model", "priority": 20},
-        ]),
-    )
-    from src.core.config.settings import get_settings
-    get_settings.cache_clear()
+    monkeypatch.delenv("AI_PROVIDERS_JSON", raising=False)
+    monkeypatch.setenv("AI_API_KEY", "a")
+    monkeypatch.setenv("AI_BASE_URL", "https://a.example/v1")
+    monkeypatch.setenv("AI_MODEL", "a-model")
+    monkeypatch.setenv("AI2_API_KEY", "b")
+    monkeypatch.setenv("AI2_BASE_URL", "https://b.example/v1")
+    monkeypatch.setenv("AI2_MODEL", "b-model")
+    _clear_settings()
     router = AIProviderRouter()
     calls = []
 
@@ -53,7 +68,10 @@ def test_rate_limit_fails_over(monkeypatch):
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     result = router.chat([{"role": "user", "content": "hello"}])
-    assert result["_rahyar_provider"] == "b"
-    assert calls == ["https://a.example/v1/chat/completions", "https://b.example/v1/chat/completions"]
+    assert result["_rahyar_provider"] == "secondary"
+    assert calls == [
+        "https://a.example/v1/chat/completions",
+        "https://b.example/v1/chat/completions",
+    ]
     assert router.status()[0]["cooldown_seconds"] > 0
-    get_settings.cache_clear()
+    _clear_settings()
