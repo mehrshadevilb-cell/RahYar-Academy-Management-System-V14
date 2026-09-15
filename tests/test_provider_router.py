@@ -66,3 +66,37 @@ def test_free_model_is_detected_from_id():
     assert AIProviderRouter._is_free_model("provider/model:free") is True
     assert AIProviderRouter._is_free_model("provider/model-free") is True
     assert AIProviderRouter._is_free_model("provider/model") is False
+
+
+def test_legacy_env_routes_remain_available_with_db_routes(monkeypatch):
+    monkeypatch.setenv("AI_API_KEY", "fresh-env-key")
+    monkeypatch.setenv("AI_BASE_URL", "https://env.example.com/v1")
+    monkeypatch.setenv("AI_MODEL", "env-free-model")
+    monkeypatch.setenv("AI_PROVIDERS_JSON", "[]")
+
+    router = AIProviderRouter()
+    router._from_database = lambda: [
+        __import__("src.ai.provider_router", fromlist=["AIProvider"]).AIProvider(
+            name="database-provider",
+            api_key="old-db-key",
+            base_url="https://db.example.com/v1",
+            models=("db-model",),
+            priority=0,
+        )
+    ]
+
+    providers = router.providers()
+    assert any(p.name == "primary" and p.api_key == "fresh-env-key" for p in providers)
+    assert any(p.name == "database-provider" for p in providers)
+
+
+def test_base_url_is_normalized_for_gateway_env(monkeypatch):
+    monkeypatch.setenv("AI_API_KEY", "key")
+    monkeypatch.setenv("AI_BASE_URL", "https://api.orcarouter.ai")
+    monkeypatch.setenv("AI_MODEL", "free-model")
+    monkeypatch.setenv("AI_PROVIDERS_JSON", "[]")
+
+    router = AIProviderRouter()
+    router._from_database = lambda: []
+    providers = router.providers()
+    assert providers[0].base_url == "https://api.orcarouter.ai/v1"
