@@ -26,9 +26,9 @@ def test_midi_plan_is_real_smf():
     assert b"MTrk" in midi
 
 
-def test_auto_output_understands_midi_request():
-    # Keep this test independent of any external provider.
+def test_auto_output_defaults_to_connected_ai_midi():
     from src.bot.handlers.music_generator import _auto_output
 
     assert _auto_output("یه ملودی MIDI در F# minor") == "midi"
-    assert _auto_output("یه بیت دارک trap") == "audio"
+    assert _auto_output("یه بیت دارک trap") == "midi"
+    assert _auto_output("یه فایل صوتی wav بساز") == "audio"
