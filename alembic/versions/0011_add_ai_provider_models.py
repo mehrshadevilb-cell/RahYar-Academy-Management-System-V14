@@ -35,8 +35,8 @@ def upgrade() -> None:
     tables = set(inspector.get_table_names())
 
     # Older deployments may have created these tables through Base.metadata.create_all()
-    # before Alembic became the sole schema owner. Do not fail with DuplicateTable; adopt
-    # the existing tables and add any migration-specific indexes that are missing.
+    # before Alembic became the sole schema owner. Adopt existing tables instead of
+    # failing with DuplicateTable, then ensure migration-specific indexes exist.
     if "ai_providers" not in tables:
         op.create_table(
             "ai_providers",
@@ -101,20 +101,24 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # The upgrade can adopt pre-existing tables. Because migration history does not
+    # persist whether a table was adopted or newly created, never drop these shared
+    # tables on downgrade. This prevents an emergency downgrade from destroying data.
     bind = op.get_bind()
     inspector = inspect(bind)
-    tables = set(inspector.get_table_names())
-
-    if "ai_models" in tables:
-        existing = {index["name"] for index in inspector.get_indexes("ai_models")}
-        for name in ("uq_ai_models_default_provider", "ix_ai_models_is_active", "ix_ai_models_provider_id"):
+    for table, indexes in (
+        (
+            "ai_models",
+            ("uq_ai_models_default_provider", "ix_ai_models_is_active", "ix_ai_models_provider_id"),
+        ),
+        (
+            "ai_providers",
+            ("ix_ai_providers_is_active", "ix_ai_providers_provider_type", "ix_ai_providers_name"),
+        ),
+    ):
+        if table not in inspector.get_table_names():
+            continue
+        existing = {index["name"] for index in inspector.get_indexes(table)}
+        for name in indexes:
             if name in existing:
-                op.drop_index(name, table_name="ai_models")
-        op.drop_table("ai_models")
-
-    if "ai_providers" in tables:
-        existing = {index["name"] for index in inspector.get_indexes("ai_providers")}
-        for name in ("ix_ai_providers_is_active", "ix_ai_providers_provider_type", "ix_ai_providers_name"):
-            if name in existing:
-                op.drop_index(name, table_name="ai_providers")
-        op.drop_table("ai_providers")
+                op.drop_index(name, table_name=table)
