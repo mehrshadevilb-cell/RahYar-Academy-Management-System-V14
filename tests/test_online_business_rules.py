@@ -29,6 +29,11 @@ def make_db():
     return sessionmaker(bind=engine)()
 
 
+def _pay_and_confirm(service, db, reservation):
+    service.submit_payment(db, reservation.id, "proof.jpg")
+    service.confirm(db, reservation.id)
+
+
 def test_duplicate_reservation_is_blocked():
     db = make_db()
     user = User(full_name="Ali", role=UserRole.STUDENT)
@@ -59,14 +64,14 @@ def test_present_consumes_once_and_cancel_does_not():
     attendance_service = AttendanceService()
 
     cancelled = reservation_service.request_reservation(db, enrollment.id, "1405-01-02", "18:00")
-    reservation_service.confirm(db, cancelled.id)
+    _pay_and_confirm(reservation_service, db, cancelled)
     attendance_service.mark_attendance(db, enrollment, cancelled.requested_date, AttendanceStatus.CANCELLED, cancelled.id)
     db.refresh(enrollment)
     assert enrollment.remaining_sessions == 2
     assert enrollment.completed_sessions == 0
 
     present = reservation_service.request_reservation(db, enrollment.id, "1405-01-03", "18:00")
-    reservation_service.confirm(db, present.id)
+    _pay_and_confirm(reservation_service, db, present)
     attendance_service.mark_attendance(db, enrollment, present.requested_date, AttendanceStatus.PRESENT, present.id)
     attendance_service.mark_attendance(db, enrollment, present.requested_date, AttendanceStatus.PRESENT, present.id)
     db.refresh(enrollment)
@@ -87,7 +92,7 @@ def test_last_present_ends_enrollment():
 
     reservation_service = ReservationService()
     reservation = reservation_service.request_reservation(db, enrollment.id, "1405-01-04", "19:00")
-    reservation_service.confirm(db, reservation.id)
+    _pay_and_confirm(reservation_service, db, reservation)
     AttendanceService().mark_attendance(db, enrollment, reservation.requested_date, AttendanceStatus.PRESENT, reservation.id)
     db.refresh(enrollment)
 
