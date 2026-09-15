@@ -5,7 +5,8 @@ import re
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from html import HTMLParser, unescape
+from html import unescape
+from html.parser import HTMLParser
 
 
 @dataclass(slots=True)
@@ -137,7 +138,6 @@ class WebResearchService:
                 host = urllib.parse.urlparse(result.url).netloc.lower().removeprefix("www.")
                 if not host:
                     continue
-                # Keep several independent hosts, while allowing multiple official docs.
                 if host in seen_hosts and not result.official:
                     continue
                 seen_hosts.add(host)
