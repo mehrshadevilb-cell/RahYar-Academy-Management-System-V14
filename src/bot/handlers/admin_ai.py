@@ -82,6 +82,20 @@ async def ai_status(callback: CallbackQuery):
     await callback.answer()
 
 
+@router.callback_query(F.data == "ai_test_models")
+async def ai_test_models(callback: CallbackQuery):
+    if not _owner(callback.from_user.id):
+        await callback.answer("⛔️", show_alert=True)
+        return
+    await callback.answer("🧪 در حال تست زنده همه مدل‌ها...", show_alert=False)
+    try:
+        result = await asyncio.to_thread(runtime.agent.test_provider_models)
+    except AIAgentError as exc:
+        result = f"❌ {_safe_error(exc)}"
+    for part in _chunk(result):
+        await callback.message.answer(part, parse_mode="HTML")
+
+
 @router.callback_query(F.data == "ai_security")
 async def ai_security(callback: CallbackQuery):
     if not _owner(callback.from_user.id):
