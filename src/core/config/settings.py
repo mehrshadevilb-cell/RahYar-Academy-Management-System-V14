@@ -25,14 +25,7 @@ def normalize_openai_compatible_base_url(url: str) -> str:
         if raw.lower().endswith(suffix):
             raw = raw[: -len(suffix)].rstrip("/")
     host = (urlparse(raw).hostname or "").lower()
-    gateway_hosts = (
-        "agentrouter.org",
-        "co.agentrouter.org",
-        "www.agentrouter.org",
-        "api.orcarouter.ai",
-        "orcarouter.ai",
-        "www.orcarouter.ai",
-    )
+    gateway_hosts = ("agentrouter.org", "co.agentrouter.org", "www.agentrouter.org", "api.orcarouter.ai", "orcarouter.ai", "www.orcarouter.ai")
     if host in gateway_hosts and not raw.endswith("/v1"):
         raw += "/v1"
     return raw
@@ -54,7 +47,6 @@ class Settings(BaseSettings):
     SITE_NAME: str = "آکادمی راه‌یار"
     SITE_TAGLINE: str = "آموزش حرفه‌ای موسیقی — دوره‌های دیجیتال و کلاس آنلاین"
 
-    # AI Developer Agent: enabled only when the owner explicitly configures it.
     AI_AGENT_ENABLED: bool = True
     AI_AGENT_REPO_PATH: str = "."
     AI_AGENT_API_KEY: str | None = None
@@ -62,11 +54,9 @@ class Settings(BaseSettings):
     AI_AGENT_MODEL: str = "gpt-4o-mini"
     AI_AGENT_MAX_RETRIES: int = 2
     AI_AGENT_TIMEOUT_SECONDS: int = 180
-
     AI_API_KEY: str | None = None
     AI_BASE_URL: str | None = None
     AI_MODEL: str | None = None
-
     AI_AGENT_WRITE_ENABLED: bool = False
     AI_AGENT_WORK_DIR: str = "/tmp/rahyar-agent-repo"
     GITHUB_TOKEN: str | None = None
@@ -79,18 +69,19 @@ class Settings(BaseSettings):
     CHAT_ASSISTANT_TIMEOUT_SECONDS: int = 45
     CHAT_ASSISTANT_MAX_MESSAGES_PER_HOUR: int = 20
 
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        extra="ignore",
-    )
+    # AI knowledge engine: group memory + official Waves/iZotope ingestion.
+    KNOWLEDGE_ENABLED: bool = True
+    KNOWLEDGE_GROUP_IDS: str = ""
+    KNOWLEDGE_FETCH_INTERVAL_HOURS: int = 24
+    KNOWLEDGE_AUTO_QUIZ: bool = True
+    KNOWLEDGE_QUIZ_INTERVAL_HOURS: int = 24
+
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     @field_validator("DATABASE_URL", mode="before")
     @classmethod
     def _normalize_database_url(cls, value: object) -> object:
-        if isinstance(value, str):
-            return normalize_database_url(value)
-        return value
+        return normalize_database_url(value) if isinstance(value, str) else value
 
     @property
     def effective_ai_api_key(self) -> str | None:
@@ -98,8 +89,7 @@ class Settings(BaseSettings):
 
     @property
     def effective_ai_base_url(self) -> str:
-        raw = self.AI_BASE_URL or self.AI_AGENT_BASE_URL or "https://api.openai.com/v1"
-        return normalize_openai_compatible_base_url(raw)
+        return normalize_openai_compatible_base_url(self.AI_BASE_URL or self.AI_AGENT_BASE_URL or "https://api.openai.com/v1")
 
     @property
     def effective_ai_model(self) -> str:
@@ -130,11 +120,18 @@ class Settings(BaseSettings):
 
     @property
     def github_write_ready(self) -> bool:
-        return bool(
-            self.AI_AGENT_WRITE_ENABLED
-            and (self.GITHUB_TOKEN or "").strip()
-            and (self.GITHUB_REPO or "").strip()
-        )
+        return bool(self.AI_AGENT_WRITE_ENABLED and (self.GITHUB_TOKEN or "").strip() and (self.GITHUB_REPO or "").strip())
+
+    @property
+    def knowledge_group_ids(self) -> set[int]:
+        result: set[int] = set()
+        for value in self.KNOWLEDGE_GROUP_IDS.split(","):
+            try:
+                if value.strip():
+                    result.add(int(value.strip()))
+            except ValueError:
+                continue
+        return result
 
     @property
     def bot_deep_link_base(self) -> str | None:
