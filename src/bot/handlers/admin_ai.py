@@ -34,10 +34,13 @@ async def ai_home(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.message.edit_text(
         "🧠 AI Developer Agent\n\n"
-        "از همین‌جا با API صحبت کنید:\n"
-        "• 💬 دستیار کدنویسی — سؤال معماری / چطور پیاده کنم\n"
-        "• 🛠 دیباگ — لاگ یا باگ را بفرستید تا علت و راه‌حل بگوید\n"
-        "• 🐞/✨ — در صورت فعال بودن write mode، کد را عوض و PR می‌سازد\n\n"
+        "قابلیت‌های فعال:\n"
+        "• 💬 کدنویسی / معماری\n"
+        "• 🛠 دیباگ با لاگ\n"
+        "• 🎨 زیباسازی متن و کیبورد تلگرام\n"
+        "• 🌐 جستجوی وب (مستندات عمومی)\n"
+        "• 🧩 Skills قابل‌گسترش\n"
+        "• 🐞/✨ نوشتن کد روی branch ai/* + PR\n\n"
         "merge به main فقط با تأیید شما در GitHub.",
         reply_markup=admin_ai_keyboard(),
     )
@@ -57,6 +60,20 @@ async def ai_status(callback: CallbackQuery):
     await callback.answer()
 
 
+@router.callback_query(F.data == "ai_skills")
+async def ai_skills(callback: CallbackQuery):
+    if not _owner(callback.from_user.id):
+        await callback.answer("⛔️", show_alert=True)
+        return
+    try:
+        result = await asyncio.to_thread(agent.list_skills_text)
+    except AIAgentError as exc:
+        result = f"❌ {exc}"
+    for part in _chunk(result):
+        await callback.message.answer(part)
+    await callback.answer()
+
+
 @router.callback_query(F.data == "ai_analyze")
 async def ai_analyze(callback: CallbackQuery):
     if not _owner(callback.from_user.id):
@@ -64,7 +81,7 @@ async def ai_analyze(callback: CallbackQuery):
         return
     await callback.answer("در حال Audit...", show_alert=False)
     try:
-        result = await asyncio.to_thread(agent.analyze)
+        result = await asyncio.to_thread(agent.analyze, mode="assistant")
     except AIAgentError as exc:
         result = f"❌ {exc}"
     for part in _chunk(f"🔎 AI Audit\n\n{result}"):
@@ -79,13 +96,12 @@ async def ai_assistant_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AdminState.waiting_ai_consult)
     await state.update_data(ai_consult_mode="assistant")
     await callback.message.answer(
-        "💬 دستیار کدنویسی فعال شد.\n\n"
+        "💬 دستیار کدنویسی فعال شد (با Skills کدنویسی + جستجوی وب).\n\n"
         "سؤال فنی بپرسید، مثلاً:\n"
         "• جریان تأیید پرداخت کجاست؟\n"
-        "• چطور آپارتمان FSM برای رزرو کار می‌کند؟\n"
-        "• برای افزودن فیلد جدید به دوره چه فایل‌هایی لازم است؟\n\n"
-        "چند پیام پشت‌سرهم می‌توانید بفرستید.\n"
-        "برای خروج: /cancel یا دکمه 🛑 توقف",
+        "• برای feature جدید چه فایل‌هایی لازم است؟\n"
+        "• آخرین الگوی Aiogram 3 برای FSM چیست؟ (جستجوی وب)\n\n"
+        "خروج: /cancel یا 🛑 توقف",
         reply_markup=admin_back_button("admin_ai"),
     )
     await callback.answer()
@@ -101,9 +117,43 @@ async def ai_debug_start(callback: CallbackQuery, state: FSMContext):
     await callback.message.answer(
         "🛠 حالت دیباگ فعال شد.\n\n"
         "لاگ Render، متن خطا، یا توضیح باگ را بفرستید.\n"
-        "Agent با ساختار مخزن علت محتمل، فایل‌ها و راه‌حل پیشنهادی را می‌گوید.\n\n"
-        "اگر بخواهید بعداً خودش کد را عوض کند از «🐞 رفع باگ (کد)» استفاده کنید.\n"
+        "Agent با ساختار مخزن + در صورت نیاز جستجوی وب، علت و راه‌حل می‌دهد.\n\n"
         "خروج: /cancel یا 🛑 توقف",
+        reply_markup=admin_back_button("admin_ai"),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "ai_ui_polish")
+async def ai_ui_polish_start(callback: CallbackQuery, state: FSMContext):
+    if not _owner(callback.from_user.id):
+        await callback.answer("⛔️", show_alert=True)
+        return
+    await state.set_state(AdminState.waiting_ai_consult)
+    await state.update_data(ai_consult_mode="ui")
+    await callback.message.answer(
+        "🎨 حالت زیباسازی UI فعال شد.\n\n"
+        "بگویید کدام منو/پیام را می‌خواهید بهتر شود.\n"
+        "Agent فقط روی متن فارسی، دکمه‌ها و تجربهٔ کاربری تمرکز می‌کند.\n\n"
+        "برای اعمال واقعی روی کد از «🎨 اعمال UI (کد)» استفاده کنید.\n"
+        "خروج: /cancel",
+        reply_markup=admin_back_button("admin_ai"),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "ai_research")
+async def ai_research_start(callback: CallbackQuery, state: FSMContext):
+    if not _owner(callback.from_user.id):
+        await callback.answer("⛔️", show_alert=True)
+        return
+    await state.set_state(AdminState.waiting_ai_consult)
+    await state.update_data(ai_consult_mode="research")
+    await callback.message.answer(
+        "🌐 حالت جستجوی وب فعال شد.\n\n"
+        "موضوع را بفرستید (مثلاً مستندات Aiogram webhook، SQLAlchemy 2 relationship).\n"
+        "Agent از DuckDuckGo جستجو می‌کند و خلاصهٔ عملی می‌دهد.\n\n"
+        "خروج: /cancel",
         reply_markup=admin_back_button("admin_ai"),
     )
     await callback.answer()
@@ -144,10 +194,29 @@ async def ai_consult_message(message: Message, state: FSMContext):
             f"OWNER INPUT:\n{text[:8000]}"
         )
         header = "🛠 نتیجه دیباگ"
+    elif mode == "ui":
+        prompt = (
+            "You are polishing Telegram UX for RahYar Academy.\n"
+            "Suggest clearer Persian copy, keyboard layout improvements, "
+            "and navigation fixes. Do not change business rules.\n"
+            "Reference existing keyboard/handler paths when possible.\n"
+            "Answer in Persian.\n\n"
+            f"OWNER REQUEST:\n{text[:8000]}"
+        )
+        header = "🎨 پیشنهاد زیباسازی UI"
+    elif mode == "research":
+        prompt = (
+            "Research the topic using web_search when helpful.\n"
+            "Summarize practical guidance for the RahYar stack "
+            "(Python, aiogram 3, SQLAlchemy 2, PostgreSQL, Redis, Docker).\n"
+            "Cite URLs. Answer in Persian with English paths/APIs.\n\n"
+            f"TOPIC:\n{text[:8000]}"
+        )
+        header = "🌐 نتیجه تحقیق"
     else:
         prompt = (
             "You are the owner's coding assistant for the RahYar Academy codebase.\n"
-            "Answer the question using the repository inventory and architecture.\n"
+            "Answer using repository inventory, architecture, and web_search if needed.\n"
             "Be practical: which files, functions, and patterns to use.\n"
             "Do NOT modify files. Do NOT dump secrets.\n"
             "Answer in Persian; keep paths in English.\n\n"
@@ -155,9 +224,15 @@ async def ai_consult_message(message: Message, state: FSMContext):
         )
         header = "💬 دستیار کدنویسی"
 
-    await message.answer("⏳ در حال فکر کردن با API...")
+    await message.answer("⏳ در حال فکر کردن با API (+ skills/tools)...")
     try:
-        result = await asyncio.to_thread(agent.analyze, prompt)
+        result = await asyncio.to_thread(agent.analyze, prompt, mode=mode)
+    except TypeError:
+        # Backward safety if older service without mode kw is loaded briefly
+        try:
+            result = await asyncio.to_thread(agent.analyze, prompt)
+        except AIAgentError as exc:
+            result = f"❌ {exc}"
     except AIAgentError as exc:
         result = f"❌ {exc}"
 
@@ -195,6 +270,20 @@ async def ai_feature_start(callback: CallbackQuery, state: FSMContext):
     await callback.message.answer(
         "✨ Feature موردنظر را دقیق توضیح بدهید.\n"
         "نیاز به AI_AGENT_WRITE_ENABLED + GITHUB_TOKEN دارد."
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "ai_ui_write")
+async def ai_ui_write_start(callback: CallbackQuery, state: FSMContext):
+    if not _owner(callback.from_user.id):
+        await callback.answer("⛔️", show_alert=True)
+        return
+    await state.set_state(AdminState.waiting_ai_task)
+    await state.update_data(ai_task_type="ui")
+    await callback.message.answer(
+        "🎨 توضیح دهید کدام بخش UI باید زیباتر/روشن‌تر شود.\n"
+        "Agent فقط متن‌ها و کیبوردها را با رعایت قوانین کسب‌وکار تغییر می‌دهد و PR می‌سازد."
     )
     await callback.answer()
 
