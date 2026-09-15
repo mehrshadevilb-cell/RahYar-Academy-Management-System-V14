@@ -1,4 +1,5 @@
 from src.services.routed_ai_agent_service import RoutedAIAgentService
+from src.ai.provider_router import AIProviderError
 
 
 class FakeRouter:
@@ -31,6 +32,25 @@ def test_routed_agent_uses_provider_router(monkeypatch):
     assert service._request_model("hello") == "OK"
     assert fake.calls
     assert fake.calls[0][1]["temperature"] == 0.1
+
+
+def test_routed_agent_probes_models_when_all_routes_are_cooling_down(monkeypatch):
+    service = RoutedAIAgentService()
+    fake = FakeRouter()
+    calls = {"count": 0}
+
+    def chat(messages, **kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise AIProviderError("All configured AI models are cooling down; retry in 60s", retryable=True, retry_after=60)
+        return {"choices": [{"message": {"content": "Recovered"}}]}
+
+    fake.chat = chat
+    service.router = fake
+    service.model_health = type("Health", (), {"test_all": lambda self, **kwargs: [{"ok": True}]})()
+
+    assert service._request_model("hello") == "Recovered"
+    assert calls["count"] == 2
 
 
 def test_routed_agent_status_uses_router_without_legacy_ping(monkeypatch):

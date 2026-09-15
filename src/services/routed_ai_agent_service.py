@@ -42,6 +42,7 @@ class RoutedAIAgentService(AIAgentService):
         candidates = self.router._ordered_candidates(self.router.providers())
         max_attempts = max(1, min(len(candidates), 24))
         last_empty_model = ""
+        cooldown_recovery_attempted = False
 
         while attempts < max_attempts:
             attempts += 1
@@ -80,6 +81,24 @@ class RoutedAIAgentService(AIAgentService):
                 detail = str(exc)
                 if exc.retry_after:
                     detail += f" (retry_after={exc.retry_after}s)"
+                if (
+                    exc.retryable
+                    and not cooldown_recovery_attempted
+                    and "cooling down" in str(exc).lower()
+                ):
+                    cooldown_recovery_attempted = True
+                    # Cooldowns are process-local protection against repeated
+                    # failures. Before surfacing a false outage, probe the
+                    # routes directly; successful probes clear stale cooldowns.
+                    try:
+                        recovered = self.model_health.test_all(
+                            timeout_seconds=min(self.settings.AI_AGENT_TIMEOUT_SECONDS, 15)
+                        )
+                        if any(bool(row.get("ok")) for row in recovered):
+                            attempts -= 1
+                            continue
+                    except (AIProviderError, OSError, TimeoutError, ValueError, TypeError):
+                        pass
                 if attempts < max_attempts and exc.retryable:
                     continue
                 raise AIAgentError(f"AI provider router failed: {detail}") from exc
