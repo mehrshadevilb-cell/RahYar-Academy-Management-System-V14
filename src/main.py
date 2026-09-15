@@ -128,7 +128,8 @@ async def _prepare_telegram_polling() -> None:
     """Validate the token and clear webhook state before starting getUpdates."""
     me = await bot.get_me()
     logger.info("Telegram bot authenticated: @%s (id=%s)", me.username or "unknown", me.id)
-    await bot.delete_webhook(drop_pending_updates=True)
+    # Do not discard updates during an ordinary restart or transient conflict.
+    await bot.delete_webhook(drop_pending_updates=False)
     logger.info("Telegram webhook cleared; polling can start")
 
 
