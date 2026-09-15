@@ -13,6 +13,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY docker-build-id.txt /tmp/rahyar-build-id.txt
 COPY . .
 
-ENV RAHYAR_BUILD_ID=20260915-admin-assistant-v13
+ENV RAHYAR_BUILD_ID=20260915-ai-router-generator-v15
 
 CMD ["sh", "-c", "alembic upgrade head && python -m src.main"]
