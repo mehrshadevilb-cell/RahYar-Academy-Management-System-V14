@@ -22,7 +22,6 @@ CHECKS = (
     Check("pytest", (sys.executable, "-m", "pytest", "-q")),
 )
 
-# Import checks catch broken module-level dependencies that compileall cannot see.
 IMPORTS = (
     "src.ai.provider_router",
     "src.ai.latency_aware_provider_router",
@@ -34,20 +33,11 @@ IMPORTS = (
 
 
 def run(command: tuple[str, ...]) -> int:
-    completed = subprocess.run(command, cwd=ROOT, check=False)
-    return completed.returncode
+    return subprocess.run(command, cwd=ROOT, check=False).returncode
 
 
-def main() -> int:
+def check_imports() -> list[str]:
     failures: list[str] = []
-    print("=== RahYar full system check ===")
-
-    for name, command in ((check.name, check.command) for check in CHECKS):
-        print(f"[CHECK] {name}")
-        code = run(command)
-        if code:
-            failures.append(f"{name} (exit={code})")
-
     print("[CHECK] critical imports")
     for module in IMPORTS:
         try:
@@ -56,6 +46,22 @@ def main() -> int:
         except Exception as exc:  # pragma: no cover - diagnostic script
             failures.append(f"import {module}: {type(exc).__name__}: {exc}")
             print(f"  FAIL {module}: {type(exc).__name__}: {exc}")
+    return failures
+
+
+def main() -> int:
+    imports_only = "--imports-only" in sys.argv[1:]
+    failures: list[str] = []
+    print("=== RahYar full system check ===")
+
+    if not imports_only:
+        for check in CHECKS:
+            print(f"[CHECK] {check.name}")
+            code = run(check.command)
+            if code:
+                failures.append(f"{check.name} (exit={code})")
+
+    failures.extend(check_imports())
 
     if failures:
         print("\nFAILED:")
