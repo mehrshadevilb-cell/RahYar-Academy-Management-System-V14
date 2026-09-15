@@ -20,14 +20,11 @@ class MusicQuota:
         if self.settings.REDIS_URL:
             try:
                 from redis import Redis
-                self._redis = Redis.from_url(self.settings.REDIS_URL, decode_responses=True)
-                self._redis.ping()
+                self._redis = Redis.from_url(self.settings.REDIS_URL, decode_responses=True, socket_timeout=2)
             except Exception:
                 self._redis = None
 
     def is_rah_yar_student(self, db: Session, telegram_id: int | str) -> bool:
-        paid = exists().where(Payment.user_id == User.id, Payment.status == "approved")
-        enrolled = exists().where(Enrollment.user_id == User.id)
         row = (
             db.query(User)
             .join(TelegramAccount, TelegramAccount.user_id == User.id)
@@ -36,7 +33,10 @@ class MusicQuota:
         )
         if not row:
             return False
-        return bool(db.query(exists().where(Payment.user_id == row.id, Payment.status == "approved")).scalar() or db.query(exists().where(Enrollment.user_id == row.id)).scalar())
+        return bool(
+            db.query(exists().where(Payment.user_id == row.id, Payment.status == "approved")).scalar()
+            or db.query(exists().where(Enrollment.user_id == row.id)).scalar()
+        )
 
     @staticmethod
     def _seconds_until_reset() -> int:
@@ -45,7 +45,11 @@ class MusicQuota:
         return max(60, int((tomorrow - now).total_seconds()))
 
     def limit_for(self, is_student: bool) -> int:
-        return self.settings.MUSIC_GENERATION_RAHYAR_DAILY_LIMIT if is_student else self.settings.MUSIC_GENERATION_PUBLIC_DAILY_LIMIT
+        return (
+            self.settings.MUSIC_GENERATION_RAHYAR_DAILY_LIMIT
+            if is_student
+            else self.settings.MUSIC_GENERATION_PUBLIC_DAILY_LIMIT
+        )
 
     def reserve(self, telegram_id: int | str, is_student: bool) -> tuple[bool, int, int]:
         limit = self.limit_for(is_student)
@@ -60,7 +64,7 @@ class MusicQuota:
                     return False, limit, limit
                 return True, limit, max(0, limit - count)
             except Exception:
-                pass
+                self._redis = None
         now = datetime.now(timezone.utc)
         count, expires = self._memory.get(key, (0, now + timedelta(seconds=self._seconds_until_reset())))
         if expires <= now:
@@ -79,6 +83,6 @@ class MusicQuota:
                 self._redis.decr(key)
                 return
             except Exception:
-                pass
+                self._redis = None
         count, expires = self._memory.get(key, (0, datetime.now(timezone.utc)))
         self._memory[key] = (max(0, count - 1), expires)
