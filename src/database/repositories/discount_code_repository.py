@@ -19,6 +19,24 @@ class DiscountCodeRepository:
             .first()
         )
 
+    def get_by_code_for_update(
+        self,
+        db: Session,
+        code: str,
+    ) -> DiscountCode | None:
+        """Load a code with a row lock for the validate -> reserve flow.
+
+        The purchase handler validates the code and immediately reserves a
+        usage slot in the same DB session. Locking here prevents two
+        concurrent buyers from both passing the max_uses check.
+        """
+        return (
+            db.query(DiscountCode)
+            .filter(DiscountCode.code == code)
+            .with_for_update()
+            .first()
+        )
+
     def get_all(self, db: Session) -> list[DiscountCode]:
         return (
             db.query(DiscountCode)
