@@ -48,16 +48,16 @@ def _settings_summary(settings: dict) -> str:
 
 
 def _prompt_with_settings(prompt: str, settings: dict) -> str:
-    parts = [prompt.strip()]
+    extra = []
     if settings.get("bpm"):
-        parts.append(f"Target BPM: {settings['bpm']}")
+        extra.append(f"Target BPM: {settings['bpm']}")
     if settings.get("key"):
-        parts.append(f"Target key/scale: {settings['key']}")
+        extra.append(f"Target key/scale: {settings['key']}")
     if settings.get("length"):
-        parts.append(f"Target length: {settings['length']}")
+        extra.append(f"Target length: {settings['length']}")
     if settings.get("style"):
-        parts.append(f"Style/instruments: {settings['style']}")
-    return "\n\n[Advanced production settings]\n" + "\n".join(parts[1:]) if len(parts) > 1 else parts[0]
+        extra.append(f"Style/instruments: {settings['style']}")
+    return prompt if not extra else prompt + "\n\n[Advanced production settings]\n" + "\n".join(extra)
 
 
 async def _start(message: Message, state: FSMContext) -> None:
@@ -111,8 +111,7 @@ async def music_edit_prompt_message(message: Message, state: FSMContext):
     if len(text) < 3 or len(text) > 3000:
         await message.answer("Prompt باید بین ۳ تا ۳۰۰۰ کاراکتر باشد.")
         return
-    data = await state.get_data()
-    await state.update_data(prompt=text, variation=0)
+    await state.update_data(prompt=text, variation=0, advanced={})
     await state.set_state(MusicState.choosing_output)
     await message.answer("✅ Prompt به‌روزرسانی شد. خروجی را انتخاب کن:", reply_markup=output_keyboard())
 
@@ -142,10 +141,8 @@ async def music_extend_message(message: Message, state: FSMContext, db):
     prompt = str(data.get("prompt") or "").strip()
     output = str(data.get("output") or _auto_output(prompt))
     settings = dict(data.get("advanced") or {})
-    extended_prompt = f"{prompt}\n\nExtend the arrangement: {extension}"
-    extended_prompt = _prompt_with_settings(extended_prompt, settings)
+    extended_prompt = _prompt_with_settings(f"{prompt}\n\nExtend the arrangement: {extension}", settings)
     await _generate(message, state, db, extended_prompt, output, int(data.get("variation") or 0) + 1, allow_fallback=False)
-    await state.update_data(prompt=prompt, output=output)
 
 
 @router.callback_query(F.data == "music_variation")
@@ -171,14 +168,14 @@ async def music_advanced(callback: CallbackQuery, state: FSMContext):
     await callback.message.answer(
         "⚙️ <b>Advanced Music Settings</b>\n\n"
         f"{_settings_summary(settings)}\n\n"
-        "هر مورد را می‌توانی جداگانه تنظیم کنی؛ اگر Auto باشد، AI تصمیم می‌گیرد.",
+        "هر مورد را جداگانه تنظیم کن؛ Auto یعنی تصمیم با AI.",
         parse_mode="HTML",
         reply_markup=advanced_keyboard(),
     )
 
 
 @router.callback_query(MusicState.advanced, F.data.startswith("music_adv:"))
-async def music_advanced_action(callback: CallbackQuery, state: FSMContext):
+async def music_advanced_action(callback: CallbackQuery, state: FSMContext, db):
     action = callback.data.split(":", 1)[1]
     if action == "back":
         await callback.answer()
@@ -199,7 +196,7 @@ async def music_advanced_action(callback: CallbackQuery, state: FSMContext):
         output = str(data.get("output") or _auto_output(prompt))
         settings = dict(data.get("advanced") or {})
         await callback.answer("در حال تولید…")
-        await _generate(callback.message, state, callback.bot.get("db"), _prompt_with_settings(prompt, settings), output, int(data.get("variation") or 0))
+        await _generate(callback.message, state, db, _prompt_with_settings(prompt, settings), output, int(data.get("variation") or 0))
         return
     prompts = {
         "bpm": "🎚 BPM را وارد کن (مثلاً 140) یا Auto بنویس:",
@@ -232,10 +229,7 @@ async def music_advanced_message(message: Message, state: FSMContext):
                 return
         settings[field] = value
     await state.update_data(advanced=settings, advanced_field=None)
-    await message.answer(
-        f"✅ ذخیره شد.\n\n{_settings_summary(settings)}",
-        reply_markup=advanced_keyboard(),
-    )
+    await message.answer(f"✅ ذخیره شد.\n\n{_settings_summary(settings)}", reply_markup=advanced_keyboard())
 
 
 @router.message(MusicState.waiting_prompt)
