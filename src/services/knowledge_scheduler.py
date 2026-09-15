@@ -25,51 +25,53 @@ class KnowledgeScheduler:
             return
         self._task = asyncio.create_task(self._loop(), name="rahyar-knowledge-sync")
 
-    async def _publish_new_items(self, db, since: datetime) -> None:
+    def _sync_in_thread(self, since: datetime) -> tuple[list[dict], dict | None]:
+        db = SessionLocal()
+        try:
+            self.service.ingest_official_sources(db)
+            items = db.scalars(select(KnowledgeItem).where(KnowledgeItem.created_at >= since).order_by(KnowledgeItem.created_at)).all()
+            new_items = [
+                {"title": item.title, "text": (item.translated_text or item.summary or item.raw_text)[:2800], "url": item.source_url}
+                for item in items if item.source_type != "telegram"
+            ]
+            quiz = None
+            if self.settings.KNOWLEDGE_AUTO_QUIZ:
+                before = db.scalar(select(QuizQuestion.id).order_by(desc(QuizQuestion.created_at)))
+                self.service.generate_quiz(db, 5)
+                after = db.scalar(select(QuizQuestion).order_by(desc(QuizQuestion.created_at)))
+                if after and (before is None or after.id != before):
+                    quiz = {
+                        "question": after.question[:280],
+                        "options": [after.option_a, after.option_b, after.option_c, after.option_d],
+                        "correct": after.correct_option - 1,
+                        "explanation": (after.explanation or "")[:200],
+                    }
+            return new_items, quiz
+        finally:
+            db.close()
+
+    async def _publish(self, new_items: list[dict], quiz: dict | None) -> None:
         groups = self.settings.knowledge_group_ids
         if not groups:
             return
-        items = db.scalars(select(KnowledgeItem).where(KnowledgeItem.created_at >= since).order_by(KnowledgeItem.created_at)).all()
-        for item in items:
-            if item.source_type == "telegram":
-                continue
-            text = item.translated_text or item.summary or item.raw_text
-            message = "🧠 <b>مطلب آموزشی جدید</b>\n━━━━━━━━━━━━━━━━━━\n📌 <b>%s</b>\n\n%s\n\n🔗 منبع: %s" % (item.title or "Audio Production", text[:2800], item.source_url)
+        for item in new_items:
+            message = "🧠 <b>مطلب آموزشی جدید</b>\n━━━━━━━━━━━━━━━━━━\n📌 <b>%s</b>\n\n%s\n\n🔗 منبع: %s" % (item["title"] or "Audio Production", item["text"], item["url"] or "")
             for chat_id in groups:
                 try:
                     await self.bot.send_message(chat_id, message, parse_mode="HTML", disable_web_page_preview=True)
                 except Exception:
                     pass
-
-    async def _publish_quiz(self, db) -> None:
-        groups = self.settings.knowledge_group_ids
-        if not groups:
-            return
-        question = db.scalar(select(QuizQuestion).order_by(desc(QuizQuestion.created_at)))
-        if not question:
-            return
-        options = [question.option_a, question.option_b, question.option_c, question.option_d]
-        for chat_id in groups:
-            try:
-                await self.bot.send_poll(chat_id=chat_id, question="🧠 کوییز راه‌یار\n\n" + question.question[:280], options=options, type="quiz", correct_option_id=question.correct_option - 1, explanation=(question.explanation or "")[:200], is_anonymous=False)
-            except Exception:
-                pass
+        if quiz:
+            for chat_id in groups:
+                try:
+                    await self.bot.send_poll(chat_id=chat_id, question="🧠 کوییز راه‌یار\n\n" + quiz["question"], options=quiz["options"], type="quiz", correct_option_id=quiz["correct"], explanation=quiz["explanation"], is_anonymous=False)
+                except Exception:
+                    pass
 
     async def _run_once(self) -> None:
         started = datetime.utcnow() - timedelta(seconds=5)
-        db = SessionLocal()
-        try:
-            await asyncio.to_thread(self.service.ingest_official_sources, db)
-            await self._publish_new_items(db, started)
-            if self.settings.KNOWLEDGE_AUTO_QUIZ:
-                before = db.scalar(select(QuizQuestion.id).order_by(desc(QuizQuestion.created_at)))
-                await asyncio.to_thread(self.service.generate_quiz, db, 5)
-                db.expire_all()
-                after = db.scalar(select(QuizQuestion.id).order_by(desc(QuizQuestion.created_at)))
-                if after != before:
-                    await self._publish_quiz(db)
-        finally:
-            db.close()
+        new_items, quiz = await asyncio.to_thread(self._sync_in_thread, started)
+        await self._publish(new_items, quiz)
 
     async def _loop(self) -> None:
         await asyncio.sleep(20)
