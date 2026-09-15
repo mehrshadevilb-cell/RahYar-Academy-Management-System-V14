@@ -87,21 +87,21 @@ async def admin_online_slot_add(message: Message, state: FSMContext, db):
     await message.answer(f"✅ زمان «{slot.label}» اضافه شد. زمان بعدی یا /done را بفرستید.")
 
 
-@router.callback_query(F.data.startswith("res_confirm_"))
+@router.callback_query(F.data.startswith("res_confirm_") | F.data.startswith("res_payment_confirm_"))
 async def confirm_reservation(callback: CallbackQuery, bot: Bot, db):
 
     if not _is_owner(callback.from_user.id):
         await callback.answer("⛔️ شما دسترسی ندارید.", show_alert=True)
         return
 
-    reservation_id = int(callback.data.replace("res_confirm_", ""))
+    reservation_id = int(callback.data.replace("res_confirm_", "").replace("res_payment_confirm_", ""))
 
     existing = reservation_service.get_by_id(db, reservation_id)
 
     if not existing:
         await callback.answer("درخواست پیدا نشد", show_alert=True)
         return
-    if existing.status.value != "pending":
+    if existing.status.value not in {"pending", "payment_submitted"}:
         await callback.answer("این درخواست قبلاً بررسی شده است.", show_alert=True)
         return
 
@@ -134,21 +134,21 @@ async def confirm_reservation(callback: CallbackQuery, bot: Bot, db):
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("res_reject_"))
+@router.callback_query(F.data.startswith("res_reject_") | F.data.startswith("res_payment_reject_"))
 async def reject_reservation(callback: CallbackQuery, bot: Bot, db):
 
     if not _is_owner(callback.from_user.id):
         await callback.answer("⛔️ شما دسترسی ندارید.", show_alert=True)
         return
 
-    reservation_id = int(callback.data.replace("res_reject_", ""))
+    reservation_id = int(callback.data.replace("res_reject_", "").replace("res_payment_reject_", ""))
 
     existing = reservation_service.get_by_id(db, reservation_id)
 
     if not existing:
         await callback.answer("درخواست پیدا نشد", show_alert=True)
         return
-    if existing.status.value != "pending":
+    if existing.status.value not in {"pending", "payment_submitted"}:
         await callback.answer("این درخواست قبلاً بررسی شده است.", show_alert=True)
         return
 

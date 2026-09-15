@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from src.database.models.online_time_slot import OnlineTimeSlot, normalize_weekday
 from src.database.models.reservation import Reservation, ReservationStatus
 from src.database.models.online_enrollment import OnlineEnrollment
+from src.core.utils.jalali import jalali_to_gregorian, gregorian_to_jalali, format_jalali_date
 
 
 class OnlineScheduleService:
@@ -90,4 +91,27 @@ class OnlineScheduleService:
         db.commit()
         for item in reservations:
             db.refresh(item)
+        return reservations
+
+    def create_jalali_reservation_plan(self, db: Session, enrollment, slot_id: int, jy: int, jm: int, jd: int, count: int):
+        gy, gm, gd = jalali_to_gregorian(jy, jm, jd)
+        slot = db.query(OnlineTimeSlot).filter(OnlineTimeSlot.id == slot_id, OnlineTimeSlot.is_active.is_(True)).one_or_none()
+        if not slot:
+            raise ValueError("invalid or inactive time slot")
+        if count <= 0:
+            raise ValueError("reservation count must be positive")
+        if not self.slot_is_available(db, enrollment.id, slot_id, date(gy, gm, gd), count):
+            raise ValueError("one or more selected sessions are already reserved")
+        reservations = []
+        for day in self.dates_for_slot(slot, date(gy, gm, gd), count):
+            jy2, jm2, jd2 = gregorian_to_jalali(day.year, day.month, day.day)
+            reservations.append(Reservation(
+                enrollment_id=enrollment.id,
+                requested_date=format_jalali_date(jy2, jm2, jd2),
+                requested_time=slot.start_time,
+                status=ReservationStatus.WAITING_PAYMENT,
+                admin_notes=f"slot_id={slot.id}; plan_sessions={count}",
+            ))
+        db.add_all(reservations)
+        db.commit()
         return reservations

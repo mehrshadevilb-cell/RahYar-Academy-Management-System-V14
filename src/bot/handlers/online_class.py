@@ -13,6 +13,8 @@ from src.services.online_enrollment_service import OnlineEnrollmentService
 from src.services.reservation_service import ReservationService
 from src.services.profile_service import ProfileService
 from src.services.online_schedule_service import OnlineScheduleService
+from src.services.payment_card_service import PaymentCardService
+from src.database.models.online_enrollment import PaymentModel
 from src.database.repositories.telegram_repository import TelegramRepository
 from src.core.config.settings import get_settings
 from src.core.utils.jalali import (
@@ -29,6 +31,7 @@ online_course_service = OnlineCourseService()
 online_enrollment_service = OnlineEnrollmentService()
 reservation_service = ReservationService()
 schedule_service = OnlineScheduleService()
+payment_card_service = PaymentCardService()
 profile_service = ProfileService()
 telegram_repository = TelegramRepository()
 
@@ -210,6 +213,31 @@ async def jalali_calendar_pick(callback: CallbackQuery, state: FSMContext, db):
 
     requested_date = format_jalali_date(jy, jm, jd)
 
+    data = await state.get_data()
+    slot_id = data.get("slot_id")
+    if slot_id:
+        count = enrollment.online_course.term_sessions if enrollment.payment_model == PaymentModel.TERM else enrollment.online_course.monthly_sessions
+        try:
+            reservations = schedule_service.create_jalali_reservation_plan(
+                db, enrollment, int(slot_id), jy, jm, jd, min(count, enrollment.remaining_sessions)
+            )
+        except ValueError as exc:
+            await state.clear()
+            await callback.answer(str(exc), show_alert=True)
+            return
+        card = payment_card_service.get_active_card(db)
+        await state.update_data(reservation_ids=[item.id for item in reservations])
+        await state.set_state(ReservationState.waiting_receipt)
+        plan_name = "ترمی" if enrollment.payment_model == PaymentModel.TERM else "ماهانه"
+        card_text = f"\nشماره کارت: {card.card_number}\nبه نام: {card.card_holder}\n" if card else "\nفعلاً کارت پرداخت تنظیم نشده؛ با پشتیبانی تماس بگیرید.\n"
+        await callback.message.edit_text(
+            f"✅ برنامه {plan_name} برای {len(reservations)} جلسه ساخته شد.\n"
+            f"از تاریخ {requested_date}، زمان انتخابی برای شما رزرو شده است.\n"
+            f"برای نهایی شدن، رسید پرداخت را ارسال کنید.{card_text}"
+        )
+        await callback.answer()
+        return
+
     await state.update_data(requested_date=requested_date)
     await state.set_state(ReservationState.waiting_time)
 
@@ -284,3 +312,32 @@ async def reservation_get_time(message: Message, state: FSMContext, bot: Bot, db
 """,
         reply_markup=reservation_review_keyboard(reservation.id),
     )
+
+
+@router.message(ReservationState.waiting_receipt)
+async def reservation_plan_receipt(message: Message, state: FSMContext, bot: Bot, db):
+    proof = None
+    if message.photo:
+        proof = message.photo[-1].file_id
+    elif message.document:
+        proof = message.document.file_id
+    if not proof:
+        await message.answer("لطفاً عکس یا فایل رسید پرداخت را ارسال کنید.")
+        return
+    data = await state.get_data()
+    reservation_ids = data.get("reservation_ids", [])
+    submitted = []
+    for reservation_id in reservation_ids:
+        reservation = reservation_service.submit_payment(db, int(reservation_id), proof)
+        if reservation:
+            submitted.append(reservation.id)
+    await state.clear()
+    await message.answer(
+        f"✅ رسید برای برنامه {len(submitted)} جلسه ثبت شد. پس از بررسی ادمین، رزروها نهایی می‌شوند."
+    )
+    if submitted:
+        await bot.send_message(
+            chat_id=settings.OWNER_ID,
+            text=f"💳 رسید پرداخت برنامه آنلاین دریافت شد. رزروهای نیازمند بررسی: {', '.join(map(str, submitted))}",
+            reply_markup=reservation_review_keyboard(submitted[0]),
+        )

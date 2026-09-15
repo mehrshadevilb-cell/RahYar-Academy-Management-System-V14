@@ -35,7 +35,7 @@ class ReservationRepository:
     def get_pending(self, db: Session):
         return (
             db.query(Reservation)
-            .filter(Reservation.status == ReservationStatus.PENDING)
+            .filter(Reservation.status.in_((ReservationStatus.PENDING, ReservationStatus.PAYMENT_SUBMITTED)))
             .order_by(Reservation.requested_date, Reservation.requested_time)
             .all()
         )
