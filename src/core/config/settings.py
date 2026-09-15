@@ -84,6 +84,9 @@ class Settings(BaseSettings):
     AI_BASE_URL: str | None = None
     AI_MODEL: str | None = None
 
+    # Read-only public web research for the agent (DuckDuckGo).
+    AI_AGENT_WEB_SEARCH_ENABLED: bool = True
+
     # Online write mode on Render: clone repo with a fine-grained PAT.
     # Never auto-merges to main; opens PR on ai/* branches only.
     AI_AGENT_WRITE_ENABLED: bool = False
