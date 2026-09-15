@@ -1,7 +1,8 @@
 """AI Agent-owned knowledge runtime.
 
-Telegram is only a transport. All knowledge ingestion, official-source research,
-translation, support grounding, scheduling and quiz generation live here.
+Telegram is only a transport. The runtime ingests the whole group corpus,
+keeps the group quiet unless the bot is addressed, and generates quizzes from
+broad coverage of the accumulated knowledge rather than only recent plugins.
 """
 from __future__ import annotations
 
@@ -28,6 +29,8 @@ from src.database.session import SessionLocal
 
 MAX_SOURCE_CHARS = 12000
 MAX_QUIZZES_PER_DAY = 2
+QUIZ_CORPUS_ITEMS = 36
+QUIZ_PREVIOUS_QUESTIONS = 120
 
 OFFICIAL_SOURCES = {
     "waves_news": "https://www.waves.com/news",
@@ -77,7 +80,7 @@ class _TextParser(HTMLParser):
 
 
 class AIAgentKnowledgeRuntime:
-    """Autonomous knowledge worker owned by the AI Agent, not by bot handlers."""
+    """Autonomous knowledge worker owned by the AI Agent."""
 
     def __init__(self, bot=None) -> None:
         self.settings = get_settings()
@@ -212,48 +215,103 @@ class AIAgentKnowledgeRuntime:
         value = re.sub(r"[^\w\u0600-\u06ff]+", " ", (value or "").casefold())
         return re.sub(r"\s+", " ", value).strip()
 
-    def _quiz_questions_today(self, db: Session) -> int:
-        start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-        return int(db.scalar(select(QuizQuestion.id).where(QuizQuestion.created_at >= start).count() if False else select(QuizQuestion.id).where(QuizQuestion.created_at >= start).with_only_columns(QuizQuestion.id).order_by(None).limit(MAX_QUIZZES_PER_DAY)) is not None)
+    @staticmethod
+    def _tokens(value: str) -> set[str]:
+        return {x for x in AIAgentKnowledgeRuntime._normalize_quiz_text(value).split() if len(x) > 2}
 
     def _quiz_count_today(self, db: Session) -> int:
         start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-        rows = db.scalars(select(QuizQuestion.id).where(QuizQuestion.created_at >= start)).all()
-        return len(rows)
+        return len(db.scalars(select(QuizQuestion.id).where(QuizQuestion.created_at >= start)).all())
+
+    def _quiz_corpus(self, db: Session) -> list[KnowledgeItem]:
+        """Select knowledge across the entire corpus, not just the latest items.
+
+        Items are spread evenly across creation order. This makes daily quizzes
+        rotate through old and new group material, while still including official
+        knowledge and plugin/DAW notes when they exist.
+        """
+        items = db.scalars(
+            select(KnowledgeItem)
+            .where(KnowledgeItem.quiz_ready.is_(True))
+            .order_by(KnowledgeItem.created_at.asc(), KnowledgeItem.id.asc())
+        ).all()
+        if len(items) <= QUIZ_CORPUS_ITEMS:
+            return items
+        step = (len(items) - 1) / (QUIZ_CORPUS_ITEMS - 1)
+        indices = sorted({round(i * step) for i in range(QUIZ_CORPUS_ITEMS)})
+        return [items[i] for i in indices]
+
+    def _quiz_topic(self, items: list[KnowledgeItem]) -> str:
+        topics: dict[str, int] = {}
+        for item in items:
+            raw = f"{item.title or ''} {item.tags or ''} {item.summary or ''} {item.raw_text[:500]}".casefold()
+            for name, keys in {
+                "DAW": ("cubase", "studio one", "ableton", "fl studio", "fender studio", "daw"),
+                "Plugin": ("plugin", "waves", "arturia", "izotope", "ozone", "vst", "vst3"),
+                "Recording": ("record", "microphone", "mic", "vocal", "tracking", "gain staging"),
+                "Mixing": ("mix", "eq", "compress", "reverb", "delay", "stereo"),
+                "Mastering": ("master", "loudness", "limiter", "true peak"),
+                "Music Theory": ("harmony", "chord", "scale", "melody", "rhythm", "interval", "گام", "آکورد"),
+            }.items():
+                if any(key in raw for key in keys):
+                    topics[name] = topics.get(name, 0) + 1
+        return max(topics, key=topics.get) if topics else "General music production"
 
     def generate_quiz(self, db: Session, count: int = 1) -> int:
         if self._quiz_count_today(db) >= MAX_QUIZZES_PER_DAY:
             return 0
-        items = db.scalars(select(KnowledgeItem).where(KnowledgeItem.quiz_ready.is_(True)).order_by(desc(KnowledgeItem.created_at)).limit(20)).all()
+        items = self._quiz_corpus(db)
         if not items:
             return 0
-        existing_questions = db.scalars(select(QuizQuestion.question).order_by(desc(QuizQuestion.created_at)).limit(100)).all()
+        existing_questions = db.scalars(select(QuizQuestion.question).order_by(desc(QuizQuestion.created_at)).limit(QUIZ_PREVIOUS_QUESTIONS)).all()
         existing_normalized = {self._normalize_quiz_text(q) for q in existing_questions}
-        context = "\n\n".join((item.translated_text or item.summary or item.raw_text)[:2500] for item in items)
-        previous = "\n".join(f"- {q[:500]}" for q in existing_questions[-30:])
+        # Compact representation of a corpus spanning the whole group. The AI
+        # gets the full-topic coverage signal without exceeding request limits.
+        notes = []
+        for item in items:
+            body = (item.translated_text or item.summary or item.raw_text).strip()
+            notes.append(f"TOPIC={item.tags or item.title or 'group'}\n{body[:650]}")
+        context = "\n\n---\n\n".join(notes)
+        previous = "\n".join(f"- {q[:500]}" for q in existing_questions[:40])
+        topic = self._quiz_topic(items)
         raw = self._request_ai(
-            "Create exactly %d Persian multiple-choice quiz question from the supplied learning notes. "
+            "Create exactly %d Persian multiple-choice quiz question from the supplied RahYar GROUP KNOWLEDGE CORPUS. "
+            "The corpus contains material from the whole group, including older and newer posts. Do not use outside facts. "
+            "Prioritize a concept actually supported by the notes. The preferred topic for this round is %s, but choose another "
+            "topic if that produces better coverage. Rotate coverage across DAW, plugins, recording, mixing, mastering, music theory, "
+            "techniques and troubleshooting; do not assume every question must be about a plugin. "
             "Return ONLY a JSON array. Each item: question, options (exactly 4 strings), correct_option (1-4), explanation. "
-            "The question MUST test a concept that is not already asked in the previous questions. Do not paraphrase or repeat them. "
-            "Test understanding, not obscure trivia.\n\nPREVIOUS QUESTIONS TO AVOID:\n%s\n\nNOTES:\n%s" % (count, previous, context),
+            "Questions must test understanding, not obscure trivia. Never repeat or lightly paraphrase any previous question.\n\n"
+            "PREVIOUS QUESTIONS TO AVOID:\n%s\n\nGROUP KNOWLEDGE CORPUS:\n%s" % (count, topic, previous, context),
             1800,
         )
         data = json.loads(re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.I))
+        if not isinstance(data, list):
+            return 0
         made = 0
         for row in data[:count]:
-            if self._quiz_count_today(db) >= MAX_QUIZZES_PER_DAY:
+            if self._quiz_count_today(db) >= MAX_QUIZZES_PER_DAY or not isinstance(row, dict):
                 break
-            question = str(row.get("question", "")).strip() if isinstance(row, dict) else ""
+            question = str(row.get("question", "")).strip()
             normalized = self._normalize_quiz_text(question)
-            options = row.get("options", []) if isinstance(row, dict) else []
-            correct = int(row.get("correct_option", 0)) if isinstance(row, dict) else 0
-            if not question or normalized in existing_normalized:
+            options = row.get("options", [])
+            correct = int(row.get("correct_option", 0)) if str(row.get("correct_option", "")).isdigit() else 0
+            tokens = self._tokens(question)
+            too_similar = any(
+                len(tokens & self._tokens(previous_question)) / max(1, len(tokens | self._tokens(previous_question))) >= 0.72
+                for previous_question in existing_questions
+            )
+            if not question or normalized in existing_normalized or too_similar:
                 continue
             if not isinstance(options, list) or len(options) != 4 or correct not in (1, 2, 3, 4):
                 continue
+            # Link the quiz to a representative corpus item; the actual prompt
+            # is grounded in the whole corpus, not this single row.
             db.add(QuizQuestion(
-                knowledge_item_id=items[0].id, question=question[:4000],
-                option_a=str(options[0])[:500], option_b=str(options[1])[:500], option_c=str(options[2])[:500], option_d=str(options[3])[:500],
+                knowledge_item_id=items[0].id,
+                question=question[:4000],
+                option_a=str(options[0])[:500], option_b=str(options[1])[:500],
+                option_c=str(options[2])[:500], option_d=str(options[3])[:500],
                 correct_option=correct, explanation=str(row.get("explanation", ""))[:3000],
             ))
             existing_normalized.add(normalized)
@@ -261,16 +319,10 @@ class AIAgentKnowledgeRuntime:
         db.commit()
         return made
 
-    def _looks_like_question(self, text: str) -> bool:
-        lowered = text.lower()
-        return "?" in text or "؟" in text or any(x in lowered for x in ("چطور", "چجوری", "چگونه", "چیه", "چیست", "فرق", "کدوم", "چرا", "how ", "what ", "why "))
-
     def _bot_is_target(self, message: Message) -> bool:
         if message.reply_to_message and message.reply_to_message.from_user and message.reply_to_message.from_user.is_bot:
             return True
-        username = (self.settings.BOT_USERNAME or "").lstrip("@").casefold()
-        if not username:
-            return False
+        username = (self.settings.BOT_USERNAME or "Mb_tutorialbot").lstrip("@").casefold()
         text = (message.text or message.caption or "").casefold()
         return bool(re.search(rf"(?:^|\s)@{re.escape(username)}(?:\b|$)", text))
 
@@ -283,28 +335,21 @@ class AIAgentKnowledgeRuntime:
         text = (message.text or message.caption or "").strip()
         if len(text) < 5:
             return
+        # Every useful group message is ingested, regardless of whether it is
+        # a question. Targeting only controls whether the bot speaks.
         self.ingest_group_message(db, message.chat.id, message.message_id, text)
-        # The knowledge worker must stay quiet in group chat unless the user
-        # explicitly addresses the bot. It still ingests ordinary messages.
         if not self._bot_is_target(message):
             return
         try:
-            from src.services.chat_assistant_service import ChatAssistantError, ChatAssistantService
+            from src.services.chat_assistant_service import ChatAssistantService
             await message.bot.send_chat_action(message.chat.id, "typing")
             expert_request = (
                 "به‌عنوان مدرس و کارشناس حرفه‌ای موسیقی پاسخ بده. سؤال را کامل بررسی کن، "
-                "منظور کاربر و زمینه فنی آن را استخراج کن و اگر اطلاعات نسخه‌ای/فنی لازم است "
-                "قبل از نتیجه‌گیری از دانش معتبر و Web Research استفاده کن. حدس نزن. "
-                "جواب را مستقیم و قابل اجرا بده؛ اگر لازم است مسیر منو، تنظیمات، مثال و علت را "
-                "مرحله‌به‌مرحله توضیح بده. اگر چند حالت وجود دارد، تفاوتشان را روشن کن. "
-                "از اصطلاحات تخصصی درست استفاده کن و پاسخ را با تیترهای کوتاه و مرتب بنویس.\n\n"
+                "اگر اطلاعات نسخه‌ای/فنی لازم است Web Research معتبر انجام بده و حدس نزن. "
+                "جواب مستقیم، اجرایی و مرحله‌ای باشد و در صورت نیاز مسیر منو، تنظیمات و مثال بده.\n\n"
                 f"سؤال کاربر:\n{text[:1800]}"
             )
-            reply = ChatAssistantService().answer(
-                db=db,
-                telegram_id=str(message.from_user.id),
-                user_message=expert_request,
-            )
+            reply = ChatAssistantService().answer(db=db, telegram_id=str(message.from_user.id), user_message=expert_request)
             from src.services.telegram_answer_ui import format_assistant_answer
             await message.reply(format_assistant_answer(reply), parse_mode="HTML", disable_web_page_preview=True)
         except Exception as exc:
