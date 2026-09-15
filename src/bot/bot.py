@@ -3,6 +3,7 @@ from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.exceptions import TelegramConflictError, TelegramUnauthorizedError
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import ErrorEvent
+import traceback
 
 from src.core.config.settings import get_settings
 from src.core.logging.logger import get_logger
@@ -46,44 +47,85 @@ dp.callback_query.middleware(DatabaseMiddleware())
 dp.message.middleware(SecurityMiddleware())
 dp.callback_query.middleware(SecurityMiddleware())
 
-# The Telegram router is only a transport adapter. Knowledge intelligence belongs to the AI Agent runtime.
 ai_agent_knowledge = AIAgentKnowledgeRuntime(bot=bot)
+
+
+async def send_error_report(event: ErrorEvent, exc: Exception):
+    if not settings.OWNER_ID:
+        return
+
+    update = event.update
+    user_id = None
+    username = None
+    chat_id = None
+
+    if update.message:
+        chat_id = update.message.chat.id
+        if update.message.from_user:
+            user_id = update.message.from_user.id
+            username = update.message.from_user.username
+
+    report = (
+        "🚨 RahYar Bot Error\n\n"
+        f"Update: {getattr(update, 'update_id', '-') }\n"
+        f"User: {user_id}\n"
+        f"Username: @{username}\n"
+        f"Chat: {chat_id}\n\n"
+        f"Exception: {type(exc).__name__}\n"
+        f"Message: {str(exc)[:700]}\n\n"
+        f"Traceback:\n{traceback.format_exc()[:2500]}"
+    )
+
+    try:
+        await bot.send_message(chat_id=settings.OWNER_ID, text=report)
+    except Exception:
+        logger.exception("Failed sending admin error report")
 
 
 @dp.error()
 async def global_error_handler(event: ErrorEvent):
     exc = event.exception
     callback_query = event.update.callback_query
+
     if callback_query:
         try:
             await callback_query.answer()
         except Exception:
-            logger.exception("Failed to answer callback_query %s after an error", callback_query.id)
+            logger.exception("Failed callback answer")
+
     if isinstance(exc, TelegramConflictError):
-        logger.warning("TelegramConflictError (another getUpdates active): %s", exc)
+        logger.warning("Telegram conflict: %s", exc)
         return True
+
     if isinstance(exc, TelegramUnauthorizedError):
-        logger.error("TelegramUnauthorizedError — BOT_TOKEN invalid or revoked")
+        logger.error("Telegram token invalid")
         return True
+
     if is_benign_telegram_error(exc):
-        logger.info("Benign Telegram error on update %s: %s: %s", event.update.update_id, type(exc).__name__, exc)
+        logger.info("Benign Telegram error: %s", exc)
         return True
-    logger.exception("Unhandled error on update %s: %s", event.update.update_id, exc, exc_info=exc)
+
+    logger.exception("Unhandled error: %s", exc)
+    await send_error_report(event, exc)
+
     chat_id = None
     if event.update.message:
         chat_id = event.update.message.chat.id
     elif callback_query and callback_query.message:
         chat_id = callback_query.message.chat.id
+
     if chat_id:
         try:
             await bot.send_message(chat_id=chat_id, text="⚠️ متأسفانه خطایی رخ داد. لطفاً دوباره تلاش کنید یا از «🆘 پشتیبانی» پیام بگذارید.")
         except Exception:
-            logger.exception("Failed to notify user %s about an error", chat_id)
+            logger.exception("Failed user error message")
+
     if settings.OWNER_ID and should_notify_owner(exc):
         try:
-            await bot.send_message(chat_id=settings.OWNER_ID, text=f"🚨 خطای فنی در ربات\n\nنوع: {type(exc).__name__}\nپیام: {str(exc)[:500]}")
+            await bot.send_message(chat_id=settings.OWNER_ID, text=f"🚨 خطای فنی: {type(exc).__name__}\n{str(exc)[:500]}")
         except Exception:
-            logger.exception("Failed to notify owner: {settings.OWNER_ID}")
+            logger.exception("Failed owner notification")
+
     return True
 
 
@@ -93,9 +135,7 @@ def setup_handlers():
         admin_online, admin_installments, admin_discount, admin_logs,
         admin_broadcast, admin_reports, admin_ai, referral, support, admin_support,
         assignment, admin_assignments, progress, group_music_panel, music_generator,
-        # AI Agent transport gateway; it owns the knowledge/support intelligence.
         ai_agent_knowledge,
-        # chat_assistant MUST stay last: it is a free-text catch-all.
         chat_assistant,
     ):
         dp.include_router(module.router)
