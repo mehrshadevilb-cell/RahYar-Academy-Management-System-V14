@@ -35,19 +35,11 @@ def upgrade() -> None:
         sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.true()),
         sa.Column("created_at", sa.DateTime(), nullable=False, server_default=sa.func.now()),
     )
-    op.create_index(
-        "ix_online_time_slots_course_id",
-        "online_time_slots",
-        ["online_course_id"],
-    )
+    op.create_index("ix_online_time_slots_course_id", "online_time_slots", ["online_course_id"])
 
 
 def downgrade() -> None:
-    bind = op.get_bind()
-    inspector = inspect(bind)
-    if "online_time_slots" not in inspector.get_table_names():
-        return
-    indexes = {item["name"] for item in inspector.get_indexes("online_time_slots")}
-    if "ix_online_time_slots_course_id" in indexes:
-        op.drop_index("ix_online_time_slots_course_id", table_name="online_time_slots")
-    op.drop_table("online_time_slots")
+    # The current baseline imports this model and therefore owns the table in
+    # fresh installs. Historical downgrade must not delete shared production
+    # data; the baseline handles final teardown.
+    return
