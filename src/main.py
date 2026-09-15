@@ -8,14 +8,13 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 import uvicorn
 
-from src.bot.bot import bot, dp, setup_handlers
+from src.bot.bot import bot, dp, setup_handlers, ai_agent_knowledge
 from src.core.config.settings import get_settings
 from src.core.logging.logger import get_logger
 from src.database.seed_payment_card import seed_default_card
 from src.database.seed_products import seed_default_products
 from src.database.seed_online_courses import seed_default_online_courses
 from src.services.reminder_scheduler import InstallmentReminderScheduler
-from src.services.knowledge_scheduler import KnowledgeScheduler
 from src.web.router import router as storefront_router
 
 settings = get_settings()
@@ -57,7 +56,7 @@ async def head_root():
 
 @app.get("/api/status")
 async def api_status():
-    return JSONResponse({"status": "running", "service": "RahYar Bot + Web", "site": settings.SITE_NAME, "build": _build_id(), "chat_assistant": settings.CHAT_ASSISTANT_ENABLED, "knowledge": settings.KNOWLEDGE_ENABLED})
+    return JSONResponse({"status": "running", "service": "RahYar Bot + Web", "site": settings.SITE_NAME, "build": _build_id(), "chat_assistant": settings.CHAT_ASSISTANT_ENABLED, "knowledge": settings.KNOWLEDGE_ENABLED, "ai_agent_knowledge_runtime": True})
 
 
 @app.get("/api/debug-storefront")
@@ -110,14 +109,14 @@ async def start_bot():
 
     installment_scheduler = InstallmentReminderScheduler(bot)
     installment_scheduler.start()
-    knowledge_scheduler = KnowledgeScheduler()
-    knowledge_scheduler.start()
+    ai_agent_knowledge.start()
 
     try:
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types(), handle_signals=False)
     finally:
-        if knowledge_scheduler._task:
-            knowledge_scheduler._task.cancel()
+        await ai_agent_knowledge.stop()
+        if installment_scheduler._task:
+            installment_scheduler._task.cancel()
         await bot.session.close()
 
 
