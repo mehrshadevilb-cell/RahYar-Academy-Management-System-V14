@@ -14,6 +14,7 @@ from src.core.config.settings import get_settings
 from src.database.models.admin_log import AdminLog
 from src.database.session import SessionLocal
 from src.services.ai_agent_service import AIAgentError
+from src.services.ai_agent_self_check import AIAgentSelfChecker
 from src.services.routed_ai_agent_service import RoutedAIAgentService
 
 try:
@@ -62,6 +63,10 @@ class AIAgentRuntime:
     @property
     def skills_dir(self) -> Path:
         return self.agent.repo / ".ai-agent" / "skills"
+
+    def self_check(self) -> str:
+        """Run deterministic local checks without invoking the model or mutating files."""
+        return AIAgentSelfChecker(self.agent.repo).format()
 
     def select_skills(self, task: str) -> list[str]:
         text = (task or "").lower()
@@ -218,6 +223,12 @@ Keep the plan minimal, specific and safe. Never request secrets."""
             await report("🔎 بررسی ساختار پروژه و انتخاب Skillها...")
             plan = await asyncio.to_thread(self.plan, task, task_type)
             await report("🧠 Planner آماده شد؛ وابستگی‌ها و ریسک‌ها مشخص شدند.")
+            await report("🧪 اجرای preflight deterministic checks...")
+            preflight = await asyncio.to_thread(AIAgentSelfChecker(self.agent.repo).run)
+            failures = [item for item in preflight if not item.ok]
+            if failures:
+                detail = " | ".join(f"{item.name}: {item.detail}" for item in failures[:3])
+                raise AIAgentError(f"Preflight failed before code changes: {detail}")
             await report("✏️ اجرای تغییرات روی branch ایزوله...")
             result = await asyncio.to_thread(self.agent.implement, self.build_implementation_task(task, task_type, plan), task_type)
             await report("🧪 compile و pytest و کنترل‌های نهایی انجام شد.")
