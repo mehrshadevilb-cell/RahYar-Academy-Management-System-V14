@@ -16,7 +16,17 @@ from src.database.models.online_enrollment import (
 from src.database.models.reservation import Reservation, ReservationStatus
 from src.database.models.telegram_account import TelegramAccount
 from src.database.models.user import User, UserRole
-from src.services.reminder_scheduler import InstallmentReminderScheduler
+from src.database.models.discount_code import DiscountCode
+from src.database.models.course import Course
+from src.database.models.spotplayer_course import SpotPlayerCourse
+from src.database.models.payment import Payment
+from src.database.models.student_profile import StudentProfile
+from src.database.models.telegram_channel import TelegramChannel
+from src.database.models.license import License
+from src.database.models.invite_link import TelegramInviteLink
+from src.database.models.attendance import Attendance
+from src.database.models.installment import Installment
+from src.services.reminder_scheduler import InstallmentReminderScheduler, _class_start_in_tehran, should_send_one_hour_reminder, TEHRAN_TZ
 
 
 def make_db():
@@ -28,6 +38,15 @@ def make_db():
 def jalali_for(d: date) -> str:
     jy, jm, jd = gregorian_to_jalali(d.year, d.month, d.day)
     return format_jalali_date(jy, jm, jd)
+
+
+def test_one_hour_reminder_window_is_timezone_aware_and_bounded():
+    start = _class_start_in_tehran("1405-06-24", "18:30")
+    assert start is not None
+    assert start.tzinfo == TEHRAN_TZ
+    assert should_send_one_hour_reminder(start, start - timedelta(minutes=30)) is True
+    assert should_send_one_hour_reminder(start, start - timedelta(hours=2)) is False
+    assert should_send_one_hour_reminder(start, start + timedelta(minutes=1)) is False
 
 
 @pytest.mark.asyncio

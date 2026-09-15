@@ -49,6 +49,7 @@ class Reservation(Base):
 
     reminder_1d_sent: Mapped[bool] = mapped_column(Boolean, default=False)
     reminder_due_sent: Mapped[bool] = mapped_column(Boolean, default=False)
+    reminder_1h_sent: Mapped[bool] = mapped_column(Boolean, default=False)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

@@ -1,12 +1,13 @@
 import asyncio
 import logging
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from aiogram import Bot
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
 from src.core.config.settings import get_settings
-from src.core.utils.jalali import format_jalali_date, gregorian_to_jalali
+from src.core.utils.jalali import format_jalali_date, gregorian_to_jalali, jalali_to_gregorian
 from src.database.models.reservation import ReservationStatus
 from src.database.repositories.online_enrollment_repository import (
     OnlineEnrollmentRepository,
@@ -18,7 +19,8 @@ from src.services.installment_service import InstallmentService
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_INTERVAL_SECONDS = 6 * 60 * 60
+DEFAULT_INTERVAL_SECONDS = 15 * 60
+TEHRAN_TZ = ZoneInfo("Asia/Tehran")
 
 REMINDER_TEXT = {
     7: (
@@ -61,10 +63,31 @@ CLASS_REMINDER_DUE = (
     "لطفاً به‌موقع حاضر باشید."
 )
 
+CLASS_REMINDER_1H = (
+    "⏳ یادآوری نزدیک شدن کلاس\n\n"
+    "کلاس «{course}» شما حدود یک ساعت دیگر، ساعت {time} شروع می‌شود.\n"
+    "تاریخ: {date}"
+)
+
 
 def _jalali_str_for_gregorian(d: date) -> str:
     jy, jm, jd = gregorian_to_jalali(d.year, d.month, d.day)
     return format_jalali_date(jy, jm, jd)
+
+
+def _class_start_in_tehran(requested_date: str, requested_time: str) -> datetime | None:
+    try:
+        jy, jm, jd = (int(part) for part in requested_date.split("-"))
+        gy, gm, gd = jalali_to_gregorian(jy, jm, jd)
+        hour, minute = (int(part) for part in requested_time.split(":")[:2])
+        return datetime(gy, gm, gd, hour, minute, tzinfo=TEHRAN_TZ)
+    except (TypeError, ValueError):
+        return None
+
+
+def should_send_one_hour_reminder(class_start: datetime, now: datetime) -> bool:
+    remaining = class_start - now
+    return timedelta(0) <= remaining <= timedelta(hours=1)
 
 
 class InstallmentReminderScheduler:
@@ -202,6 +225,19 @@ class InstallmentReminderScheduler:
                 "time": reservation.requested_time,
                 "date": reservation.requested_date,
             }
+
+            class_start = _class_start_in_tehran(reservation.requested_date, reservation.requested_time)
+            now = datetime.now(TEHRAN_TZ)
+            if (
+                class_start is not None
+                and should_send_one_hour_reminder(class_start, now)
+                and not reservation.reminder_1h_sent
+            ):
+                await self._notify_student(
+                    db, enrollment.user_id, CLASS_REMINDER_1H.format(**payload)
+                )
+                reservation.reminder_1h_sent = True
+                db.commit()
 
             if (
                 reservation.requested_date == tomorrow_j
