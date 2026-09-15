@@ -3,6 +3,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy import inspect
 
 revision: str = "0012"
 down_revision: Union[str, None] = "0011"
@@ -11,6 +12,9 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
+    if "online_time_slots" in inspect(bind).get_table_names():
+        return
     op.create_table(
         "online_time_slots",
         sa.Column("id", sa.Integer(), primary_key=True),
