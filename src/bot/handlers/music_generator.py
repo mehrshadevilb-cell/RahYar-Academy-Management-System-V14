@@ -27,18 +27,14 @@ INTRO = (
     "• یه ملودی دارک برای رپ، F# minor، حدود 140 BPM\n"
     "• cinematic piano با strings و drums، احساسی و بزرگ\n"
     "• یه trap beat خشن با 808 و hi-hat سریع\n\n"
-    "من جزئیات موسیقایی مثل Key، Scale، BPM، Groove، سازها و ساختار را خودم تحلیل می‌کنم."
+    "من Key، Scale، BPM، Groove، سازها و ساختار را خودم تحلیل می‌کنم."
 )
 
 
 def _auto_output(prompt: str) -> str:
     p = prompt.casefold()
-    midi_words = ("midi", "نت", "نوت", "ملودی midi", "آکورد midi", "mid file")
-    audio_words = ("audio", "wav", "mp3", "صوت", "صدا", "آهنگ", "بیت", "beat", "sound")
-    if any(x in p for x in midi_words):
+    if any(x in p for x in ("midi", "نت", "نوت", "ملودی midi", "آکورد midi", "mid file")):
         return "midi"
-    if any(x in p for x in audio_words):
-        return "audio"
     return "audio"
 
 
@@ -92,10 +88,10 @@ async def music_prompt(message: Message, state: FSMContext):
         await message.answer("✅ لغو شد.")
         return
     if len(text) < 3:
-        await message.answer("یک توضیح کوتاه‌تر از این نمی‌تواند موسیقی خوبی بسازد؛ مثلاً «dark trap melody in F# minor».")
+        await message.answer("مثلاً «dark trap melody in F# minor» بنویس.")
         return
     if len(text) > 3000:
-        await message.answer("Prompt خیلی طولانی است. لطفاً حداکثر ۳۰۰۰ کاراکتر بنویس.")
+        await message.answer("Prompt خیلی طولانی است. حداکثر ۳۰۰۰ کاراکتر.")
         return
     await state.update_data(prompt=text, variation=0)
     await state.set_state(MusicState.choosing_output)
@@ -104,16 +100,25 @@ async def music_prompt(message: Message, state: FSMContext):
 
 @router.callback_query(MusicState.choosing_output, F.data.startswith("music_output:"))
 async def music_output(callback: CallbackQuery, state: FSMContext, db):
-    output = callback.data.split(":", 1)[1]
+    requested = callback.data.split(":", 1)[1]
     data = await state.get_data()
     prompt = str(data.get("prompt") or "").strip()
-    if output == "auto":
-        output = _auto_output(prompt)
+    output = _auto_output(prompt) if requested == "auto" else requested
+    allow_fallback = requested == "auto"
     await callback.answer("در حال تولید…")
-    await _generate(callback.message, state, db, prompt, output, 0)
+    await _generate(callback.message, state, db, prompt, output, 0, allow_fallback=allow_fallback)
 
 
-async def _generate(message: Message, state: FSMContext, db, prompt: str, output: str, variation: int) -> None:
+async def _generate(
+    message: Message,
+    state: FSMContext,
+    db,
+    prompt: str,
+    output: str,
+    variation: int,
+    *,
+    allow_fallback: bool = False,
+) -> None:
     user_id = message.from_user.id
     is_student = quota.is_rah_yar_student(db, user_id)
     allowed, limit, remaining = quota.reserve(user_id, is_student)
@@ -142,24 +147,21 @@ async def _generate(message: Message, state: FSMContext, db, prompt: str, output
             )
         else:
             try:
-                audio, meta = await asyncio.to_thread(generator.generate_audio, prompt, variation)
+                audio, _meta = await asyncio.to_thread(generator.generate_audio, prompt, variation)
                 ext = (generator.settings.MUSIC_AUDIO_FORMAT or "wav").lower().lstrip(".")
                 await message.answer_document(
                     BufferedInputFile(audio, filename=f"rahyar_generated.{ext}"),
-                    caption="🔊 <b>RahYar AI Audio</b>\n\nفایل تولیدشده مستقیماً از Music/Audio provider ارسال شده و در Bot ذخیره نمی‌شود.",
+                    caption="🔊 <b>RahYar AI Audio</b>\n\nفایل مستقیم برای کار داخل DAW؛ Bot فایل را ذخیره نمی‌کند.",
                     parse_mode="HTML",
                 )
             except MusicAIGeneratorError:
-                # If the requested native audio provider is unavailable, produce
-                # a real editable MIDI fallback rather than returning nothing.
+                if not allow_fallback:
+                    raise
                 midi, plan = await asyncio.to_thread(generator.generate_midi, prompt, variation)
                 title = re.sub(r"[^\w\-]+", "_", str(plan.get("title") or "rahyar_music"))[:60]
                 await message.answer_document(
                     BufferedInputFile(midi, filename=f"{title}.mid"),
-                    caption=(
-                        "⚠️ Audio provider فعلاً در دسترس نبود؛ برای اینکه درخواستت بدون خروجی نماند، "
-                        "نسخه MIDI حرفه‌ای و قابل ویرایش ساخته شد."
-                    ),
+                    caption="⚠️ Audio provider در دسترس نبود؛ نسخه MIDI قابل‌ویرایش ساخته شد.",
                 )
     except MusicAIGeneratorError as exc:
         quota.release(user_id)
