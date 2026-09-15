@@ -256,8 +256,24 @@ class AIAgentKnowledgeRuntime:
         try:
             from src.services.chat_assistant_service import ChatAssistantError, ChatAssistantService
             await message.bot.send_chat_action(message.chat.id, "typing")
-            reply = ChatAssistantService().answer(db=db, telegram_id=str(message.from_user.id), user_message=text[:1000])
-            await message.reply(reply)
+            # Give the assistant an explicit expert brief so group questions are
+            # answered from evidence, not a shallow one-line guess.
+            expert_request = (
+                "به‌عنوان مدرس و کارشناس حرفه‌ای موسیقی پاسخ بده. سؤال را کامل بررسی کن، "
+                "منظور کاربر و زمینه فنی آن را استخراج کن و اگر اطلاعات نسخه‌ای/فنی لازم است "
+                "قبل از نتیجه‌گیری از دانش معتبر و Web Research استفاده کن. حدس نزن. "
+                "جواب را مستقیم و قابل اجرا بده؛ اگر لازم است مسیر منو، تنظیمات، مثال و علت را "
+                "مرحله‌به‌مرحله توضیح بده. اگر چند حالت وجود دارد، تفاوتشان را روشن کن. "
+                "از اصطلاحات تخصصی درست استفاده کن و پاسخ را با تیترهای کوتاه و مرتب بنویس.\n\n"
+                f"سؤال کاربر:\n{text[:1800]}"
+            )
+            reply = ChatAssistantService().answer(
+                db=db,
+                telegram_id=str(message.from_user.id),
+                user_message=expert_request,
+            )
+            from src.services.telegram_answer_ui import format_assistant_answer
+            await message.reply(format_assistant_answer(reply), parse_mode="HTML", disable_web_page_preview=True)
         except Exception as exc:
             if exc.__class__.__name__ == "ChatAssistantError" and str(exc).startswith("تعداد پیام"):
                 await message.reply(str(exc))
@@ -288,7 +304,7 @@ class AIAgentKnowledgeRuntime:
     async def _publish(self, new_items: list[dict], quiz: dict | None, groups: set[int]) -> None:
         if not self.bot or not groups:
             return
-        topic_id = self.settings.KNOWLEDGE_GROUP_TOPIC_ID
+        thread_id = self.settings.KNOWLEDGE_GROUP_TOPIC_ID or None
         for item in new_items:
             safe_title = html.escape(item["title"] or "Audio Production")
             safe_text = html.escape(item["text"] or "")
@@ -296,13 +312,27 @@ class AIAgentKnowledgeRuntime:
             message = f"🧠 <b>مطلب آموزشی جدید</b>\n━━━━━━━━━━━━━━━━━━\n📌 <b>{safe_title}</b>\n\n{safe_text}\n\n🔗 منبع: {safe_url}"
             for chat_id in groups:
                 try:
-                    await self.bot.send_message(chat_id, message, parse_mode="HTML", disable_web_page_preview=True, message_thread_id=topic_id)
+                    kwargs = {"chat_id": chat_id, "text": message, "parse_mode": "HTML", "disable_web_page_preview": True}
+                    if thread_id:
+                        kwargs["message_thread_id"] = thread_id
+                    await self.bot.send_message(**kwargs)
                 except Exception:
                     pass
         if quiz:
             for chat_id in groups:
                 try:
-                    await self.bot.send_poll(chat_id=chat_id, message_thread_id=topic_id, question="🧠 کوییز راه‌یار\n\n" + quiz["question"], options=quiz["options"], type="quiz", correct_option_id=quiz["correct"], explanation=quiz["explanation"], is_anonymous=False)
+                    kwargs = {
+                        "chat_id": chat_id,
+                        "question": "🧠 کوییز راه‌یار\n\n" + quiz["question"],
+                        "options": quiz["options"],
+                        "type": "quiz",
+                        "correct_option_id": quiz["correct"],
+                        "explanation": quiz["explanation"],
+                        "is_anonymous": False,
+                    }
+                    if thread_id:
+                        kwargs["message_thread_id"] = thread_id
+                    await self.bot.send_poll(**kwargs)
                 except Exception:
                     pass
 
