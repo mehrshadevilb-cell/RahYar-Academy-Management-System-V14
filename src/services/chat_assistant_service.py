@@ -127,7 +127,12 @@ class ChatAssistantService:
 
     def _request_model(self, messages: list[dict]) -> str:
         try:
-            data = self.router.chat(messages, temperature=0.3, max_tokens=700)
+            data = self.router.chat(
+                messages,
+                temperature=0.3,
+                max_tokens=700,
+                timeout_seconds=self.settings.CHAT_ASSISTANT_TIMEOUT_SECONDS,
+            )
             return str(data["choices"][0]["message"]["content"]).strip()
         except AIProviderError as exc:
             if exc.retryable:
