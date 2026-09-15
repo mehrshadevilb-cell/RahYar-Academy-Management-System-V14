@@ -35,7 +35,7 @@ class AIProviderError(RuntimeError):
 
 
 class AIProviderRouter:
-    """OpenAI-compatible provider pool with automatic failover."""
+    """AI provider pool with DB-backed discovery, active-model selection and failover."""
 
     def __init__(self) -> None:
         self.settings = get_settings()
@@ -50,7 +50,48 @@ class AIProviderRouter:
             return None
         return AIProvider(name=name, api_key=key, base_url=base_url, models=(model,), priority=priority)
 
+    def _from_database(self) -> list[AIProvider]:
+        """Load only active providers/models discovered by the AI management layer."""
+        try:
+            from src.database.models.ai_model import AIModel
+            from src.database.models.ai_provider import AIProvider as DBProvider
+            from src.database.session import SessionLocal
+            from src.services.ai.credential_crypto import decrypt_api_key
+
+            db = SessionLocal()
+            try:
+                rows = db.query(DBProvider).filter(DBProvider.is_active.is_(True)).all()
+                result: list[AIProvider] = []
+                for index, provider in enumerate(rows):
+                    active_models = [m for m in provider.models if m.is_active]
+                    if not active_models:
+                        continue
+                    active_models.sort(key=lambda m: (not m.is_default, -(m.context_window or 0), m.model_id))
+                    try:
+                        api_key = decrypt_api_key(provider.api_key_encrypted)
+                    except Exception:
+                        continue
+                    result.append(
+                        AIProvider(
+                            name=provider.name,
+                            api_key=api_key,
+                            base_url=provider.base_url.rstrip("/"),
+                            models=tuple(m.model_id for m in active_models),
+                            priority=index,
+                        )
+                    )
+                return result
+            finally:
+                db.close()
+        except Exception:
+            # DB-backed AI configuration is optional; env fallback keeps legacy deployments working.
+            return []
+
     def _parse(self) -> list[AIProvider]:
+        db_providers = self._from_database()
+        if db_providers:
+            return db_providers
+
         raw = (self.settings.AI_PROVIDERS_JSON or "").strip()
         providers: list[AIProvider] = []
         if raw:
@@ -80,7 +121,6 @@ class AIProviderRouter:
                 if key and base_url and models:
                     providers.append(AIProvider(name=name, api_key=key, base_url=base_url, models=tuple(models), priority=int(row.get("priority", 100))))
 
-        # Explicit JSON pool wins. If empty, use direct primary/secondary ENV pairs.
         if not providers:
             primary = self._provider_from_env("primary", "AI_API_KEY", "AI_BASE_URL", "AI_MODEL", 10)
             if primary:
