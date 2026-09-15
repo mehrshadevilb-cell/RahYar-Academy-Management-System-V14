@@ -1,6 +1,7 @@
 import pytest
 
 from src.services.ai_agent_runtime import AIAgentRuntime
+from src.services.ai_agent_self_check import CheckResult
 
 
 class FakeAgent:
@@ -16,8 +17,17 @@ class FakeAgent:
         return "Branch: ai/test\nTests: PASS"
 
 
+@pytest.fixture
+def healthy_self_check(monkeypatch):
+    """Keep orchestration tests independent from the real checkout state."""
+    monkeypatch.setattr(
+        "src.services.ai_agent_runtime.AIAgentSelfChecker.run",
+        lambda self: [CheckResult("test", True, "ok")],
+    )
+
+
 @pytest.mark.asyncio
-async def test_runtime_write_records_audit_and_completes(monkeypatch):
+async def test_runtime_write_records_audit_and_completes(monkeypatch, healthy_self_check):
     runtime = AIAgentRuntime(FakeAgent())
     runtime._redis = None
     events = []
@@ -30,7 +40,7 @@ async def test_runtime_write_records_audit_and_completes(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_runtime_records_failure(monkeypatch):
+async def test_runtime_records_failure(monkeypatch, healthy_self_check):
     agent = FakeAgent()
     agent.implement = lambda task, task_type: (_ for _ in ()).throw(RuntimeError("boom"))
     runtime = AIAgentRuntime(agent)
