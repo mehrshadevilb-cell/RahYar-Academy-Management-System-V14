@@ -1,4 +1,5 @@
 from datetime import date, timedelta
+import asyncio
 
 from sqlalchemy.orm import Session
 
@@ -7,6 +8,7 @@ from src.database.models.reservation import ReservationStatus
 from src.database.models.online_enrollment import PaymentModel, EnrollmentStatus
 from src.database.repositories.attendance_repository import AttendanceRepository
 from src.services.installment_service import InstallmentService
+from src.services.lesson_completion_notification_service import LessonCompletionNotificationService
 
 
 SESSIONS_PER_INSTALLMENT_CYCLE = 4
@@ -23,6 +25,48 @@ class AttendanceService:
     def __init__(self):
         self.repository = AttendanceRepository()
         self.installment_service = InstallmentService()
+        self.lesson_notification_service = LessonCompletionNotificationService()
+
+    def _schedule_completion_notification(self, enrollment, session_date) -> None:
+        """Notify the linked Telegram student without making attendance depend on Telegram."""
+        account = getattr(getattr(enrollment, "user", None), "telegram_account", None)
+        telegram_id = getattr(account, "telegram_id", None)
+        if not telegram_id:
+            return
+
+        try:
+            chat_id = int(telegram_id)
+        except (TypeError, ValueError):
+            return
+
+        user = getattr(enrollment, "user", None)
+        student_name = getattr(user, "full_name", None) or "هنرجو"
+        teacher_name = None
+        course = getattr(enrollment, "online_course", None)
+        if course is not None:
+            teacher = getattr(course, "teacher", None)
+            teacher_name = getattr(teacher, "full_name", None) or getattr(course, "teacher_name", None)
+
+        async def _send() -> None:
+            try:
+                from src.bot.bot import bot
+                await self.lesson_notification_service.notify_completed(
+                    chat_id,
+                    student_name=student_name,
+                    session_date=session_date,
+                    teacher_name=teacher_name,
+                    remaining_sessions=enrollment.remaining_sessions,
+                    sender=bot.send_message,
+                )
+            except Exception:
+                # Attendance is already committed; Telegram delivery must never roll it back.
+                return
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        loop.create_task(_send())
 
     def mark_attendance(
         self, db: Session, enrollment, session_date, status: AttendanceStatus,
@@ -68,6 +112,9 @@ class AttendanceService:
             ):
                 self.installment_service.create_next_installment(db, enrollment)
 
+            # Fire only after the attendance transaction has been committed.
+            self._schedule_completion_notification(enrollment, session_date)
+
         elif status == AttendanceStatus.ABSENT:
             previous_absences = (
                 db.query(Attendance)
@@ -76,7 +123,7 @@ class AttendanceService:
                     Attendance.status == AttendanceStatus.ABSENT,
                 )
                 .count()
-            ) - 1  # the current absence was inserted immediately above
+            ) - 1
             if previous_absences >= 1:
                 enrollment.completed_sessions += 1
                 if enrollment.remaining_sessions > 0:
@@ -84,8 +131,6 @@ class AttendanceService:
                 if enrollment.remaining_sessions <= 0:
                     enrollment.status = EnrollmentStatus.ENDED
             elif reservation_id is not None:
-                # Preserve the first missed lesson by adding one confirmed
-                # lesson after the current reservation run (same weekly day).
                 try:
                     current = date.fromisoformat(str(session_date))
                     replacement = current + timedelta(days=7)
