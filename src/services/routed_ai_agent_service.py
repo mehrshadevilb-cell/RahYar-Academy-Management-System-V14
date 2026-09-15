@@ -38,7 +38,8 @@ class RoutedAIAgentService(AIAgentService):
             {"role": "user", "content": prompt},
         ]
         attempts = 0
-        max_attempts = max(1, min(len(self.router.providers()), 12))
+        candidates = self.router._ordered_candidates(self.router.providers())
+        max_attempts = max(1, min(len(candidates), 24))
         last_empty_model = ""
 
         while attempts < max_attempts:
@@ -68,14 +69,13 @@ class RoutedAIAgentService(AIAgentService):
                     if model_name and model_key != last_empty_model:
                         self.router._model_cooldown_until[model_key] = time.time() + 60
                         last_empty_model = model_key
-                    else:
-                        raise AIProviderError(
-                            "AI provider returned an empty response",
-                            retryable=True,
-                            retry_after=60,
-                            provider=provider_name,
-                        )
-                    continue
+                        continue
+                    raise AIProviderError(
+                        "AI provider returned an empty response",
+                        retryable=True,
+                        retry_after=60,
+                        provider=provider_name,
+                    )
 
                 return content
             except AIProviderError as exc:
