@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     SECRET_KEY: str = ""
     OWNER_ID: int = 0
     ADMIN_USERNAMES: str = "Hi_all"
+    NEW_MEMBER_NOTIFICATION_CHAT_ID: int = 0
     PROXY_URL: str | None = None
     REDIS_URL: str | None = None
     DEFAULT_CARD_NUMBER: str | None = None
@@ -76,7 +77,6 @@ class Settings(BaseSettings):
     MUSIC_AUDIO_MAX_SECONDS: int = 90
     MUSIC_AUDIO_FORMAT: str = "wav"
     MUSIC_AUDIO_TIMEOUT_SECONDS: int = 240
-    # Product limits: RahYar students = 15/day, everyone else = 8/day.
     MUSIC_GENERATION_RAHYAR_DAILY_LIMIT: int = 15
     MUSIC_GENERATION_PUBLIC_DAILY_LIMIT: int = 8
 
@@ -162,6 +162,10 @@ class Settings(BaseSettings):
     @property
     def admin_usernames(self) -> set[str]:
         return {value.strip().lstrip("@").casefold() for value in self.ADMIN_USERNAMES.split(",") if value.strip()}
+
+    @property
+    def new_member_notification_chat_id(self) -> int:
+        return self.NEW_MEMBER_NOTIFICATION_CHAT_ID or self.OWNER_ID
 
     @property
     def bot_deep_link_base(self) -> str | None:
