@@ -32,10 +32,14 @@ INTRO = (
 
 
 def _auto_output(prompt: str) -> str:
+    """Prefer the connected AI router's MIDI path unless audio was explicit."""
     p = prompt.casefold()
     if any(x in p for x in ("midi", "نت", "نوت", "ملودی midi", "آکورد midi", "mid file")):
         return "midi"
-    return "audio"
+    if any(x in p for x in ("audio", "wav", "mp3", "صوت", "فایل صوتی", "آهنگ صوتی")):
+        return "audio"
+    # Normal configured AI providers are text/JSON capable, not audio generators.
+    return "midi"
 
 
 def _settings_summary(settings: dict) -> str:
@@ -149,7 +153,7 @@ async def music_extend_message(message: Message, state: FSMContext, db):
 async def music_variation(callback: CallbackQuery, state: FSMContext, db):
     data = await state.get_data()
     prompt = str(data.get("prompt") or "").strip()
-    output = str(data.get("output") or "audio")
+    output = str(data.get("output") or "midi")
     settings = dict(data.get("advanced") or {})
     variation = int(data.get("variation") or 0) + 1
     if not prompt:
