@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     BOT_TOKEN: str = ""
     SECRET_KEY: str = ""
     OWNER_ID: int = 0
+    ADMIN_USERNAMES: str = "Hi_all"
     PROXY_URL: str | None = None
     REDIS_URL: str | None = None
     DEFAULT_CARD_NUMBER: str | None = None
@@ -148,6 +149,14 @@ class Settings(BaseSettings):
             except ValueError:
                 continue
         return result
+
+    @property
+    def admin_usernames(self) -> set[str]:
+        return {
+            value.strip().lstrip("@").casefold()
+            for value in self.ADMIN_USERNAMES.split(",")
+            if value.strip()
+        }
 
     @property
     def bot_deep_link_base(self) -> str | None:
