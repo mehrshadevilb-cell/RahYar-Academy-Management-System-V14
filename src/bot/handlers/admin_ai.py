@@ -8,11 +8,11 @@ from src.bot.keyboards.admin_ai_keyboard import admin_ai_keyboard
 from src.bot.keyboards.admin_menu_keyboard import admin_back_button
 from src.bot.states.admin_states import AdminState
 from src.core.config.settings import get_settings
-from src.services.ai_agent_service import AIAgentError, AIAgentService
+from src.services.ai_agent_runtime import runtime
+from src.services.ai_agent_service import AIAgentError
 
 router = Router()
 settings = get_settings()
-agent = AIAgentService()
 
 
 def _owner(user_id: int) -> bool:
@@ -34,23 +34,26 @@ def _safe_error(exc: Exception) -> str:
     return text[:1200]
 
 
+def _home_text() -> str:
+    return (
+        "🤖 <b>RahYar AI Developer</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        "🟢 API: آماده بررسی\n"
+        "🧠 Planner: فعال\n"
+        "🔐 Security: محافظت‌شده\n"
+        "📂 Repository: متصل\n\n"
+        "برای شروع یک عملیات انتخاب کنید.\n"
+        "<i>Write taskها → Plan → Code → Test → PR</i>"
+    )
+
+
 @router.callback_query(F.data == "admin_ai")
 async def ai_home(callback: CallbackQuery, state: FSMContext):
     if not _owner(callback.from_user.id):
         await callback.answer("⛔️ دسترسی ندارید.", show_alert=True)
         return
     await state.clear()
-    await callback.message.edit_text(
-        "🧠 AI Developer Agent\n\n"
-        "دستیار امن توسعه RahYar آماده است.\n\n"
-        "💬 مشاوره: سؤال معماری و کدنویسی\n"
-        "🔎 Audit: بررسی پروژه\n"
-        "🛠 Debug: تحلیل خطا بدون تغییر کد\n"
-        "🐞 Fix / ✨ Feature: تغییر فقط روی ai/* و PR\n\n"
-        "🔐 کلیدها و فایل‌های حساس نباید داخل پیام‌ها ارسال شوند.\n"
-        "⛔️ Merge مستقیم به main توسط Agent انجام نمی‌شود.",
-        reply_markup=admin_ai_keyboard(),
-    )
+    await callback.message.edit_text(_home_text(), reply_markup=admin_ai_keyboard(), parse_mode="HTML")
     await callback.answer()
 
 
@@ -60,22 +63,57 @@ async def ai_status(callback: CallbackQuery):
         await callback.answer("⛔️", show_alert=True)
         return
     try:
-        raw = await asyncio.to_thread(agent.status)
+        raw = await asyncio.to_thread(runtime.agent.status)
         lines = []
         for line in raw.splitlines():
             if line.startswith("base_url="):
                 lines.append("provider=Configured (endpoint hidden)")
             elif line.startswith("repo="):
                 lines.append("repository=Configured")
-            elif line.startswith("chat_key_configured="):
-                lines.append(line)
+            elif line.startswith("provider_ping="):
+                ping = line.removeprefix("provider_ping=")
+                lines.append(f"api_test={ping[:300]}")
             else:
                 lines.append(line)
         result = "\n".join(lines)
     except AIAgentError as exc:
         result = f"❌ {_safe_error(exc)}"
-    await callback.message.answer(f"🧠 Agent status\n\n{result}")
+    await callback.message.answer(f"🧪 <b>AI API / Agent Status</b>\n\n<code>{result}</code>", parse_mode="HTML")
     await callback.answer()
+
+
+@router.callback_query(F.data == "ai_security")
+async def ai_security(callback: CallbackQuery):
+    if not _owner(callback.from_user.id):
+        await callback.answer("⛔️", show_alert=True)
+        return
+    text = (
+        "🔐 <b>Security Guardrails</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        "✅ owner-only controls\n"
+        "✅ protected paths / secrets blocked\n"
+        "✅ HTTPS provider endpoint\n"
+        "✅ ai/* branch isolation\n"
+        "✅ compile + pytest gate\n"
+        "✅ no automatic merge to main\n"
+        "✅ bounded retries\n"
+        "✅ Telegram errors redact configured secrets\n"
+        "\n⚠️ اطلاعات حساس را داخل پیام Task یا لاگ ارسال نکنید."
+    )
+    await callback.message.answer(text, parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(F.data == "ai_task_status")
+async def ai_task_status(callback: CallbackQuery):
+    if not _owner(callback.from_user.id):
+        await callback.answer("⛔️", show_alert=True)
+        return
+    if runtime.active(callback.from_user.id):
+        label = runtime.active_label(callback.from_user.id) or "task"
+        await callback.answer(f"🟡 Task فعال است: {label}", show_alert=True)
+    else:
+        await callback.answer("🟢 Task فعالی وجود ندارد.", show_alert=True)
 
 
 @router.callback_query(F.data == "ai_analyze")
@@ -85,11 +123,11 @@ async def ai_analyze(callback: CallbackQuery):
         return
     await callback.answer("در حال Audit...", show_alert=False)
     try:
-        result = await asyncio.to_thread(agent.analyze)
+        result = await asyncio.to_thread(runtime.agent.analyze)
     except AIAgentError as exc:
         result = f"❌ {_safe_error(exc)}"
-    for part in _chunk(f"🔎 AI Audit\n\n{result}"):
-        await callback.message.answer(part)
+    for part in _chunk(f"🔎 <b>AI Audit</b>\n\n{result}"):
+        await callback.message.answer(part, parse_mode="HTML")
 
 
 @router.callback_query(F.data == "ai_assistant")
@@ -100,11 +138,11 @@ async def ai_assistant_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AdminState.waiting_ai_consult)
     await state.update_data(ai_consult_mode="assistant")
     await callback.message.answer(
-        "💬 دستیار کدنویسی فعال شد.\n\n"
-        "سؤال فنی بپرسید.\n"
-        "⚠️ API key، BOT_TOKEN، DATABASE_URL یا فایل .env را ارسال نکنید.\n\n"
-        "برای خروج: /cancel یا 🛑 توقف",
+        "💬 <b>Assistant</b>\n\nسؤال فنی بپرسید. Agent با context پروژه پاسخ می‌دهد.\n\n"
+        "⚠️ API key، BOT_TOKEN، DATABASE_URL یا .env را ارسال نکنید.\n"
+        "برای خروج: /cancel",
         reply_markup=admin_back_button("admin_ai"),
+        parse_mode="HTML",
     )
     await callback.answer()
 
@@ -117,10 +155,10 @@ async def ai_debug_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AdminState.waiting_ai_consult)
     await state.update_data(ai_consult_mode="debug")
     await callback.message.answer(
-        "🛠 حالت دیباگ فعال شد.\n\n"
-        "لاگ یا خطا را بفرستید. کلیدها و اطلاعات حساس را حذف کنید.\n"
-        "این حالت فقط تحلیل می‌کند و فایل را تغییر نمی‌دهد.",
+        "🐞 <b>Debug</b>\n\nلاگ یا خطا را بفرستید. این حالت فقط تحلیل می‌کند و کد را تغییر نمی‌دهد.\n"
+        "کلیدها و اطلاعات حساس را حذف کنید.",
         reply_markup=admin_back_button("admin_ai"),
+        parse_mode="HTML",
     )
     await callback.answer()
 
@@ -130,7 +168,7 @@ async def ai_consult_cancel(message: Message, state: FSMContext):
     if not _owner(message.from_user.id):
         return
     await state.clear()
-    await message.answer("گفتگو با Agent بسته شد.", reply_markup=admin_ai_keyboard())
+    await message.answer("🟢 حالت گفتگو بسته شد.", reply_markup=admin_ai_keyboard())
 
 
 @router.message(AdminState.waiting_ai_consult)
@@ -139,40 +177,26 @@ async def ai_consult_message(message: Message, state: FSMContext):
         return
     text = (message.text or "").strip()
     if not text:
-        await message.answer("پیام خالی است. سؤال یا لاگ را بفرستید.")
+        await message.answer("پیام خالی است.")
         return
     if len(text) > 8000:
-        await message.answer("❌ پیام خیلی طولانی است. لطفاً آن را کوتاه‌تر کنید.")
+        await message.answer("❌ پیام خیلی طولانی است. کوتاه‌تر ارسال کنید.")
         return
-
     data = await state.get_data()
     mode = data.get("ai_consult_mode", "assistant")
-    if mode == "debug":
-        prompt = (
-            "You are debugging the RahYar Academy Telegram bot.\n"
-            "Do not modify files. Do not request or expose secrets.\n"
-            "Give: root cause, exact paths, concrete fix steps, tests.\n"
-            "Answer in Persian; paths/symbols in English.\n\n"
-            f"OWNER INPUT:\n{text}"
-        )
-        header = "🛠 نتیجه دیباگ"
-    else:
-        prompt = (
-            "You are the owner's coding assistant for RahYar.\n"
-            "Answer using repository architecture. Do not modify files or expose secrets.\n"
-            "Answer in Persian; paths in English.\n\n"
-            f"OWNER QUESTION:\n{text}"
-        )
-        header = "💬 دستیار کدنویسی"
-
-    await message.answer("⏳ در حال پردازش...")
+    prompt = (
+        "You are the owner's coding assistant for RahYar. Use repository architecture and skills. "
+        "Do not modify files or expose secrets. Answer in Persian; paths/symbols in English.\n\n"
+        + ("DEBUG MODE: give root cause, exact paths, fix steps and tests.\n" if mode == "debug" else "")
+        + f"OWNER INPUT:\n{text}"
+    )
+    await message.answer("⏳ در حال تحلیل...")
     try:
-        result = await asyncio.to_thread(agent.analyze, prompt)
+        result = await asyncio.to_thread(runtime.agent.analyze, prompt)
     except AIAgentError as exc:
         result = f"❌ {_safe_error(exc)}"
-    for part in _chunk(f"{header}\n\n{result}"):
+    for part in _chunk(f"{'🐞' if mode == 'debug' else '💬'} نتیجه\n\n{result}"):
         await message.answer(part)
-    await message.answer("برای سؤال بعدی پیام بدهید یا /cancel بزنید.", reply_markup=admin_ai_keyboard())
 
 
 @router.callback_query(F.data == "ai_fix")
@@ -183,10 +207,9 @@ async def ai_fix_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AdminState.waiting_ai_task)
     await state.update_data(ai_task_type="fix")
     await callback.message.answer(
-        "🐞 باگ را توضیح بدهید.\n\n"
-        "🔐 Agent فقط روی branch با پیشوند ai/* کار می‌کند.\n"
-        "🧪 تست‌ها قبل از PR اجرا می‌شوند.\n"
-        "⛔️ merge به main خودکار نیست."
+        "🐞 <b>Fix Task</b>\n\nباگ را دقیق توضیح بدهید.\n"
+        "Agent ابتدا Plan می‌سازد، سپس روی ai/* تغییر می‌دهد، تست می‌کند و در صورت موفقیت PR می‌سازد.",
+        parse_mode="HTML",
     )
     await callback.answer()
 
@@ -199,9 +222,9 @@ async def ai_feature_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AdminState.waiting_ai_task)
     await state.update_data(ai_task_type="feature")
     await callback.message.answer(
-        "✨ Feature را توضیح بدهید.\n\n"
-        "Agent plan → code → tests → PR را انجام می‌دهد.\n"
-        "برای write mode باید AI_AGENT_WRITE_ENABLED=true و GitHub token امن تنظیم شده باشد."
+        "✨ <b>Feature Task</b>\n\nقابلیت را با رفتار مورد انتظار توضیح بدهید.\n"
+        "Agent → Planner → Skills → Code → Tests → PR",
+        parse_mode="HTML",
     )
     await callback.answer()
 
@@ -212,21 +235,33 @@ async def ai_task(message: Message, state: FSMContext):
         return
     task = (message.text or "").strip()
     if not task:
-        await message.answer("❌ توضیح Task خالی است.")
+        await message.answer("❌ Task خالی است.")
         return
     if len(task) > 8000:
-        await message.answer("❌ Task خیلی طولانی است. لطفاً خلاصه‌تر توضیح دهید.")
+        await message.answer("❌ Task خیلی طولانی است. کوتاه‌تر توضیح دهید.")
         return
     data = await state.get_data()
     task_type = data.get("ai_task_type", "feature")
     await state.clear()
-    await message.answer(f"🧠 Agent شروع کرد ({task_type})...\n⏳ بررسی → تغییر → تست → PR")
+
+    async def progress(text: str) -> None:
+        await message.answer(text)
+
+    await message.answer(
+        "🛠 <b>Task Started</b>\n━━━━━━━━━━━━━━━━━━\n"
+        "🟡 وضعیت: در حال پردازش\n🔐 فقط owner\n🌿 branch: ai/*",
+        parse_mode="HTML",
+    )
     try:
-        result = await asyncio.to_thread(agent.implement, task, task_type)
+        result = await runtime.run_write(message.from_user.id, task, task_type, progress)
+    except asyncio.CancelledError:
+        await message.answer("🛑 Task لغو شد. تغییرات ناقص commit/PR نمی‌شوند.")
+        return
     except AIAgentError as exc:
         result = f"❌ {_safe_error(exc)}"
     for part in _chunk(result):
         await message.answer(part)
+    await message.answer("🤖 Agent آماده Task بعدی است.", reply_markup=admin_ai_keyboard())
 
 
 @router.callback_query(F.data == "ai_stop")
@@ -234,12 +269,13 @@ async def ai_stop(callback: CallbackQuery, state: FSMContext):
     if not _owner(callback.from_user.id):
         await callback.answer("⛔️", show_alert=True)
         return
+    cancelled = await runtime.cancel(callback.from_user.id)
     await state.clear()
-    await callback.answer("🛑 حالت گفتگو متوقف شد.", show_alert=True)
+    if cancelled:
+        await callback.answer("🛑 Task واقعاً لغو شد.", show_alert=True)
+    else:
+        await callback.answer("🟢 Task فعالی وجود نداشت.", show_alert=True)
     try:
-        await callback.message.edit_text(
-            "🧠 AI Developer Agent\n\nآماده. یکی از گزینه‌ها را انتخاب کنید.",
-            reply_markup=admin_ai_keyboard(),
-        )
+        await callback.message.edit_text(_home_text(), reply_markup=admin_ai_keyboard(), parse_mode="HTML")
     except Exception:
-        await callback.message.answer("🧠 AI Developer Agent آماده است.", reply_markup=admin_ai_keyboard())
+        await callback.message.answer(_home_text(), reply_markup=admin_ai_keyboard(), parse_mode="HTML")

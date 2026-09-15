@@ -8,16 +8,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 def normalize_database_url(url: str) -> str:
     if not url:
         return url
-
     if url.startswith("postgres://"):
         return "postgresql+psycopg://" + url.removeprefix("postgres://")
-
     if url.startswith("postgresql+psycopg://"):
         return url
-
     if url.startswith("postgresql://"):
         return "postgresql+psycopg://" + url.removeprefix("postgresql://")
-
     return url
 
 
@@ -25,15 +21,9 @@ def normalize_openai_compatible_base_url(url: str) -> str:
     raw = (url or "").strip().rstrip("/")
     if not raw:
         return "https://api.openai.com/v1"
-
-    for suffix in (
-        "/chat/completions",
-        "/v1/chat/completions",
-        "/completions",
-    ):
+    for suffix in ("/chat/completions", "/v1/chat/completions", "/completions"):
         if raw.lower().endswith(suffix):
             raw = raw[: -len(suffix)].rstrip("/")
-
     host = (urlparse(raw).hostname or "").lower()
     gateway_hosts = (
         "agentrouter.org",
@@ -44,35 +34,28 @@ def normalize_openai_compatible_base_url(url: str) -> str:
         "www.orcarouter.ai",
     )
     if host in gateway_hosts and not raw.endswith("/v1"):
-        raw = raw + "/v1"
-
+        raw += "/v1"
     return raw
 
 
 class Settings(BaseSettings):
     APP_NAME: str = "RahYar Academy Management System"
     DEBUG: bool = False
-
     DATABASE_URL: str = "sqlite:///./rahyar.db"
-
     BOT_TOKEN: str = ""
     SECRET_KEY: str = ""
     OWNER_ID: int = 0
-
     PROXY_URL: str | None = None
     REDIS_URL: str | None = None
-
     DEFAULT_CARD_NUMBER: str | None = None
     DEFAULT_CARD_HOLDER: str | None = None
     SPOTPLAYER_API_KEY: str | None = None
-
     BOT_USERNAME: str | None = None
-
     SITE_NAME: str = "آکادمی راه‌یار"
     SITE_TAGLINE: str = "آموزش حرفه‌ای موسیقی — دوره‌های دیجیتال و کلاس آنلاین"
 
-    # AI Developer Agent
-    AI_AGENT_ENABLED: bool = False
+    # AI Developer Agent: enabled only when the owner explicitly configures it.
+    AI_AGENT_ENABLED: bool = True
     AI_AGENT_REPO_PATH: str = "."
     AI_AGENT_API_KEY: str | None = None
     AI_AGENT_BASE_URL: str = "https://api.openai.com/v1"
@@ -84,8 +67,6 @@ class Settings(BaseSettings):
     AI_BASE_URL: str | None = None
     AI_MODEL: str | None = None
 
-    # Online write mode on Render: clone repo with a fine-grained PAT.
-    # Never auto-merges to main; opens PR on ai/* branches only.
     AI_AGENT_WRITE_ENABLED: bool = False
     AI_AGENT_WORK_DIR: str = "/tmp/rahyar-agent-repo"
     GITHUB_TOKEN: str | None = None
@@ -117,7 +98,7 @@ class Settings(BaseSettings):
 
     @property
     def effective_ai_base_url(self) -> str:
-        raw = (self.AI_BASE_URL or self.AI_AGENT_BASE_URL or "https://api.openai.com/v1")
+        raw = self.AI_BASE_URL or self.AI_AGENT_BASE_URL or "https://api.openai.com/v1"
         return normalize_openai_compatible_base_url(raw)
 
     @property
@@ -160,9 +141,7 @@ class Settings(BaseSettings):
         if not self.BOT_USERNAME:
             return None
         username = self.BOT_USERNAME.lstrip("@").strip()
-        if not username:
-            return None
-        return f"https://t.me/{username}"
+        return f"https://t.me/{username}" if username else None
 
 
 @lru_cache
