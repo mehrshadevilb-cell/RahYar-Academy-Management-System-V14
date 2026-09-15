@@ -44,7 +44,9 @@ class Settings(BaseSettings):
     DEFAULT_CARD_NUMBER: str | None = None
     DEFAULT_CARD_HOLDER: str | None = None
     SPOTPLAYER_API_KEY: str | None = None
-    BOT_USERNAME: str | None = None
+    # The knowledge gateway is intentionally pinned to the production bot
+    # username so group targeting still works when BOT_USERNAME is omitted.
+    BOT_USERNAME: str | None = "Mb_tutorialbot"
     SITE_NAME: str = "آکادمی راه‌یار"
     SITE_TAGLINE: str = "آموزش حرفه‌ای موسیقی — دوره‌های دیجیتال و کلاس آنلاین"
 
@@ -63,9 +65,6 @@ class Settings(BaseSettings):
     AI2_MODEL: str | None = None
     AI_PROVIDERS_JSON: str = ""
 
-    # Provider gateway credentials used by the DB bootstrap/discovery layer.
-    # They are encrypted before persistence and are never logged or returned by
-    # API responses.
     ORCAROUTER_API_KEY: str | None = None
     KIRAAI_API_KEY: str | None = None
     OPENROUTER_API_KEY: str | None = None
