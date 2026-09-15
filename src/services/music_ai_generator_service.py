@@ -16,11 +16,9 @@ class MusicAIGeneratorError(RuntimeError):
 
 
 class MusicAIGeneratorService:
-    """Prompt -> production-oriented MIDI plan, plus optional native AI audio.
+    """Prompt -> production-oriented MIDI plan, plus native AI audio.
 
-    Generation artifacts are returned as bytes and are never persisted by this
-    service. The text model is used only to interpret musical intent and create
-    structured note data; the MIDI writer creates a real editable SMF file.
+    Artifacts are returned as bytes and are never persisted by this service.
     """
 
     def __init__(self) -> None:
@@ -29,29 +27,24 @@ class MusicAIGeneratorService:
 
     def _plan(self, prompt: str, output: str, variation: int = 0) -> dict[str, Any]:
         system = """You are RahYar's professional music-production composer.
-Turn a natural-language music request into a precise production plan.
-The user may be extremely vague. Infer sensible BPM, key, scale, meter,
-length, genre, mood, sound palette, arrangement and musical role.
-For MIDI, output only valid JSON with this schema:
+Turn a natural-language music request into a precise production plan. The user
+may be extremely vague; infer sensible BPM, key, scale, meter, length, genre,
+mood, sound palette, arrangement and musical role. For MIDI return ONLY JSON:
 {"title":str,"bpm":int,"key":str,"scale":str,"meter":"4/4","bars":int,"tracks":[{"name":str,"program":int,"channel":int,"notes":[{"start":number,"duration":number,"note":int,"velocity":int}]}]}
-start/duration are beats from 0. Notes must be 0-127, velocity 1-127,
-program 0-127, channel 0-15. Maximum 8 tracks, 64 bars, 512 notes/track.
-Write musically coherent phrases with repetition and variation, not random notes.
-Use correct harmony, voice leading, groove and register. Respect explicit user
-constraints over defaults. If output is audio, still infer the same plan and
-return JSON only for the internal planning step.
-"""
-        user = f"Output type: {output}\nVariation: {variation}\nUser request: {prompt}"
+start/duration are beats. Notes 0-127, velocity 1-127, program 0-127,
+channel 0-15. Maximum 8 tracks, 64 bars, 512 notes/track. Write coherent
+phrases with repetition, development, correct harmony, voice leading and groove;
+never random note soup. Respect explicit constraints over defaults. Keep the
+result useful in a real DAW."""
         result = self.router.chat([
             {"role": "system", "content": system},
-            {"role": "user", "content": user},
+            {"role": "user", "content": f"Output type: {output}\nVariation: {variation}\nUser request: {prompt}"},
         ], temperature=0.35, timeout_seconds=180, response_format={"type": "json_object"})
         choices = result.get("choices") or []
         content = ((choices[0].get("message") or {}).get("content") if choices else "")
         if isinstance(content, list):
             content = "".join(str(x.get("text", "")) for x in content if isinstance(x, dict))
-        content = str(content or "").strip()
-        content = re.sub(r"^```(?:json)?\s*|\s*```$", "", content, flags=re.I | re.S).strip()
+        content = re.sub(r"^```(?:json)?\s*|\s*```$", "", str(content or "").strip(), flags=re.I | re.S).strip()
         try:
             plan = json.loads(content)
         except json.JSONDecodeError as exc:
@@ -67,15 +60,13 @@ return JSON only for the internal planning step.
     def _midi_from_plan(self, plan: dict[str, Any]) -> bytes:
         bpm = max(40, min(240, int(plan.get("bpm", 120))))
         midi = MidiFile(ticks_per_beat=480)
-        tracks = plan.get("tracks", [])[:8]
-        for index, raw_track in enumerate(tracks):
+        for index, raw_track in enumerate(plan.get("tracks", [])[:8]):
             if not isinstance(raw_track, dict):
                 continue
             track = midi.add_track()
-            name = str(raw_track.get("name") or f"RahYar Track {index + 1}")[:120]
             channel = max(0, min(15, int(raw_track.get("channel", index % 16))))
             program = max(0, min(127, int(raw_track.get("program", 0))))
-            track.track_name(0, name)
+            track.track_name(0, str(raw_track.get("name") or f"RahYar Track {index + 1}")[:120])
             if index == 0:
                 track.time_signature(0, 4, 4)
                 track.set_tempo(0, bpm)
@@ -94,9 +85,7 @@ return JSON only for the internal planning step.
                 except (TypeError, ValueError):
                     continue
                 on = int(round(start * midi.ticks_per_beat))
-                off = int(round((start + duration) * midi.ticks_per_beat))
-                if off <= on:
-                    off = on + 1
+                off = max(on + 1, int(round((start + duration) * midi.ticks_per_beat)))
                 track.note_on(on, channel, note, velocity)
                 track.note_off(off, channel, note, 0)
         if not midi.tracks:
@@ -117,22 +106,20 @@ return JSON only for the internal planning step.
             data = json.loads(body.decode("utf-8"))
         except Exception:
             return None
-        candidates: list[Any] = []
+        values: list[Any] = []
         if isinstance(data, dict):
             for key in ("audio", "audio_base64", "b64_json", "data"):
                 value = data.get(key)
-                if isinstance(value, str):
-                    candidates.append(value)
-                elif isinstance(value, list):
-                    candidates.extend(value)
+                values.extend(value if isinstance(value, list) else [value]) if value else None
             for key in ("url", "audio_url", "download_url"):
-                if isinstance(data.get(key), str):
+                url = data.get(key)
+                if isinstance(url, str):
                     try:
-                        with urllib.request.urlopen(data[key], timeout=180) as response:
+                        with urllib.request.urlopen(url, timeout=180) as response:
                             return response.read()
                     except Exception:
                         pass
-        for item in candidates:
+        for item in values:
             if isinstance(item, dict):
                 item = item.get("b64_json") or item.get("audio") or item.get("url")
             if not isinstance(item, str):
@@ -149,42 +136,56 @@ return JSON only for the internal planning step.
                 continue
         return None
 
-    def generate_audio(self, prompt: str, variation: int = 0) -> tuple[bytes, dict[str, Any]]:
-        """Call a native music/audio endpoint configured in ENV.
-
-        The endpoint is intentionally configurable because the existing AI pool
-        is heterogeneous: chat models can plan music, but only a music-capable
-        provider can return an actual audio file.
-        """
+    def _audio_candidates(self) -> list[tuple[str, str, str]]:
         settings = self.settings
-        api_key = (settings.MUSIC_AUDIO_API_KEY or settings.effective_ai_api_key or "").strip()
-        base_url = normalize_openai_compatible_base_url(settings.MUSIC_AUDIO_BASE_URL or settings.effective_ai_base_url)
-        model = (settings.MUSIC_AUDIO_MODEL or settings.effective_ai_model).strip()
         path = (settings.MUSIC_AUDIO_PATH or "/audio/generations").strip()
-        if not api_key or not base_url or not model:
-            raise MusicAIGeneratorError("سرویس Audio Generation در ENV تنظیم نشده است.")
         if not path.startswith("/"):
             path = "/" + path
-        payload = {
-            "model": model,
-            "prompt": prompt.strip(),
-            "duration": max(1, min(120, int(settings.MUSIC_AUDIO_MAX_SECONDS))),
-            "output_format": settings.MUSIC_AUDIO_FORMAT,
-            "quality": "maximum",
-            "variation": variation,
-        }
-        request = urllib.request.Request(
-            base_url.rstrip("/") + path,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json", "Accept": "application/json, audio/*"},
-            method="POST",
-        )
+        explicit_key = (settings.MUSIC_AUDIO_API_KEY or "").strip()
+        explicit_base = (settings.MUSIC_AUDIO_BASE_URL or "").strip()
+        explicit_model = (settings.MUSIC_AUDIO_MODEL or "").strip()
+        if explicit_key and explicit_base and explicit_model:
+            return [(explicit_key, normalize_openai_compatible_base_url(explicit_base), explicit_model)]
         try:
-            with urllib.request.urlopen(request, timeout=max(30, int(settings.MUSIC_AUDIO_TIMEOUT_SECONDS))) as response:
-                body = response.read()
-                audio = self._decode_audio_response(body, str(response.headers.get_content_type() or ""))
-        except Exception as exc:
-            raise MusicAIGeneratorError("مدل Audio در دسترس نیست؛ مدل بعدی/تنظیمات Audio را بررسی می‌کنیم.") from exc
-        if not audio or len(audio) < 256:
-            raise MusicAIGeneratorError("سرویس Audio فایل معتبر برنگرداند.")
-        return audio, {"model": model, "bpm": None, "key": None}
+            providers = self.router.providers()
+        except Exception:
+            providers = []
+        candidates = [(p.api_key, p.base_url, model) for p in providers for model in p.models]
+        # Prefer models whose identifiers strongly suggest native audio/music,
+        # then preserve the router's configured priority for everything else.
+        candidates.sort(key=lambda item: (not bool(re.search(r"music|audio|lyria|stable-audio|suno|udio", item[2], re.I))))
+        return candidates
+
+    def generate_audio(self, prompt: str, variation: int = 0) -> tuple[bytes, dict[str, Any]]:
+        settings = self.settings
+        path = (settings.MUSIC_AUDIO_PATH or "/audio/generations").strip()
+        if not path.startswith("/"):
+            path = "/" + path
+        candidates = self._audio_candidates()
+        if not candidates:
+            raise MusicAIGeneratorError("هیچ Audio provider قابل استفاده‌ای در ENV پیدا نشد.")
+        errors: list[str] = []
+        for api_key, base_url, model in candidates:
+            payload = {
+                "model": model,
+                "prompt": prompt.strip(),
+                "duration": max(1, min(120, int(settings.MUSIC_AUDIO_MAX_SECONDS))),
+                "output_format": settings.MUSIC_AUDIO_FORMAT,
+                "quality": "maximum",
+                "variation": variation,
+            }
+            request = urllib.request.Request(
+                normalize_openai_compatible_base_url(base_url).rstrip("/") + path,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json", "Accept": "application/json, audio/*"},
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=max(30, int(settings.MUSIC_AUDIO_TIMEOUT_SECONDS))) as response:
+                    audio = self._decode_audio_response(response.read(), str(response.headers.get_content_type() or ""))
+                if audio and len(audio) >= 256:
+                    return audio, {"model": model, "provider": base_url}
+                errors.append(f"{model}:empty")
+            except Exception as exc:
+                errors.append(f"{model}:{type(exc).__name__}")
+        raise MusicAIGeneratorError("هیچ مدل Audio موجود نتوانست فایل معتبر تولید کند.")
