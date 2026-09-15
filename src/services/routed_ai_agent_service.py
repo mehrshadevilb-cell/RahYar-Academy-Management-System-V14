@@ -57,27 +57,36 @@ class RoutedAIAgentService(AIAgentService):
         if not results:
             return "🧪 هیچ مدل فعالی برای تست پیدا نشد."
 
-        lines = ["🧪 <b>Live AI Model Test</b>", "━━━━━━━━━━━━━━━━━━"]
+        lines = ["🧪 <b>Live AI Model Test</b>", "━━━━━━━━━━━━━━━━━━", "🔎 هر ردیف با یک درخواست واقعی تست شده است."]
         available = 0
         free_available = 0
         for row in results:
             icon = "🟢" if row["ok"] else "🔴"
-            free = " · FREE" if row["free"] else " · PAID"
-            latency = f" · {row['latency_ms']}ms"
-            status = "READY" if row["ok"] else str(row["status"]).upper()
-            lines.append(
-                f"{icon} <b>{row['provider']}</b> / <code>{row['model']}</code>"
-                f"{free}{latency}\n   {status}"
-            )
+            free = "FREE" if row["free"] else "PAID"
+            latency = f"{row['latency_ms']}ms"
             if row["ok"]:
                 available += 1
                 free_available += int(row["free"])
+                response = str(row.get("response") or "").replace("\n", " ").strip()
+                lines.append(
+                    f"\n{icon} <b>{row['provider']}</b> / <code>{row['model']}</code> · {free} · {latency}\n"
+                    f"   ✅ <b>READY</b> · پاسخ: <code>{response[:220]}</code>"
+                )
+            else:
+                detail = str(row.get("status") or "unknown").upper()
+                retry_after = row.get("retry_after")
+                if retry_after:
+                    detail += f" · retry {retry_after}s"
+                lines.append(
+                    f"\n{icon} <b>{row['provider']}</b> / <code>{row['model']}</code> · {free} · {latency}\n"
+                    f"   ❌ <b>{detail}</b>"
+                )
 
         lines.extend([
-            "━━━━━━━━━━━━━━━━━━",
-            f"🟢 قابل استفاده: <b>{available}/{len(results)}</b>",
+            "\n━━━━━━━━━━━━━━━━━━",
+            f"🟢 مدل‌های واقعاً پاسخ‌دهنده: <b>{available}/{len(results)}</b>",
             f"🆓 Free آماده: <b>{free_available}</b>",
-            "ℹ️ این تست هر بار live اجرا می‌شود؛ نتیجه cached نیست.",
+            "ℹ️ تست live است و cooldown قبلی را نادیده می‌گیرد؛ هیچ key یا endpointی نمایش داده نمی‌شود.",
         ])
         return "\n".join(lines)
 
@@ -90,10 +99,7 @@ class RoutedAIAgentService(AIAgentService):
 
         candidates = self.router._ordered_candidates(providers)
         free_count = sum(1 for provider, model in candidates if self.router._is_free_model(model))
-        route_lines = [
-            f"{provider.name}/{model}{' [free]' if self.router._is_free_model(model) else ''}"
-            for provider, model in candidates
-        ]
+        route_lines = [f"{provider.name}/{model}{' [free]' if self.router._is_free_model(model) else ''}" for provider, model in candidates]
         write = self._write_capable()
         lines = [
             f"enabled={self.settings.AI_AGENT_ENABLED}",
@@ -112,11 +118,7 @@ class RoutedAIAgentService(AIAgentService):
         ]
         if self._has_git():
             try:
-                lines.extend([
-                    f"branch={self._git('branch', '--show-current')}",
-                    f"head={self._git('rev-parse', '--short', 'HEAD')}",
-                    f"locked={self._lock_path().exists()}",
-                ])
+                lines.extend([f"branch={self._git('branch', '--show-current')}", f"head={self._git('rev-parse', '--short', 'HEAD')}", f"locked={self._lock_path().exists()}"])
             except AIAgentError as exc:
                 lines.append(f"git_error={exc}")
         elif self.settings.github_write_ready:
