@@ -1,8 +1,4 @@
-"""Fast, deterministic runtime checks for the RahYar AI Developer Agent.
-
-These checks intentionally do not call an LLM. They catch cheap, objective
-failures before an AI task is started and after code has been changed.
-"""
+"""Fast, deterministic runtime checks for the RahYar AI Developer Agent."""
 from __future__ import annotations
 
 import ast
@@ -21,7 +17,12 @@ class CheckResult:
 
 
 class AIAgentSelfChecker:
-    """Read-only project preflight suitable for production diagnostics."""
+    """Read-only project preflight suitable for production diagnostics.
+
+    Import checks deliberately target modules that are safe to import without
+    runtime credentials. Full application startup is validated separately by
+    the deployment/runtime health checks, not by this cheap preflight.
+    """
 
     SOURCE_ROOTS = ("src", "tests")
     REQUIRED_FILES = (
@@ -95,9 +96,12 @@ class AIAgentSelfChecker:
         return CheckResult("migrations", True, f"unique revision ids ({len(seen)})")
 
     def _check_imports(self) -> CheckResult:
+        # Do not import src.main/src.bot.bot here: those modules construct the
+        # Telegram Bot at import time and legitimately require BOT_TOKEN.
         probe = (
-            "import src.main; import src.bot.bot; import src.services.ai_agent_runtime; "
-            "import src.services.routed_ai_agent_service"
+            "import src.services.ai_agent_runtime; "
+            "import src.services.routed_ai_agent_service; "
+            "import src.services.ai_agent_diagnostics"
         )
         env = os.environ.copy()
         env.setdefault("PYTHONPATH", str(self.repo))
@@ -115,7 +119,7 @@ class AIAgentSelfChecker:
         if result.returncode:
             detail = (result.stderr or result.stdout).strip().replace("\n", " ")
             return CheckResult("imports", False, detail[:700])
-        return CheckResult("imports", True, "critical application modules import successfully")
+        return CheckResult("imports", True, "agent/runtime modules import successfully")
 
     def _check_git(self) -> CheckResult:
         if not (self.repo / ".git").is_dir():
@@ -136,7 +140,6 @@ class AIAgentSelfChecker:
         return CheckResult("git", True, f"repository reachable; working-tree entries={changed}")
 
     def run(self) -> list[CheckResult]:
-        """Run only bounded local checks; never mutate the repository."""
         return [
             self._check_layout(),
             self._check_python_syntax(),
