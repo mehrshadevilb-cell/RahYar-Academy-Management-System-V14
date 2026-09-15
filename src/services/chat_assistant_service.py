@@ -1,15 +1,12 @@
 """Student-facing read-only assistant grounded in catalog + AI Agent knowledge."""
 from __future__ import annotations
 
-import json
 import time
-import urllib.error
-import urllib.request
 from collections import defaultdict, deque
-from urllib.parse import urlparse
 
 from sqlalchemy.orm import Session
 
+from src.ai.provider_router import AIProviderError, AIProviderRouter
 from src.core.config.settings import get_settings
 from src.database.models.course import ProductDeliveryType
 from src.services.course_service import CourseService
@@ -43,10 +40,9 @@ class ChatAssistantError(RuntimeError):
 
 
 class ChatAssistantService:
-    _AGENTROUTER_HEADERS = {"Originator": "codex_cli_rs", "Version": "0.101.0", "User-Agent": "codex_cli_rs/0.101.0 (Linux; x86_64) RahYar-Chat/1.0"}
-
     def __init__(self) -> None:
         self.settings = get_settings()
+        self.router = AIProviderRouter()
         self.course_service = CourseService()
         self.online_course_service = OnlineCourseService()
         self._recent_messages: dict[str, deque[float]] = defaultdict(deque)
@@ -54,7 +50,7 @@ class ChatAssistantService:
     def _check_enabled(self) -> None:
         if not self.settings.CHAT_ASSISTANT_ENABLED:
             raise ChatAssistantError("disabled")
-        if not self.settings.effective_chat_api_key:
+        if not self.router.providers():
             raise ChatAssistantError("not_configured")
 
     def _check_rate_limit(self, telegram_id: str) -> None:
@@ -88,26 +84,15 @@ class ChatAssistantService:
             lines.append(f"- {oc.name} | ماهانه: {monthly} ({oc.monthly_sessions} جلسه) | ترمی: {term} ({oc.term_sessions} جلسه)")
         return "\n".join(lines)
 
-    def _provider_headers(self) -> dict[str, str]:
-        key = self.settings.effective_chat_api_key or ""
-        headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "RahYar-ChatAssistant/1.0"}
-        if (urlparse(self.settings.effective_chat_base_url).hostname or "").lower().endswith("agentrouter.org"):
-            headers.update(self._AGENTROUTER_HEADERS)
-        return headers
-
     def _request_model(self, messages: list[dict]) -> str:
-        request = urllib.request.Request(
-            self.settings.effective_chat_base_url.rstrip("/") + "/chat/completions",
-            data=json.dumps({"model": self.settings.effective_chat_model, "messages": messages, "temperature": 0.3, "max_tokens": 700}).encode("utf-8"),
-            headers=self._provider_headers(), method="POST",
-        )
         try:
-            with urllib.request.urlopen(request, timeout=self.settings.CHAT_ASSISTANT_TIMEOUT_SECONDS) as response:
-                data = json.loads(response.read().decode("utf-8"))
-            return data["choices"][0]["message"]["content"].strip()
-        except urllib.error.HTTPError as exc:
-            raise ChatAssistantError(f"provider_http_{exc.code}") from exc
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, KeyError, IndexError, TypeError) as exc:
+            data = self.router.chat(messages, temperature=0.3, max_tokens=700)
+            return str(data["choices"][0]["message"]["content"]).strip()
+        except AIProviderError as exc:
+            if exc.retryable:
+                raise ChatAssistantError("provider_rate_limited" if exc.retry_after else "provider_unavailable") from exc
+            raise ChatAssistantError("provider_unavailable") from exc
+        except (KeyError, IndexError, TypeError) as exc:
             raise ChatAssistantError("provider_unavailable") from exc
 
     def answer(self, db: Session, telegram_id: str, user_message: str) -> str:
