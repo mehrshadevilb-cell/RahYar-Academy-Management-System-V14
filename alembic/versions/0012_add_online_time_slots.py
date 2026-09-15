@@ -6,7 +6,7 @@ import sqlalchemy as sa
 from sqlalchemy import inspect
 
 revision: str = "0012"
-down_revision: Union[str, None] = "0011"
+down_revision: Union[str, Sequence[str], None] = ("0011", "0011_online_slots")
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
@@ -31,6 +31,12 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("ix_online_time_slots_online_course_id", table_name="online_time_slots")
-    op.drop_index("ix_online_time_slots_id", table_name="online_time_slots")
+    inspector = inspect(op.get_bind())
+    if "online_time_slots" not in inspector.get_table_names():
+        return
+    indexes = {item["name"] for item in inspector.get_indexes("online_time_slots")}
+    if "ix_online_time_slots_online_course_id" in indexes:
+        op.drop_index("ix_online_time_slots_online_course_id", table_name="online_time_slots")
+    if "ix_online_time_slots_id" in indexes:
+        op.drop_index("ix_online_time_slots_id", table_name="online_time_slots")
     op.drop_table("online_time_slots")
