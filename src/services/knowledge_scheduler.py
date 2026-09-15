@@ -25,7 +25,7 @@ class KnowledgeScheduler:
             return
         self._task = asyncio.create_task(self._loop(), name="rahyar-knowledge-sync")
 
-    def _sync_in_thread(self, since: datetime) -> tuple[list[dict], dict | None]:
+    def _sync_in_thread(self, since: datetime) -> tuple[list[dict], dict | None, set[int]]:
         db = SessionLocal()
         try:
             self.service.ingest_official_sources(db)
@@ -34,24 +34,21 @@ class KnowledgeScheduler:
                 {"title": item.title, "text": (item.translated_text or item.summary or item.raw_text)[:2800], "url": item.source_url}
                 for item in items if item.source_type != "telegram"
             ]
+            group_ids = {int(value) for value in self.settings.knowledge_group_ids}
+            if not group_ids:
+                group_ids = {int(value) for value in db.scalars(select(KnowledgeItem.source_chat_id).where(KnowledgeItem.source_type == "telegram", KnowledgeItem.source_chat_id.is_not(None)).distinct()).all()}
             quiz = None
             if self.settings.KNOWLEDGE_AUTO_QUIZ:
                 before = db.scalar(select(QuizQuestion.id).order_by(desc(QuizQuestion.created_at)))
                 self.service.generate_quiz(db, 5)
                 after = db.scalar(select(QuizQuestion).order_by(desc(QuizQuestion.created_at)))
                 if after and (before is None or after.id != before):
-                    quiz = {
-                        "question": after.question[:280],
-                        "options": [after.option_a, after.option_b, after.option_c, after.option_d],
-                        "correct": after.correct_option - 1,
-                        "explanation": (after.explanation or "")[:200],
-                    }
-            return new_items, quiz
+                    quiz = {"question": after.question[:280], "options": [after.option_a, after.option_b, after.option_c, after.option_d], "correct": after.correct_option - 1, "explanation": (after.explanation or "")[:200]}
+            return new_items, quiz, group_ids
         finally:
             db.close()
 
-    async def _publish(self, new_items: list[dict], quiz: dict | None) -> None:
-        groups = self.settings.knowledge_group_ids
+    async def _publish(self, new_items: list[dict], quiz: dict | None, groups: set[int]) -> None:
         if not groups:
             return
         for item in new_items:
@@ -70,8 +67,8 @@ class KnowledgeScheduler:
 
     async def _run_once(self) -> None:
         started = datetime.utcnow() - timedelta(seconds=5)
-        new_items, quiz = await asyncio.to_thread(self._sync_in_thread, started)
-        await self._publish(new_items, quiz)
+        new_items, quiz, groups = await asyncio.to_thread(self._sync_in_thread, started)
+        await self._publish(new_items, quiz, groups)
 
     async def _loop(self) -> None:
         await asyncio.sleep(20)
