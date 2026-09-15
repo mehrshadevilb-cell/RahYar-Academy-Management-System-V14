@@ -3,6 +3,17 @@ from sqlalchemy.orm import Session
 from src.database.models.reservation import Reservation, ReservationStatus
 
 
+# Statuses that still occupy a slot for a given enrollment+date+time.
+# Includes the payment-gate states so a second request cannot slip through
+# while the student is still paying or waiting for admin confirmation.
+_OPEN_STATUSES = (
+    ReservationStatus.WAITING_PAYMENT,
+    ReservationStatus.PAYMENT_SUBMITTED,
+    ReservationStatus.PENDING,
+    ReservationStatus.CONFIRMED,
+)
+
+
 class ReservationRepository:
     def create(self, db: Session, reservation: Reservation):
         db.add(reservation)
@@ -36,7 +47,7 @@ class ReservationRepository:
                 Reservation.enrollment_id == enrollment_id,
                 Reservation.requested_date == requested_date,
                 Reservation.requested_time == requested_time,
-                Reservation.status.in_((ReservationStatus.PENDING, ReservationStatus.CONFIRMED)),
+                Reservation.status.in_(_OPEN_STATUSES),
             )
             .first()
             is not None

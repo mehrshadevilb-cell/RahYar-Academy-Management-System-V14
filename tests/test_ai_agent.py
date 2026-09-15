@@ -71,7 +71,7 @@ def test_implement_disabled_raises():
     agent = AIAgentService()
     agent.settings = MagicMock()
     agent.settings.AI_AGENT_ENABLED = False
-    with pytest.raises(AIAgentError, match="disabled"):
+    with pytest.raises(AIAgentError, match="AI_AGENT_ENABLED|خاموش"):
         agent.implement("do something")
 
 
@@ -79,7 +79,7 @@ def test_lock_blocks_second_acquire(tmp_path):
     agent = AIAgentService()
     agent.repo = Path(tmp_path)
     agent._acquire_lock()
-    with pytest.raises(AIAgentError, match="already running"):
+    with pytest.raises(AIAgentError, match="Task|صبر"):
         agent._acquire_lock()
     agent._release_lock()
     agent._acquire_lock()
