@@ -47,6 +47,40 @@ class RoutedAIAgentService(AIAgentService):
         except (KeyError, IndexError, TypeError) as exc:
             raise AIAgentError("AI provider returned an unexpected response.") from exc
 
+    def test_provider_models(self) -> str:
+        """Run an explicit live health check against every configured model."""
+        self._check_enabled(require_git=False)
+        try:
+            results = self.router.test_models(timeout_seconds=15)
+        except AIProviderError as exc:
+            raise AIAgentError(str(exc)) from exc
+        if not results:
+            return "🧪 هیچ مدل فعالی برای تست پیدا نشد."
+
+        lines = ["🧪 <b>Live AI Model Test</b>", "━━━━━━━━━━━━━━━━━━"]
+        available = 0
+        free_available = 0
+        for row in results:
+            icon = "🟢" if row["ok"] else "🔴"
+            free = " · FREE" if row["free"] else " · PAID"
+            latency = f" · {row['latency_ms']}ms"
+            status = "READY" if row["ok"] else str(row["status"]).upper()
+            lines.append(
+                f"{icon} <b>{row['provider']}</b> / <code>{row['model']}</code>"
+                f"{free}{latency}\n   {status}"
+            )
+            if row["ok"]:
+                available += 1
+                free_available += int(row["free"])
+
+        lines.extend([
+            "━━━━━━━━━━━━━━━━━━",
+            f"🟢 قابل استفاده: <b>{available}/{len(results)}</b>",
+            f"🆓 Free آماده: <b>{free_available}</b>",
+            "ℹ️ این تست هر بار live اجرا می‌شود؛ نتیجه cached نیست.",
+        ])
+        return "\n".join(lines)
+
     def status(self) -> str:
         """Return sanitized health for the same provider pool used by requests."""
         self._check_enabled(require_git=False)
