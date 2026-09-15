@@ -26,3 +26,11 @@ def test_unknown_user_is_rejected(monkeypatch):
     monkeypatch.setattr(settings, "ADMIN_USERNAMES", "Hi_all")
 
     assert is_admin_user(999, "someone_else") is False
+
+
+def test_missing_username_is_rejected_for_non_owner(monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "OWNER_ID", 123456)
+    monkeypatch.setattr(settings, "ADMIN_USERNAMES", "Hi_all")
+
+    assert is_admin_user(999, None) is False
