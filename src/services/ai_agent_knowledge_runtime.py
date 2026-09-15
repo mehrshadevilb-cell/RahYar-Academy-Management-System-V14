@@ -288,6 +288,7 @@ class AIAgentKnowledgeRuntime:
     async def _publish(self, new_items: list[dict], quiz: dict | None, groups: set[int]) -> None:
         if not self.bot or not groups:
             return
+        topic_id = self.settings.KNOWLEDGE_GROUP_TOPIC_ID
         for item in new_items:
             safe_title = html.escape(item["title"] or "Audio Production")
             safe_text = html.escape(item["text"] or "")
@@ -295,13 +296,13 @@ class AIAgentKnowledgeRuntime:
             message = f"🧠 <b>مطلب آموزشی جدید</b>\n━━━━━━━━━━━━━━━━━━\n📌 <b>{safe_title}</b>\n\n{safe_text}\n\n🔗 منبع: {safe_url}"
             for chat_id in groups:
                 try:
-                    await self.bot.send_message(chat_id, message, parse_mode="HTML", disable_web_page_preview=True)
+                    await self.bot.send_message(chat_id, message, parse_mode="HTML", disable_web_page_preview=True, message_thread_id=topic_id)
                 except Exception:
                     pass
         if quiz:
             for chat_id in groups:
                 try:
-                    await self.bot.send_poll(chat_id=chat_id, question="🧠 کوییز راه‌یار\n\n" + quiz["question"], options=quiz["options"], type="quiz", correct_option_id=quiz["correct"], explanation=quiz["explanation"], is_anonymous=False)
+                    await self.bot.send_poll(chat_id=chat_id, message_thread_id=topic_id, question="🧠 کوییز راه‌یار\n\n" + quiz["question"], options=quiz["options"], type="quiz", correct_option_id=quiz["correct"], explanation=quiz["explanation"], is_anonymous=False)
                 except Exception:
                     pass
 
