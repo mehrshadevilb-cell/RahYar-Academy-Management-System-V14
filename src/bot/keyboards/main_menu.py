@@ -12,6 +12,7 @@ def get_main_menu(role: UserRole | None = None):
         [KeyboardButton(text="📚 دوره ها")],
         [KeyboardButton(text="🎓 دوره های من")],
         [KeyboardButton(text="🎼 کلاس آنلاین")],
+        [KeyboardButton(text="🎼 ساخت ریف/آکورد")],
         [KeyboardButton(text="📝 تکالیف")],
         [KeyboardButton(text="📈 پیشرفت من")],
         [KeyboardButton(text="👤 پروفایل")],
