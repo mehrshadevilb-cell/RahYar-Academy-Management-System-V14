@@ -20,7 +20,7 @@ class FakeMessage:
         self.bot = FakeBot()
         self.sent: list[str] = []
 
-    async def answer(self, text):
+    async def answer(self, text, **kwargs):
         self.sent.append(text)
 
 
@@ -43,7 +43,9 @@ async def test_telegram_chat_handler_reaches_service(monkeypatch):
 
     await handler.chat_fallback(message, db=object())
 
-    assert message.sent == ["قیمت فعلی را از منوی دوره‌ها می‌توانید ببینید."]
+    assert message.sent == [
+        "🤖 <b>راه‌یار</b>\n\nقیمت فعلی را از منوی دوره‌ها می‌توانید ببینید."
+    ]
     assert message.bot.last_action == (123, "typing")
 
 

@@ -19,6 +19,7 @@ def _normalize_model_markup(value: str) -> str:
 
 def _section_title(line: str) -> str | None:
     clean = line.strip()
+    clean = re.sub(r"^<b>(.+?)</b>$", r"\1", clean)
     clean = re.sub(r"^[🎯📌💡🔎📚⚙️🧠]\s*", "", clean)
     match = re.match(r"^(جواب|پاسخ|نتیجه|مراحل|نکات|پیشنهاد|انتخاب|مقایسه|هشدار|منابع)\s*:?(.*)$", clean, re.I)
     if not match:
