@@ -42,4 +42,131 @@ def _is_owner(user_id: int) -> bool:
     return user_id == settings.OWNER_ID
 
 
-# NOTE: full file continues in follow-up commit if truncated — see fix/reservation-payment-gate-handlers
+@router.callback_query(
+    F.data.startswith("res_payment_confirm_") | F.data.startswith("res_confirm_")
+)
+async def confirm_reservation(callback: CallbackQuery, bot: Bot, db):
+
+    if not _is_owner(callback.from_user.id):
+        await callback.answer("⛔️ شما دسترسی ندارید.", show_alert=True)
+        return
+
+    raw = callback.data
+    if raw.startswith("res_payment_confirm_"):
+        reservation_id = int(raw.replace("res_payment_confirm_", ""))
+    else:
+        reservation_id = int(raw.replace("res_confirm_", ""))
+
+    existing = reservation_service.get_by_id(db, reservation_id)
+
+    if not existing:
+        await callback.answer("درخواست پیدا نشد", show_alert=True)
+        return
+    if existing.status.value not in ("payment_submitted", "pending"):
+        await callback.answer("این درخواست قبلاً بررسی شده است.", show_alert=True)
+        return
+    if existing.status.value == "pending":
+        reservation_service.submit_payment(
+            db, existing.id, proof=existing.payment_proof or "legacy-pending"
+        )
+
+    reservation = reservation_service.confirm(db, reservation_id)
+    if reservation is None or getattr(reservation.status, "value", None) != "confirmed":
+        await callback.answer("تایید ممکن نیست. ابتدا باید رسید پرداخت ثبت شده باشد.", show_alert=True)
+        return
+
+    enrollment = online_enrollment_service.get_by_id(db, reservation.enrollment_id)
+
+    telegram_account = telegram_repository.get_by_user_id(db, enrollment.user_id)
+
+    if telegram_account:
+
+        await bot.send_message(
+            chat_id=telegram_account.telegram_id,
+            text=(
+                f"✅ رزرو کلاس شما تایید شد.\n"
+                f"📆 {reservation.requested_date} - ⏰ {reservation.requested_time}"
+            ),
+        )
+
+    admin_log_service.log(
+        db, callback.from_user.id, admin_actions.RESERVATION_CONFIRM,
+        f"رزرو #{reservation.id} برای تاریخ {reservation.requested_date} تایید شد",
+    )
+
+    body = callback.message.caption or callback.message.text or ""
+    try:
+        if callback.message.caption is not None:
+            await callback.message.edit_caption(
+                caption=body + "\n\n✅ تایید شد.\nپس از برگزاری کلاس، وضعیت را ثبت کنید:",
+                reply_markup=attendance_keyboard(reservation.id),
+            )
+        else:
+            await callback.message.edit_text(
+                body + "\n\n✅ تایید شد.\nپس از برگزاری کلاس، وضعیت را ثبت کنید:",
+                reply_markup=attendance_keyboard(reservation.id),
+            )
+    except Exception:
+        await callback.message.answer(
+            body + "\n\n✅ تایید شد.\nپس از برگزاری کلاس، وضعیت را ثبت کنید:",
+            reply_markup=attendance_keyboard(reservation.id),
+        )
+
+    await callback.answer()
+
+
+@router.callback_query(
+    F.data.startswith("res_payment_reject_") | F.data.startswith("res_reject_")
+)
+async def reject_reservation(callback: CallbackQuery, bot: Bot, db):
+
+    if not _is_owner(callback.from_user.id):
+        await callback.answer("⛔️ شما دسترسی ندارید.", show_alert=True)
+        return
+
+    raw = callback.data
+    if raw.startswith("res_payment_reject_"):
+        reservation_id = int(raw.replace("res_payment_reject_", ""))
+    else:
+        reservation_id = int(raw.replace("res_reject_", ""))
+
+    existing = reservation_service.get_by_id(db, reservation_id)
+
+    if not existing:
+        await callback.answer("درخواست پیدا نشد", show_alert=True)
+        return
+    if existing.status.value not in ("payment_submitted", "pending", "waiting_payment"):
+        await callback.answer("این درخواست قبلاً بررسی شده است.", show_alert=True)
+        return
+
+    reservation = reservation_service.reject(db, reservation_id)
+
+    enrollment = online_enrollment_service.get_by_id(db, reservation.enrollment_id)
+
+    telegram_account = telegram_repository.get_by_user_id(db, enrollment.user_id)
+
+    if telegram_account:
+
+        await bot.send_message(
+            chat_id=telegram_account.telegram_id,
+            text=(
+                "❌ زمان درخواستی شما تایید نشد.\n"
+                "لطفاً یک زمان دیگر رزرو کنید."
+            ),
+        )
+
+    admin_log_service.log(
+        db, callback.from_user.id, admin_actions.RESERVATION_REJECT,
+        f"رزرو #{reservation.id} برای تاریخ {reservation.requested_date} رد شد",
+    )
+
+    body = callback.message.caption or callback.message.text or ""
+    try:
+        if callback.message.caption is not None:
+            await callback.message.edit_caption(caption=body + "\n\n❌ رد شد.")
+        else:
+            await callback.message.edit_text(body + "\n\n❌ رد شد.")
+    except Exception:
+        await callback.message.answer(body + "\n\n❌ رد شد.")
+
+    await callback.answer()
