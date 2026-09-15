@@ -116,6 +116,24 @@ class AIProviderRouter:
 
     def _env_providers(self) -> list[AIProvider]:
         providers: list[AIProvider] = []
+
+        # AgentRouter is the canonical route for the developer Agent when its
+        # dedicated key is present. The model follows the same active AI_MODEL
+        # / AI_AGENT_MODEL configuration used by the rest of RahYar.
+        agentrouter_key = (os.getenv("AGENTROUTER_API_KEY") or "").strip()
+        agentrouter_model = (os.getenv("AI_MODEL") or os.getenv("AI_AGENT_MODEL") or "").strip()
+        if agentrouter_key and agentrouter_model:
+            providers.append(
+                AIProvider(
+                    name="agentrouter",
+                    api_key=agentrouter_key,
+                    base_url=self._normalize_base_url(os.getenv("AI_BASE_URL") or "https://agentrouter.org/v1"),
+                    models=(agentrouter_model,),
+                    priority=0,
+                    provider_type="openai_compatible",
+                )
+            )
+
         primary = self._provider_from_env("primary", "AI_API_KEY", "AI_BASE_URL", "AI_MODEL", 10)
         if primary:
             providers.append(primary)
@@ -174,18 +192,12 @@ class AIProviderRouter:
         return self._parse()
 
     def reset_cooldowns(self) -> None:
-        """Clear transient in-memory health cooldowns after an admin health check or recovery."""
         self._cooldown_until.clear()
         self._model_cooldown_until.clear()
 
     def cooldown_snapshot(self) -> dict[str, int]:
-        """Return remaining cooldown seconds for diagnostics without exposing credentials."""
         now = time.time()
-        return {
-            key: max(0, int(round(until - now)))
-            for key, until in self._model_cooldown_until.items()
-            if until > now
-        }
+        return {key: max(0, int(round(until - now))) for key, until in self._model_cooldown_until.items() if until > now}
 
     def _headers(self, provider: AIProvider) -> dict[str, str]:
         headers = {"Authorization": f"Bearer {provider.api_key}", "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "RahYar-AIProviderRouter/1.5"}
@@ -249,7 +261,6 @@ class AIProviderRouter:
         return str(content).strip() if content else ""
 
     def _request(self, provider: AIProvider, model: str, messages: list[dict[str, Any]], kwargs: dict[str, Any], timeout: int) -> dict[str, Any]:
-        """Build and execute a native request for each provider family."""
         if provider.provider_type == "google":
             system_parts: list[str] = []
             contents: list[dict[str, Any]] = []
@@ -289,9 +300,12 @@ class AIProviderRouter:
             url = provider.base_url.rstrip("/") + "/chat/completions"
             headers = self._headers(provider)
         request = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            raw = response.read().decode("utf-8")
-            data = json.loads(raw)
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                raw = response.read().decode("utf-8")
+                data = json.loads(raw)
+        except urllib.error.HTTPError as exc:
+            raise
         if not isinstance(data, dict):
             raise AIProviderError(f"Invalid AI provider response: {provider.name}/{model}", provider=provider.name)
         if not self._extract_text(data, provider.provider_type):
@@ -323,7 +337,6 @@ class AIProviderRouter:
         return status_code, latency, text
 
     def test_models(self, *, timeout_seconds: int = 15) -> list[dict[str, Any]]:
-        """Live-test every configured provider/model independently and repair stale cooldown state."""
         providers = self.providers()
         results: list[dict[str, Any]] = []
         timeout = max(5, min(int(timeout_seconds), 60))
@@ -404,24 +417,20 @@ class AIProviderRouter:
                     self._model_cooldown_until[model_key] = time.time() + 30
                     last = AIProviderError(f"provider authentication failed: {provider.name}/{model}", retryable=False, retry_after=30, provider=provider.name)
                     continue
-                last = AIProviderError(
-                    f"provider request failed: {provider.name}/{model} (HTTP {exc.code})",
-                    retryable=exc.code >= 500,
-                    retry_after=60 if exc.code >= 500 else 0,
-                    provider=provider.name,
-                )
+                last = AIProviderError(f"provider request failed: {provider.name}/{model} (HTTP {exc.code})", retryable=exc.code >= 500, retry_after=60 if exc.code >= 500 else 0, provider=provider.name)
                 if exc.code >= 500:
                     used = transient_attempts.get(model_key, 0)
                     if used < transient_retries:
-                        # Keep this route eligible for a bounded immediate
-                        # retry. This is global, so Chat and every Agent mode
-                        # share the same recovery behavior.
                         transient_attempts[model_key] = used + 1
                         candidates.append((provider, model))
                     else:
                         self._model_cooldown_until[model_key] = time.time() + 60
                 continue
-            except (urllib.error.URLError, TimeoutError, OSError):
+            except urllib.error.URLError:
+                last = AIProviderError(f"provider unavailable: {provider.name}/{model}", retryable=True, retry_after=30, provider=provider.name)
+                self._model_cooldown_until[model_key] = time.time() + 30
+                continue
+            except (TimeoutError, OSError):
                 last = AIProviderError(f"provider unavailable: {provider.name}/{model}", retryable=True, retry_after=30, provider=provider.name)
                 self._model_cooldown_until[model_key] = time.time() + 30
                 continue
@@ -433,9 +442,5 @@ class AIProviderRouter:
             raise last
         if skipped_until and attempted == 0:
             retry_after = max(1, int(round(min(skipped_until) - time.time())))
-            raise AIProviderError(
-                f"All configured AI models are cooling down; retry in {retry_after}s",
-                retryable=True,
-                retry_after=retry_after,
-            )
+            raise AIProviderError(f"All configured AI models are cooling down; retry in {retry_after}s", retryable=True, retry_after=retry_after)
         raise AIProviderError("All configured AI models are temporarily unavailable", retryable=True, retry_after=30)
