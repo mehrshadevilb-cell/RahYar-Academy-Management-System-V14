@@ -62,6 +62,7 @@ class Settings(BaseSettings):
     AI2_API_KEY: str | None = None
     AI2_BASE_URL: str | None = None
     AI2_MODEL: str | None = None
+    AI_FALLBACK_MODEL: str = "gpt-5.5"
     AI_PROVIDERS_JSON: str = ""
 
     ORCAROUTER_API_KEY: str | None = None
@@ -119,7 +120,15 @@ class Settings(BaseSettings):
 
     @property
     def effective_ai_model(self) -> str:
-        return (self.AI_MODEL or self.AI_AGENT_MODEL or "gpt-4o-mini").strip()
+        model = (self.AI_MODEL or self.AI_AGENT_MODEL or "gpt-4o-mini").strip()
+        host = (urlparse(self.effective_ai_base_url).hostname or "").lower()
+        # AgentRouter's current OpenAI-compatible catalog does not expose the
+        # old mimo-v2.5-free identifier. Keep deployments that still have that
+        # stale value from hard-failing every Agent request with HTTP 404.
+        if host.endswith("agentrouter.org") and model.lower() in {"mimo-v2.5-free", "mimo-v2.5"}:
+            fallback = (self.AI_FALLBACK_MODEL or "gpt-5.5").strip()
+            return fallback or "gpt-5.5"
+        return model
 
     @property
     def effective_chat_api_key(self) -> str | None:
