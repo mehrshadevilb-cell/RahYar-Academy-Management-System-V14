@@ -6,6 +6,8 @@ from sqlalchemy.orm import Session
 from src.database.models.attendance import Attendance, AttendanceStatus
 from src.database.models.reservation import ReservationStatus
 from src.database.models.online_enrollment import PaymentModel, EnrollmentStatus
+from src.database.models.telegram_account import TelegramAccount
+from src.database.models.user import User
 from src.database.repositories.attendance_repository import AttendanceRepository
 from src.services.installment_service import InstallmentService
 from src.services.lesson_completion_notification_service import LessonCompletionNotificationService
@@ -27,9 +29,12 @@ class AttendanceService:
         self.installment_service = InstallmentService()
         self.lesson_notification_service = LessonCompletionNotificationService()
 
-    def _schedule_completion_notification(self, enrollment, session_date) -> None:
+    def _schedule_completion_notification(self, db: Session, enrollment, session_date) -> None:
         """Notify the linked Telegram student without making attendance depend on Telegram."""
-        account = getattr(getattr(enrollment, "user", None), "telegram_account", None)
+        user = db.query(User).filter(User.id == enrollment.user_id).first()
+        if not user:
+            return
+        account = db.query(TelegramAccount).filter(TelegramAccount.user_id == user.id).first()
         telegram_id = getattr(account, "telegram_id", None)
         if not telegram_id:
             return
@@ -39,8 +44,7 @@ class AttendanceService:
         except (TypeError, ValueError):
             return
 
-        user = getattr(enrollment, "user", None)
-        student_name = getattr(user, "full_name", None) or "هنرجو"
+        student_name = user.full_name or "هنرجو"
         teacher_name = None
         course = getattr(enrollment, "online_course", None)
         if course is not None:
@@ -50,13 +54,13 @@ class AttendanceService:
         async def _send() -> None:
             try:
                 from src.bot.bot import bot
-                await self.lesson_notification_service.notify_completed(
+                service = LessonCompletionNotificationService(sender=bot.send_message)
+                await service.notify_completed(
                     chat_id,
                     student_name=student_name,
                     session_date=session_date,
                     teacher_name=teacher_name,
                     remaining_sessions=enrollment.remaining_sessions,
-                    sender=bot.send_message,
                 )
             except Exception:
                 # Attendance is already committed; Telegram delivery must never roll it back.
@@ -113,7 +117,7 @@ class AttendanceService:
                 self.installment_service.create_next_installment(db, enrollment)
 
             # Fire only after the attendance transaction has been committed.
-            self._schedule_completion_notification(enrollment, session_date)
+            self._schedule_completion_notification(db, enrollment, session_date)
 
         elif status == AttendanceStatus.ABSENT:
             previous_absences = (
