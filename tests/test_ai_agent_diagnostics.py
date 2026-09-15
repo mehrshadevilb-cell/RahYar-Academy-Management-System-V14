@@ -32,8 +32,13 @@ def test_duplicate_migration_revision_is_reported(tmp_path: Path):
 
 def test_main_branch_is_rejected_for_agent_writes(tmp_path: Path, monkeypatch):
     repo = _minimal_repo(tmp_path)
+    (repo / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
     checker = AIAgentDiagnostics(repo)
-    monkeypatch.setattr(checker, "_run", lambda args, timeout: (True, "main") if args[-1] == "--show-current" else (True, ""))
+    monkeypatch.setattr(
+        checker,
+        "_run",
+        lambda args, timeout: (True, "main") if args[-1] == "--show-current" else (True, ""),
+    )
     result = checker.git_hygiene()
     assert not result.ok
     assert "main" in result.detail
