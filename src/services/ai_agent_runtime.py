@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Awaitable, Callable
 
-from src.services.ai_agent_service import AIAgentError, AIAgentService
+from src.services.ai_agent_service_failover import AIAgentError, AIAgentService
 
 
 @dataclass(frozen=True)
@@ -126,14 +126,7 @@ Keep the plan minimal, specific and safe. Never request secrets."""
         objective = str(data.get("objective", "")).strip()
         if not objective:
             raise AIAgentError("Planner did not return an objective.")
-        return AgentPlan(
-            objective=objective,
-            approach=strings("approach"),
-            skills=strings("skills"),
-            inspect=strings("inspect"),
-            risks=strings("risks"),
-            tests=strings("tests"),
-        )
+        return AgentPlan(objective=objective, approach=strings("approach"), skills=strings("skills"), inspect=strings("inspect"), risks=strings("risks"), tests=strings("tests"))
 
     def plan(self, task: str, task_type: str = "feature") -> AgentPlan:
         raw = self.agent._request_model(self._plan_prompt(task, task_type))
@@ -166,13 +159,7 @@ Implement this plan. Preserve the existing architecture. Do not expose secrets,
 modify protected files, weaken tests, or target main. Return complete file contents
 only in the normal agent JSON schema."""
 
-    async def run_write(
-        self,
-        user_id: int,
-        task: str,
-        task_type: str,
-        progress: Callable[[str], Awaitable[None]] | None = None,
-    ) -> str:
+    async def run_write(self, user_id: int, task: str, task_type: str, progress: Callable[[str], Awaitable[None]] | None = None) -> str:
         async with self._lock:
             current = self._tasks.get(user_id)
             if current and not current.done():
@@ -188,22 +175,15 @@ only in the normal agent JSON schema."""
                     self._tasks.pop(user_id, None)
                     self._task_labels.pop(user_id, None)
 
-    async def _run_write_inner(
-        self,
-        task: str,
-        task_type: str,
-        progress: Callable[[str], Awaitable[None]] | None,
-    ) -> str:
+    async def _run_write_inner(self, task: str, task_type: str, progress: Callable[[str], Awaitable[None]] | None) -> str:
         async def report(text: str) -> None:
             if progress:
                 await progress(text)
-
         await report("🔎 بررسی ساختار پروژه و انتخاب Skillها...")
         plan = await asyncio.to_thread(self.plan, task, task_type)
         await report("🧠 Planner آماده شد؛ وابستگی‌ها و ریسک‌ها مشخص شدند.")
         await report("✏️ اجرای تغییرات روی branch ایزوله...")
-        implementation_task = self.build_implementation_task(task, task_type, plan)
-        result = await asyncio.to_thread(self.agent.implement, implementation_task, task_type)
+        result = await asyncio.to_thread(self.agent.implement, self.build_implementation_task(task, task_type, plan), task_type)
         await report("🧪 compile و pytest و کنترل‌های نهایی انجام شد.")
         return result
 
