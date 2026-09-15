@@ -13,8 +13,10 @@ from src.bot.handlers import online_class, admin_online, admin_installments
 from src.bot.handlers import admin_discount, admin_logs, admin_broadcast, admin_reports
 from src.bot.handlers import admin_ai, referral, support, admin_support
 from src.bot.handlers import assignment, admin_assignments, progress
+from src.bot.handlers import music_generator
 from src.bot.handlers import chat_assistant
 from src.bot.middlewares.database import DatabaseMiddleware
+from src.bot.middlewares.security import SecurityMiddleware
 
 settings = get_settings()
 logger = get_logger("bot.errors")
@@ -45,13 +47,28 @@ session = AiohttpSession(proxy=settings.PROXY_URL) if settings.PROXY_URL else No
 bot = Bot(token=settings.BOT_TOKEN, session=session)
 dp = Dispatcher(storage=build_fsm_storage())
 
+# Order matters: DatabaseMiddleware must run first so data["db"] exists
+# by the time SecurityMiddleware runs its blocked-user check.
 dp.message.middleware(DatabaseMiddleware())
 dp.callback_query.middleware(DatabaseMiddleware())
+dp.message.middleware(SecurityMiddleware())
+dp.callback_query.middleware(SecurityMiddleware())
 
 
 @dp.error()
 async def global_error_handler(event: ErrorEvent):
     exc = event.exception
+    callback_query = event.update.callback_query
+
+    if callback_query:
+        try:
+            # Without this, a failed callback handler leaves the button
+            # in the user's Telegram client spinning until Telegram's
+            # own client-side timeout - a real, user-visible UI bug
+            # independent of whatever caused the underlying exception.
+            await callback_query.answer()
+        except Exception:
+            logger.exception("Failed to answer callback_query %s after an error", callback_query.id)
 
     if isinstance(exc, TelegramConflictError):
         logger.warning("TelegramConflictError (another getUpdates active): %s", exc)
@@ -79,8 +96,8 @@ async def global_error_handler(event: ErrorEvent):
     chat_id = None
     if event.update.message:
         chat_id = event.update.message.chat.id
-    elif event.update.callback_query and event.update.callback_query.message:
-        chat_id = event.update.callback_query.message.chat.id
+    elif callback_query and callback_query.message:
+        chat_id = callback_query.message.chat.id
 
     if chat_id:
         try:
@@ -114,7 +131,9 @@ def setup_handlers():
         start, course, profile, my_courses, payment, admin, online_class,
         admin_online, admin_installments, admin_discount, admin_logs,
         admin_broadcast, admin_reports, admin_ai, referral, support, admin_support,
-        assignment, admin_assignments, progress,
+        assignment, admin_assignments, progress, music_generator,
+        # chat_assistant MUST stay last: it's a catch-all for free text
+        # that no other router recognized (see its module docstring).
         chat_assistant,
     ):
         dp.include_router(module.router)
