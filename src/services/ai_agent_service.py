@@ -587,9 +587,19 @@ Write primarily in Persian; keep paths in English."""
 
     def _safe_path(self, relative: str) -> Path:
         path = Path(relative)
-        if not path.parts or path.is_absolute() or ".." in path.parts or path.parts[0] in self.PROTECTED:
+        normalized = path.as_posix().lstrip("./")
+        protected_exact = {name.strip("/") for name in self.PROTECTED}
+        protected_prefixes = (".git/",)
+        if (
+            not path.parts
+            or path.is_absolute()
+            or ".." in path.parts
+            or path.parts[0] == ".git"
+            or normalized in protected_exact
+            or any(normalized.startswith(prefix) for prefix in protected_prefixes)
+        ):
             raise AIAgentError(f"Protected or invalid path: {relative}")
-        lowered = str(path).lower()
+        lowered = normalized.lower()
         for token in (".env", "secrets", "credentials", "production.db"):
             if token in lowered:
                 raise AIAgentError(f"Protected or invalid path: {relative}")
@@ -714,29 +724,22 @@ Never include .env/secrets. Never target main."""
                 try:
                     pr_info = self._push_and_open_pr(
                         branch,
-                        title=f"ai({task_type}): {task[:72]}",
+                        title=f"ai({task_type}): {task[:100]}",
                         body=(
-                            f"Automated AI agent change.\n\n"
-                            f"**Task:** {task}\n\n"
-                            f"**Summary:** {plan.get('summary', '')}\n\n"
-                            f"**Files:** {', '.join(written)}\n\n"
-                            "Owner must review before merge to main."
+                            f"Owner task: {task}\n\n"
+                            f"AI Agent summary: {plan.get('summary', '')}\n\n"
+                            f"Checks: PASS\nHead: {head}"
                         ),
                     )
                 except AIAgentError as exc:
-                    pr_info = f"commit ok; push/PR failed: {exc}"
-
+                    pr_info = f"push/PR warning: {exc}"
                 return (
                     f"Branch: {branch}\n"
-                    f"Attempts: {attempt + 1}\n"
-                    f"Tests: PASS\n"
-                    f"Committed: {head}\n"
-                    f"Files: {', '.join(written)}\n"
-                    f"PR: {pr_info}\n"
-                    f"Summary: {plan.get('summary', 'completed')}\n"
-                    f"⚠️ merge به main فقط با تأیید شما"
+                    f"Changed: {', '.join(written)}\n"
+                    f"Commit: {head}\n"
+                    f"{pr_info}"
                 )
 
-            return f"Branch: {branch}\nFailed after retries.\n{last_error}"
+            return f"Branch: {branch}\nFailed."
         finally:
             self._release_lock()
