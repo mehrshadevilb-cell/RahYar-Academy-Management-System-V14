@@ -31,6 +31,26 @@ BUY_PAYLOAD_PREFIX = "buy_"
 CLASS_PAYLOAD_PREFIX = "class_"
 
 
+def normalize_iranian_mobile(value: str | None) -> str | None:
+    """Return Iranian mobile numbers in the canonical ``09xxxxxxxxx`` form."""
+    if not value:
+        return None
+
+    translation = str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")
+    digits = "".join(ch for ch in str(value).translate(translation) if ch.isdigit())
+
+    if digits.startswith("0098"):
+        digits = "0" + digits[4:]
+    elif digits.startswith("98"):
+        digits = "0" + digits[2:]
+    elif len(digits) == 10 and digits.startswith("9"):
+        digits = "0" + digits
+
+    if len(digits) != 11 or not digits.startswith("09"):
+        return None
+    return digits
+
+
 async def _notify_new_member_start(message: Message, *, is_new: bool, full_name: str, username: str | None) -> None:
     """Notify the configured owner/admin chat without ever breaking /start."""
     settings = get_settings()
@@ -142,10 +162,8 @@ async def start_get_phone(message: Message, state: FSMContext, db):
     if not contact or contact.user_id not in (None, message.from_user.id):
         await message.answer("❌ لطفاً شماره خودتان را با دکمه ارسال کنید.")
         return
-    phone = (contact.phone_number or "").replace(" ", "").replace("-", "")
-    if phone.startswith("+98"):
-        phone = "0" + phone[3:]
-    if not phone.startswith("09") or len(phone) != 11 or not phone.isdigit():
+    phone = normalize_iranian_mobile(contact.phone_number)
+    if not phone:
         await message.answer("❌ شماره موبایل معتبر نیست. دوباره تلاش کنید.")
         return
     account = telegram_service.repository.get_by_telegram_id(db, str(message.from_user.id))
