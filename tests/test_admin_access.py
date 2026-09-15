@@ -34,3 +34,6 @@ def test_missing_username_is_rejected_for_non_owner(monkeypatch):
     monkeypatch.setattr(settings, "ADMIN_USERNAMES", "Hi_all")
 
     assert is_admin_user(999, None) is False
+
+
+# Trigger one-time migration after verifying the main branch still had owner-only checks.
