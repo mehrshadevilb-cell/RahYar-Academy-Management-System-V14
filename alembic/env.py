@@ -1,7 +1,7 @@
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import engine_from_config, pool, text
 
 from src.core.config.settings import get_settings
 from src.database.base import Base
@@ -41,6 +41,10 @@ if config.config_file_name is not None:
 config.set_main_option("sqlalchemy.url", get_settings().DATABASE_URL)
 target_metadata = Base.metadata
 
+# PostgreSQL advisory locks are connection-scoped. A fixed application-specific
+# lock key prevents two Render instances from running Alembic concurrently.
+POSTGRES_MIGRATION_LOCK_ID = 782145903
+
 
 def run_migrations_offline() -> None:
     url = config.get_main_option("sqlalchemy.url")
@@ -52,9 +56,19 @@ def run_migrations_offline() -> None:
 def run_migrations_online() -> None:
     connectable = engine_from_config(config.get_section(config.config_ini_section, {}), prefix="sqlalchemy.", poolclass=pool.NullPool)
     with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata, compare_type=True)
-        with context.begin_transaction():
-            context.run_migrations()
+        is_postgres = connection.dialect.name == "postgresql"
+        lock_acquired = False
+        try:
+            if is_postgres:
+                connection.execute(text("SELECT pg_advisory_lock(:lock_id)"), {"lock_id": POSTGRES_MIGRATION_LOCK_ID})
+                lock_acquired = True
+
+            context.configure(connection=connection, target_metadata=target_metadata, compare_type=True)
+            with context.begin_transaction():
+                context.run_migrations()
+        finally:
+            if is_postgres and lock_acquired:
+                connection.execute(text("SELECT pg_advisory_unlock(:lock_id)"), {"lock_id": POSTGRES_MIGRATION_LOCK_ID})
 
 
 if context.is_offline_mode():
