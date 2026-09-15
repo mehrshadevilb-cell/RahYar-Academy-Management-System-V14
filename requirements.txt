@@ -35,3 +35,5 @@ uvicorn
 jinja2==3.1.6
 python-multipart==0.0.20
 loguru==0.7.3
+httpx==0.28.1
+cryptography==45.0.7

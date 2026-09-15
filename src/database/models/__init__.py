@@ -5,6 +5,8 @@ from .enrollment import Enrollment
 from .payment import Payment
 from .telegram_account import TelegramAccount
 from .admin_log import AdminLog
+from .ai_provider import AIProvider
+from .ai_model import AIModel
 
 
 __all__ = [
@@ -16,4 +18,6 @@ __all__ = [
     "Payment",
     "TelegramAccount",
     "AdminLog",
+    "AIProvider",
+    "AIModel",
 ]
