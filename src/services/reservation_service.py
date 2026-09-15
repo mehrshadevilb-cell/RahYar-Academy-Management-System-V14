@@ -21,10 +21,14 @@ class ReservationService:
         return self.repository.create(db, reservation)
 
     def submit_payment(self, db: Session, reservation_id: int, proof: str):
+        """Attach payment proof and move to admin-reviewable PENDING.
+
+        PENDING is the status the existing admin handlers already accept.
+        """
         reservation = self.repository.get_by_id(db, reservation_id)
         if reservation:
             reservation.payment_proof = proof
-            reservation.status = ReservationStatus.PAYMENT_SUBMITTED
+            reservation.status = ReservationStatus.PENDING
             db.commit()
             db.refresh(reservation)
         return reservation
@@ -34,9 +38,11 @@ class ReservationService:
         if not reservation:
             return None
 
-        # A reservation can only become final after payment is submitted.
-        # The old PENDING path allowed admin confirmation without payment.
-        if reservation.status != ReservationStatus.PAYMENT_SUBMITTED:
+        # Accept PENDING (after receipt) or legacy PAYMENT_SUBMITTED.
+        if reservation.status not in (
+            ReservationStatus.PENDING,
+            ReservationStatus.PAYMENT_SUBMITTED,
+        ):
             return reservation
 
         reservation.status = ReservationStatus.CONFIRMED
