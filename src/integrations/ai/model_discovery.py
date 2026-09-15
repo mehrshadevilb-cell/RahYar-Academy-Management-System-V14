@@ -8,19 +8,18 @@ from src.services.ai.credential_crypto import decrypt_api_key
 
 
 async def discover_models(provider: AIProvider) -> list[dict[str, Any]]:
-    """Discover models from a configured provider without mutating the database."""
+    """Discover and normalize provider models without mutating the database."""
     if not provider.is_active:
         raise ValueError("Cannot discover models from an inactive provider")
-    api_key = decrypt_api_key(provider.api_key_encrypted)
-    client = ProviderRegistry.get_client(provider, api_key)
+    client = ProviderRegistry.get_client(provider, decrypt_api_key(provider.api_key_encrypted))
     models = await client.list_models()
     normalized: list[dict[str, Any]] = []
     for model in models:
-        model_id = model.get("id")
+        model_id = model.get("model_id") or model.get("id")
         if not model_id:
             continue
         normalized.append({
-            "id": str(model_id),
+            "model_id": str(model_id),
             "display_name": str(model.get("display_name") or model_id),
             "context_window": model.get("context_window"),
             "max_output_tokens": model.get("max_output_tokens"),
