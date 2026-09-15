@@ -42,22 +42,10 @@ jobs:
                   text,
               )
 
-              text = text.replace(
-                  '_is_owner(message.from_user.id)',
-                  '_is_owner(message.from_user.id, message.from_user.username)',
-              )
-              text = text.replace(
-                  '_is_owner(callback.from_user.id)',
-                  '_is_owner(callback.from_user.id, callback.from_user.username)',
-              )
-              text = text.replace(
-                  '_owner(message.from_user.id)',
-                  '_owner(message.from_user.id, message.from_user.username)',
-              )
-              text = text.replace(
-                  '_owner(callback.from_user.id)',
-                  '_owner(callback.from_user.id, callback.from_user.username)',
-              )
+              text = text.replace('_is_owner(message.from_user.id)', '_is_owner(message.from_user.id, message.from_user.username)')
+              text = text.replace('_is_owner(callback.from_user.id)', '_is_owner(callback.from_user.id, callback.from_user.username)')
+              text = text.replace('_owner(message.from_user.id)', '_owner(message.from_user.id, message.from_user.username)')
+              text = text.replace('_owner(callback.from_user.id)', '_owner(callback.from_user.id, callback.from_user.username)')
 
               if text != original:
                   path.write_text(text, encoding='utf-8')
@@ -68,10 +56,13 @@ jobs:
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git rm .github/workflows/admin-access-migration.yml
           git add src/bot/handlers/admin*.py
+          git rm .github/workflows/admin-access-migration.yml
           if git diff --cached --quiet; then
+            echo 'No admin handler changes detected.'
             exit 0
           fi
           git commit -m 'chore: migrate all admin handlers to shared access'
           git push
+
+# retriggered after verifying main still had owner-only checks
