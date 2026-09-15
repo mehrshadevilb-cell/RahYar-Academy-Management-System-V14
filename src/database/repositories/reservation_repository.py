@@ -16,7 +16,14 @@ class ReservationRepository:
     def get_pending(self, db: Session):
         return (
             db.query(Reservation)
-            .filter(Reservation.status == ReservationStatus.PENDING)
+            .filter(
+                Reservation.status.in_(
+                    (
+                        ReservationStatus.PAYMENT_SUBMITTED,
+                        ReservationStatus.PENDING,
+                    )
+                )
+            )
             .order_by(Reservation.requested_date, Reservation.requested_time)
             .all()
         )
@@ -36,7 +43,14 @@ class ReservationRepository:
                 Reservation.enrollment_id == enrollment_id,
                 Reservation.requested_date == requested_date,
                 Reservation.requested_time == requested_time,
-                Reservation.status.in_((ReservationStatus.PENDING, ReservationStatus.CONFIRMED)),
+                Reservation.status.in_(
+                    (
+                        ReservationStatus.WAITING_PAYMENT,
+                        ReservationStatus.PAYMENT_SUBMITTED,
+                        ReservationStatus.PENDING,
+                        ReservationStatus.CONFIRMED,
+                    )
+                ),
             )
             .first()
             is not None
