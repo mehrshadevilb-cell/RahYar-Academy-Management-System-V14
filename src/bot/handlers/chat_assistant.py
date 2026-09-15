@@ -6,15 +6,19 @@ from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 
 from src.services.chat_assistant_service import ChatAssistantError, ChatAssistantService
 from src.services.profile_service import ProfileService
+from src.services.telegram_answer_ui import format_assistant_answer
 
 router = Router()
 chat_assistant_service = ChatAssistantService()
 profile_service = ProfileService()
 
 MENU_BUTTON_TEXT = "🤖 دستیار هوشمند"
-DISABLED_MESSAGE_FA = "🤖 دستیار فعلاً در دسترس نیست.\nاز «🆘 پشتیبانی» کمک بگیر."
+DISABLED_MESSAGE_FA = "🤖 <b>راه‌یار</b>\n\nدستیار فعلاً در دسترس نیست.\nاز «🆘 پشتیبانی» کمک بگیر."
 ASSISTANT_HINTS = ReplyKeyboardMarkup(
-    keyboard=[[KeyboardButton(text="🎚️ راهنمای DAW")], [KeyboardButton(text="🎛️ راهنمای Plugin"), KeyboardButton(text="🎼 تئوری موسیقی")]],
+    keyboard=[
+        [KeyboardButton(text="🎚️ راهنمای DAW")],
+        [KeyboardButton(text="🎛️ راهنمای Plugin"), KeyboardButton(text="🎼 تئوری موسیقی")],
+    ],
     resize_keyboard=True,
     one_time_keyboard=True,
     input_field_placeholder="سؤالت رو بنویس…",
@@ -24,11 +28,10 @@ ASSISTANT_HINTS = ReplyKeyboardMarkup(
 @router.message(F.text == MENU_BUTTON_TEXT)
 async def chat_intro(message: Message):
     await message.answer(
-        "🤖 <b>دستیار راه‌یار</b>\n\n"
-        "سؤالت رو بپرس؛ از DAW و Plugin تا میکس، مستر و تئوری موسیقی.\n"
-        "اگر جواب دقیق توی دانش داخلی نباشه، از منابع معتبر وب بررسی می‌کنم.\n\n"
-        "🎚️ Cubase • Ableton • FL Studio • Studio One\n"
-        "🎛️ Waves • Arturia • iZotope",
+        "🤖 <b>راه‌یار | دستیار هوشمند</b>\n\n"
+        "سؤالت رو بپرس؛ جواب کوتاه و کاربردی می‌گیری.\n"
+        "DAW، Plugin، میکس، مستر، ضبط و تئوری موسیقی 🎚️\n\n"
+        "<i>اگر لازم باشه، منابع معتبر وب هم بررسی می‌شن.</i>",
         parse_mode="HTML",
         reply_markup=ASSISTANT_HINTS,
     )
@@ -53,9 +56,13 @@ async def chat_fallback(message: Message, db):
         if code == "empty_message":
             return
         if "تعداد پیام" in code:
-            await message.answer(code)
+            await message.answer(f"⏳ <b>محدودیت موقت</b>\n\n{code}", parse_mode="HTML")
             return
-        await message.answer(DISABLED_MESSAGE_FA)
+        await message.answer(DISABLED_MESSAGE_FA, parse_mode="HTML")
         return
 
-    await message.answer(reply, disable_web_page_preview=True)
+    await message.answer(
+        format_assistant_answer(reply),
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
