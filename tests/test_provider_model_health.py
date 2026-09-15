@@ -1,7 +1,9 @@
 import json
 from urllib.parse import parse_qs, urlparse
 
-from src.ai.provider_router import AIProviderRouter
+import pytest
+
+from src.ai.provider_router import AIProviderError, AIProviderRouter
 
 
 def _clear_settings():
@@ -106,4 +108,47 @@ def test_test_models_uses_gemini_generate_content_and_shows_real_response(monkey
     assert parse_qs(parsed.query)["key"] == ["google-secret"]
     body = json.loads(calls[0].data.decode())
     assert body["generationConfig"]["maxOutputTokens"] == 8
+    _clear_settings()
+
+
+def test_chat_reports_real_remaining_cooldown_when_every_model_is_blocked(monkeypatch):
+    monkeypatch.setenv("AI_PROVIDERS_JSON", json.dumps([
+        {"name": "provider", "api_key": "key", "base_url": "https://provider.example/v1", "models": ["one-free", "two-free"]}
+    ]))
+    _clear_settings()
+    router = AIProviderRouter()
+    monkeypatch.setattr(router, "_from_database", lambda: [])
+    now = __import__("time").time()
+    router._model_cooldown_until["provider:one-free"] = now + 11
+    router._model_cooldown_until["provider:two-free"] = now + 23
+
+    with pytest.raises(AIProviderError) as exc_info:
+        router.chat([{"role": "user", "content": "ping"}])
+
+    assert exc_info.value.retryable is True
+    assert 1 <= exc_info.value.retry_after <= 11
+    assert "cooling down" in str(exc_info.value)
+    _clear_settings()
+
+
+def test_successful_audit_clears_stale_model_cooldown(monkeypatch):
+    monkeypatch.setenv("AI_PROVIDERS_JSON", json.dumps([
+        {"name": "provider", "api_key": "key", "base_url": "https://provider.example/v1", "model": "model-free"}
+    ]))
+    _clear_settings()
+    router = AIProviderRouter()
+    monkeypatch.setattr(router, "_from_database", lambda: [])
+    router._model_cooldown_until["provider:model-free"] = __import__("time").time() + 300
+
+    class Response:
+        status = 200
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+        def read(self): return json.dumps({"choices": [{"message": {"content": "OK"}}]}).encode()
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda request, timeout: Response())
+    results = router.test_models(timeout_seconds=5)
+
+    assert results[0]["ok"] is True
+    assert "provider:model-free" not in router.cooldown_snapshot()
     _clear_settings()
