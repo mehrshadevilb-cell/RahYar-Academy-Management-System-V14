@@ -29,8 +29,7 @@ def upgrade() -> None:
 
     # Some older deployments created this table with Base.metadata.create_all()
     # before Alembic became the sole schema owner. In that case the table already
-    # exists while alembic_version is still 0009. Treat the existing table as the
-    # 0010 schema and only add missing indexes.
+    # exists while alembic_version is still 0009. Adopt it without recreating it.
     if "admin_logs" not in tables:
         op.create_table(
             "admin_logs",
@@ -48,10 +47,12 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # This migration can adopt a table that pre-dates Alembic. Never destroy an
+    # adopted table during downgrade because Alembic cannot distinguish it from
+    # a table created by this migration after the fact.
     bind = op.get_bind()
     inspector = inspect(bind)
-    tables = set(inspector.get_table_names())
-    if "admin_logs" not in tables:
+    if "admin_logs" not in inspector.get_table_names():
         return
 
     existing = {index["name"] for index in inspector.get_indexes("admin_logs")}
@@ -63,4 +64,3 @@ def downgrade() -> None:
     ):
         if name in existing:
             op.drop_index(name, table_name="admin_logs")
-    op.drop_table("admin_logs")
