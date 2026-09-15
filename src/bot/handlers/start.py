@@ -3,6 +3,7 @@ from aiogram.filters import Command, CommandObject
 from aiogram.types import Message
 
 from src.bot.keyboards.main_menu import get_main_menu
+from src.core.config.settings import get_settings
 from src.database.repositories.course_repository import CourseRepository
 from src.services.online_course_service import OnlineCourseService
 from src.services.referral_service import ReferralService
@@ -18,6 +19,34 @@ online_course_service = OnlineCourseService()
 REFERRAL_PAYLOAD_PREFIX = "ref_"
 BUY_PAYLOAD_PREFIX = "buy_"
 CLASS_PAYLOAD_PREFIX = "class_"
+
+
+async def _notify_new_member_start(message: Message, *, is_new: bool, full_name: str, username: str | None) -> None:
+    """Notify the configured owner/admin chat without ever breaking /start."""
+    settings = get_settings()
+    target_chat_id = settings.new_member_notification_chat_id
+    if not target_chat_id or not message.from_user:
+        return
+    # Do not send the notification back to the student if the configured target
+    # happens to be the same chat where /start was sent.
+    if message.chat.id == target_chat_id:
+        return
+
+    status = "🆕 عضو جدید" if is_new else "🔁 ورود مجدد"
+    username_text = f"@{username}" if username else "ندارد"
+    text = (
+        f"🔔 <b>{status}</b>\n\n"
+        f"👤 نام: {full_name or '—'}\n"
+        f"🆔 Telegram ID: <code>{message.from_user.id}</code>\n"
+        f"🔗 Username: {username_text}\n"
+        f"💬 Chat ID: <code>{message.chat.id}</code>\n"
+        f"📌 نوع کاربر: {'جدید' if is_new else 'عضو قبلی'}"
+    )
+    try:
+        await message.bot.send_message(target_chat_id, text)
+    except Exception:
+        # Notification failure must never prevent the student from using /start.
+        return
 
 
 @router.message(Command("start"))
@@ -43,6 +72,13 @@ async def start_handler(
             referrer_telegram_id=referrer_telegram_id,
             referred_user_id=user.id,
         )
+
+    await _notify_new_member_start(
+        message,
+        is_new=is_new,
+        full_name=user.full_name,
+        username=message.from_user.username,
+    )
 
     await message.answer(
         f"سلام {user.full_name} 👋\n"
