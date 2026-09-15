@@ -363,6 +363,11 @@ class AIProviderRouter:
             timeout_seconds = min(max(self.settings.AI_AGENT_TIMEOUT_SECONDS, 5), 120)
         last: AIProviderError | None = None
         candidates = self._ordered_candidates(providers)
+        try:
+            transient_retries = max(0, min(int(self.settings.AI_AGENT_MAX_RETRIES), 5))
+        except (TypeError, ValueError):
+            transient_retries = 2
+        transient_attempts: dict[str, int] = {}
         now = time.time()
         skipped_until: list[float] = []
         attempted = 0
@@ -406,7 +411,15 @@ class AIProviderRouter:
                     provider=provider.name,
                 )
                 if exc.code >= 500:
-                    self._model_cooldown_until[model_key] = time.time() + 60
+                    used = transient_attempts.get(model_key, 0)
+                    if used < transient_retries:
+                        # Keep this route eligible for a bounded immediate
+                        # retry. This is global, so Chat and every Agent mode
+                        # share the same recovery behavior.
+                        transient_attempts[model_key] = used + 1
+                        candidates.append((provider, model))
+                    else:
+                        self._model_cooldown_until[model_key] = time.time() + 60
                 continue
             except (urllib.error.URLError, TimeoutError, OSError):
                 last = AIProviderError(f"provider unavailable: {provider.name}/{model}", retryable=True, retry_after=30, provider=provider.name)

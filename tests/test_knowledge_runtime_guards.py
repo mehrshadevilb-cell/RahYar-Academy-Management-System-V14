@@ -70,3 +70,20 @@ def test_quiz_corpus_spreads_across_old_and_new_items():
     assert selected[0].id == 1
     assert selected[-1].id == 100
     assert len(selected) == 36
+
+
+def test_knowledge_runtime_uses_provider_router_failover():
+    runtime = AIAgentKnowledgeRuntime.__new__(AIAgentKnowledgeRuntime)
+    runtime.settings = SimpleNamespace(AI_AGENT_TIMEOUT_SECONDS=10)
+
+    class Router:
+        def __init__(self):
+            self.calls = 0
+
+        def chat(self, messages, **kwargs):
+            self.calls += 1
+            return {"choices": [{"message": {"content": "router answer"}}]}
+
+    runtime.provider_router = Router()
+    assert runtime._request_ai("hello") == "router answer"
+    assert runtime.provider_router.calls == 1

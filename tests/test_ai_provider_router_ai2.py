@@ -61,3 +61,31 @@ def test_rate_limit_fails_over_to_ai2(monkeypatch):
     ]
     assert router._model_cooldown_until["primary:primary-model"] > 0
     _clear_settings()
+
+
+def test_transient_504_retries_same_model_before_cooldown(monkeypatch):
+    monkeypatch.delenv("AI_PROVIDERS_JSON", raising=False)
+    monkeypatch.setenv("AI_API_KEY", "primary-key")
+    monkeypatch.setenv("AI_BASE_URL", "https://primary.example/v1")
+    monkeypatch.setenv("AI_MODEL", "primary-model")
+    _clear_settings()
+    router = AIProviderRouter()
+    calls = []
+
+    class Response:
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+        def read(self): return b'{"choices":[{"message":{"content":"RECOVERED"}}]}'
+
+    def fake_urlopen(request, timeout):
+        calls.append(request.full_url)
+        if len(calls) == 1:
+            raise urllib.error.HTTPError(request.full_url, 504, "gateway timeout", {}, None)
+        return Response()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    result = router.chat([{"role": "user", "content": "hello"}])
+    assert result["choices"][0]["message"]["content"] == "RECOVERED"
+    assert len(calls) == 2
+    assert "primary:primary-model" not in router.cooldown_snapshot()
+    _clear_settings()
