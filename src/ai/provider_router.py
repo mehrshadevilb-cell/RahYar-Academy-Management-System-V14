@@ -82,7 +82,6 @@ class AIProviderRouter:
     def _from_database(self) -> list[AIProvider]:
         """Load active DB providers and order their models free-first."""
         try:
-            from src.database.models.ai_model import AIModel
             from src.database.models.ai_provider import AIProvider as DBProvider
             from src.database.session import SessionLocal
             from src.services.ai.credential_crypto import decrypt_api_key
@@ -201,7 +200,7 @@ class AIProviderRouter:
         return code in {402, 403} and any(x in lowered for x in ("rate", "capacity", "quota", "limit"))
 
     def _ordered_candidates(self, providers: list[AIProvider]) -> list[tuple[AIProvider, str]]:
-        """Flatten the pool so no paid model can run before an available free model."""
+        """Flatten the pool so no paid model is attempted before free candidates."""
         candidates: list[tuple[AIProvider, str]] = []
         for provider in providers:
             for model in provider.models:
@@ -222,19 +221,13 @@ class AIProviderRouter:
             timeout_seconds = min(max(self.settings.AI_AGENT_TIMEOUT_SECONDS, 5), 180)
 
         last: AIProviderError | None = None
-        now = time.time()
         candidates = self._ordered_candidates(providers)
-        attempted_free = False
+        now = time.time()
         for provider, model in candidates:
             model_key = f"{provider.name}:{model}"
             if self._cooldown_until.get(provider.name, 0) > now:
                 continue
             if self._model_cooldown_until.get(model_key, 0) > now:
-                continue
-            if self._is_free_model(model):
-                attempted_free = True
-            elif attempted_free is False and any(self._is_free_model(m) for _, m in candidates):
-                # Defensive guard: never enter paid while a free candidate is still eligible.
                 continue
 
             payload = {"model": model, "messages": messages, **kwargs}
