@@ -6,6 +6,12 @@ Write modes:
 - Local: AI_AGENT_REPO_PATH points at a git checkout
 - Online (Render): AI_AGENT_WRITE_ENABLED + GITHUB_TOKEN + GITHUB_REPO
   clones into AI_AGENT_WORK_DIR, commits, pushes, opens a PR
+
+Skills:
+- Built-in: coding, ui_polish, web_research, debug
+- Custom markdown skills under .ai-agent/skills/*.md
+- Optional web_search tool (DuckDuckGo, no extra deps)
+- Agent does NOT pip-install arbitrary packages on the host
 """
 
 from __future__ import annotations
@@ -21,6 +27,8 @@ from pathlib import Path
 from urllib.parse import quote, urlparse
 
 from src.core.config.settings import get_settings
+from src.services.ai_skills.registry import SkillRegistry
+from src.services.ai_skills.web_search import web_search
 
 
 class AIAgentError(RuntimeError):
@@ -46,11 +54,24 @@ class AIAgentService:
         "- Card-to-card payment stores academy destination card (not PCI CVV).\n"
         "- Chat assistant is read-only.\n"
         "- Agent never pushes/merges to main; only ai/* + optional PR.\n"
+        "- Skills live in src/services/ai_skills/ and optional .ai-agent/skills/*.md.\n"
+        "- Web search is read-only (DuckDuckGo); no arbitrary package install.\n"
+        "- User-facing Telegram copy must stay Persian; code identifiers English.\n"
     )
 
     def __init__(self) -> None:
         self.settings = get_settings()
         self.repo = Path(self.settings.AI_AGENT_REPO_PATH).resolve()
+        self._skill_registry = SkillRegistry(self.repo)
+
+    def skills(self) -> SkillRegistry:
+        """Refresh registry against current worktree (important after online clone)."""
+        self._skill_registry = SkillRegistry(self.repo)
+        return self._skill_registry
+
+    def list_skills_text(self) -> str:
+        self._check_enabled(require_git=False)
+        return self.skills().catalog_text()
 
     def _has_git(self) -> bool:
         return self.repo.exists() and (self.repo / ".git").exists()
@@ -155,7 +176,6 @@ class AIAgentService:
         if "/" not in repo_slug:
             raise AIAgentError("GITHUB_REPO must look like owner/name")
 
-        # Authenticated clone URL — token must never be logged.
         clone_url = f"https://x-access-token:{quote(token, safe='')}@github.com/{repo_slug}.git"
 
         if work.exists() and (work / ".git").exists():
@@ -190,7 +210,6 @@ class AIAgentService:
             timeout=300,
         )
         if result.returncode:
-            # Strip token if git echoed the URL in stderr.
             err = (result.stderr or result.stdout or "clone failed").replace(token, "***")
             raise AIAgentError(f"git clone failed: {err[:800]}")
 
@@ -231,7 +250,6 @@ class AIAgentService:
                 raw = exc.read().decode("utf-8", errors="replace")[:500]
             except Exception:
                 pass
-            # 422 often means PR already exists for the branch.
             if exc.code == 422:
                 return f"branch pushed; PR may already exist for {branch} ({raw[:200]})"
             raise AIAgentError(f"GitHub PR API HTTP {exc.code}: {raw}") from exc
@@ -285,6 +303,7 @@ class AIAgentService:
     def status(self) -> str:
         self._check_enabled(require_git=False)
         write = self._write_capable()
+        skill_ids = ",".join(s.id for s in self.skills().list_skills())
         lines = [
             f"enabled={self.settings.AI_AGENT_ENABLED}",
             f"api_key_configured={bool(self.settings.effective_ai_api_key)}",
@@ -295,6 +314,8 @@ class AIAgentService:
             f"git_available={self._has_git()}",
             f"github_write_ready={self.settings.github_write_ready}",
             f"write_mode={'yes' if write else 'no (status/analyze only)'}",
+            f"web_search_enabled={self.settings.AI_AGENT_WEB_SEARCH_ENABLED}",
+            f"skills={skill_ids}",
             f"chat_assistant_enabled={self.settings.CHAT_ASSISTANT_ENABLED}",
             f"chat_key_configured={bool(self.settings.effective_chat_api_key)}",
         ]
@@ -358,22 +379,31 @@ class AIAgentService:
             f"REPOSITORY INVENTORY:\n{tracked}"
         )
 
-    def _request_model(self, prompt: str) -> str:
+    def _request_model(
+        self,
+        prompt: str,
+        *,
+        system_extra: str = "",
+        temperature: float = 0.1,
+    ) -> str:
         url = self._base_url().rstrip("/") + "/chat/completions"
+        system = (
+            "You are the RahYar senior software engineer and coding assistant. "
+            "Follow Clean Architecture, SOLID, repository + service layers. "
+            "Handlers stay thin. Never include secrets or .env values. "
+            "Prefer the smallest correct change. "
+            "Persian for owner-facing explanations; English for paths/symbols. "
+            "Do not invent modules missing from the repository inventory."
+        )
+        if system_extra:
+            system = system + "\n\n" + system_extra
         payload = {
             "model": self._model(),
             "messages": [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are the RahYar senior software engineer. "
-                        "Follow project architecture. Never include secrets. "
-                        "Return concise engineering output."
-                    ),
-                },
+                {"role": "system", "content": system},
                 {"role": "user", "content": prompt},
             ],
-            "temperature": 0.1,
+            "temperature": temperature,
         }
         request = urllib.request.Request(
             url,
@@ -402,11 +432,108 @@ class AIAgentService:
         except (KeyError, IndexError, TypeError) as exc:
             raise AIAgentError("AI provider returned an unexpected response.") from exc
 
+    def _read_repo_file(self, relative: str, *, max_chars: int = 12_000) -> str:
+        try:
+            path = self._safe_path(relative)
+        except AIAgentError as exc:
+            return f"ERROR: {exc}"
+        if not path.exists() or not path.is_file():
+            return f"ERROR: file not found: {relative}"
+        try:
+            data = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            return f"ERROR: cannot read {relative}: {exc}"
+        if len(data) > max_chars:
+            return data[:max_chars] + f"\n... truncated ({len(data)} chars total)"
+        return data
+
+    def _run_tool(self, name: str, arg: str, *, allowed: set[str]) -> str:
+        name = (name or "").strip().lower()
+        if name not in allowed:
+            return f"ERROR: tool '{name}' not allowed for active skills"
+        if name == "web_search":
+            if not self.settings.AI_AGENT_WEB_SEARCH_ENABLED:
+                return "ERROR: web search disabled (set AI_AGENT_WEB_SEARCH_ENABLED=true)"
+            return web_search(arg)
+        if name == "read_file":
+            return self._read_repo_file(arg)
+        if name == "list_tree":
+            rel = (arg or "src").strip() or "src"
+            return self._list_tree(rel)
+        return f"ERROR: unknown tool {name}"
+
+    def _tool_augmented_prompt(
+        self,
+        base_prompt: str,
+        *,
+        mode: str,
+        max_rounds: int = 3,
+    ) -> str:
+        registry = self.skills()
+        skill_list = registry.resolve_for_mode(mode)
+        system_extra = registry.system_prompt_block(skill_list)
+        allowed = registry.allowed_tools(skill_list)
+        if not self.settings.AI_AGENT_WEB_SEARCH_ENABLED:
+            allowed.discard("web_search")
+
+        tool_hint = ""
+        if allowed:
+            tool_hint = (
+                "\nYou may gather facts first using at most one tool per reply in this form:\n"
+                'TOOL_REQUEST: {"tool": "<name>", "arg": "<argument>"}\n'
+                f"Allowed tools: {', '.join(sorted(allowed))}.\n"
+                "When ready, answer without TOOL_REQUEST.\n"
+            )
+
+        conversation = base_prompt + tool_hint
+        collected: list[str] = []
+        for _ in range(max(1, max_rounds)):
+            raw = self._request_model(conversation, system_extra=system_extra)
+            stripped = raw.strip()
+            if "TOOL_REQUEST:" not in stripped:
+                if collected:
+                    return (
+                        "TOOL NOTES:\n"
+                        + "\n---\n".join(collected)
+                        + "\n\nFINAL:\n"
+                        + raw
+                    )
+                return raw
+            try:
+                after = stripped.split("TOOL_REQUEST:", 1)[1].strip()
+                start = after.find("{")
+                end = after.find("}")
+                if start < 0 or end < 0:
+                    return raw
+                payload = json.loads(after[start : end + 1])
+                tool_name = str(payload.get("tool", ""))
+                tool_arg = str(payload.get("arg", ""))
+            except (json.JSONDecodeError, ValueError, TypeError):
+                return raw
+            result = self._run_tool(tool_name, tool_arg, allowed=allowed)
+            note = f"TOOL {tool_name}({tool_arg!r}) ->\n{result[:6000]}"
+            collected.append(note)
+            conversation = (
+                base_prompt
+                + tool_hint
+                + "\n\nPREVIOUS TOOL RESULTS:\n"
+                + "\n---\n".join(collected)
+                + "\n\nContinue. If you need another tool, emit TOOL_REQUEST again; "
+                "otherwise give the final answer."
+            )
+        return (
+            "TOOL NOTES:\n"
+            + "\n---\n".join(collected)
+            + "\n\n(max tool rounds reached — model should answer with available facts)"
+        )
+
     def analyze(
         self,
         request: str = (
             "Audit the repository for bugs, risks, missing tests and architecture issues."
         ),
+        *,
+        mode: str = "assistant",
     ) -> str:
         self._check_enabled(require_git=False)
         self._acquire_lock()
@@ -422,13 +549,15 @@ class AIAgentService:
 CURRENT GIT STATUS:
 {status or '(advisory mode)'}
 
+MODE: {mode}
 TASK:
 {request}
 
-Do not modify files. Group findings by severity with paths and remediation.
+Do not modify files unless this is an implement write job.
+Group findings by severity with paths and remediation when auditing.
 If tests/ or alembic/versions/ appear in inventory, do NOT report them missing.
 Write primarily in Persian; keep paths in English."""
-            return self._request_model(prompt)
+            return self._tool_augmented_prompt(prompt, mode=mode)
         finally:
             self._release_lock()
 
@@ -486,23 +615,23 @@ Write primarily in Persian; keep paths in English."""
             cwd=self.repo,
             text=True,
             capture_output=True,
-            timeout=180,
+            timeout=120,
         )
         if compile_result.returncode:
-            return False, f"Compile failed.\n{compile_result.stderr or compile_result.stdout}"
+            return False, compile_result.stderr.strip() or compile_result.stdout.strip() or "compileall failed"
 
         test_result = subprocess.run(
-            ["python", "-m", "pytest", "-q"],
+            ["python", "-m", "pytest", "-q", "--tb=line"],
             cwd=self.repo,
             text=True,
             capture_output=True,
-            timeout=600,
+            timeout=300,
+            env={**os.environ, "PYTHONPATH": str(self.repo)},
         )
         if test_result.returncode:
-            out = (test_result.stdout or "")[-5000:]
-            err = (test_result.stderr or "")[-3000:]
-            return False, f"Tests failed.\n{out}\n{err}"
-        return True, "PASS"
+            out = (test_result.stdout or "") + "\n" + (test_result.stderr or "")
+            return False, out.strip()[:4000] or "pytest failed"
+        return True, "ok"
 
     def implement(self, task: str, task_type: str = "feature") -> str:
         self._check_enabled(require_git=True)
@@ -511,14 +640,21 @@ Write primarily in Persian; keep paths in English."""
         try:
             branch = self._ensure_branch(task)
             task_type = (task_type or "feature").strip().lower()
-            if task_type not in {"fix", "feature"}:
+            if task_type not in {"fix", "feature", "ui", "ui_polish"}:
                 task_type = "feature"
+            mode = {
+                "fix": "fix",
+                "feature": "feature",
+                "ui": "ui",
+                "ui_polish": "ui",
+            }.get(task_type, "feature")
 
-            intent = (
-                "Fix the described bug with the smallest safe change."
-                if task_type == "fix"
-                else "Implement the feature with the smallest clean change."
-            )
+            intent = {
+                "fix": "Fix the described bug with the smallest safe change.",
+                "feature": "Implement the feature with the smallest clean change.",
+                "ui": "Polish Telegram UX (Persian copy, keyboards, navigation) without breaking business rules.",
+                "ui_polish": "Polish Telegram UX (Persian copy, keyboards, navigation) without breaking business rules.",
+            }[task_type if task_type in {"fix", "feature", "ui", "ui_polish"} else "feature"]
 
             max_retries = max(0, int(self.settings.AI_AGENT_MAX_RETRIES))
             last_error = ""
@@ -531,7 +667,11 @@ Write primarily in Persian; keep paths in English."""
                         f"{last_error}\nProduce a corrected JSON plan."
                     )
 
+                registry = self.skills()
+                skill_block = registry.system_prompt_block(registry.resolve_for_mode(mode))
                 prompt = f"""{self._context()}
+
+{skill_block}
 
 TASK TYPE: {task_type}
 INTENT: {intent}
@@ -544,10 +684,11 @@ Return ONLY valid JSON:
 {{"summary": string, "files": [{{"path": string, "content": string}}]}}
 
 Complete file contents, not diffs. Minimum files.
-Never include .env/secrets. Never target main."""
+Never include .env/secrets. Never target main.
+For UI polish: only touch keyboards, handler message strings, and related states — no schema changes unless required."""
 
                 try:
-                    raw = self._request_model(prompt)
+                    raw = self._request_model(prompt, system_extra=skill_block)
                     plan = self._parse_plan(raw)
                     written = self._apply_files(plan.get("files", []))
                 except AIAgentError as exc:
