@@ -13,8 +13,23 @@ from src.database.models.user import User
 
 
 class MusicQuota:
+    """Daily AI music generation quota.
+
+    RahYar students get 15 generations per day; all other users get 8.
+    A calendar day is measured in UTC so Redis and fallback memory use the
+    same boundary. Only successful/accepted generations consume quota because
+    failed provider requests are released by the handler.
+    """
+
+    RAHYAR_DAILY_GENERATIONS = 15
+    PUBLIC_DAILY_GENERATIONS = 8
+
     def __init__(self) -> None:
         self.settings = get_settings()
+        # Keep ENV configurable, but enforce the product requirement as the
+        # defaults. Values <= 0 are ignored and replaced with the product caps.
+        self.rah_yar_limit = max(1, int(getattr(self.settings, "MUSIC_GENERATION_RAHYAR_DAILY_LIMIT", 15)))
+        self.public_limit = max(1, int(getattr(self.settings, "MUSIC_GENERATION_PUBLIC_DAILY_LIMIT", 8)))
         self._memory: dict[str, tuple[int, datetime]] = {}
         self._redis = None
         if self.settings.REDIS_URL:
@@ -45,15 +60,12 @@ class MusicQuota:
         return max(60, int((tomorrow - now).total_seconds()))
 
     def limit_for(self, is_student: bool) -> int:
-        return (
-            self.settings.MUSIC_GENERATION_RAHYAR_DAILY_LIMIT
-            if is_student
-            else self.settings.MUSIC_GENERATION_PUBLIC_DAILY_LIMIT
-        )
+        return self.rah_yar_limit if is_student else self.public_limit
 
     def reserve(self, telegram_id: int | str, is_student: bool) -> tuple[bool, int, int]:
         limit = self.limit_for(is_student)
-        key = f"rahyar:music:generation:{datetime.now(timezone.utc):%Y-%m-%d}:{telegram_id}"
+        day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        key = f"rahyar:music:generation:{day}:{telegram_id}"
         if self._redis:
             try:
                 count = int(self._redis.incr(key))
@@ -61,10 +73,11 @@ class MusicQuota:
                     self._redis.expire(key, self._seconds_until_reset())
                 if count > limit:
                     self._redis.decr(key)
-                    return False, limit, limit
-                return True, limit, max(0, limit - count)
+                    return False, limit, 0
+                return True, limit, limit - count
             except Exception:
                 self._redis = None
+
         now = datetime.now(timezone.utc)
         count, expires = self._memory.get(key, (0, now + timedelta(seconds=self._seconds_until_reset())))
         if expires <= now:
@@ -74,10 +87,11 @@ class MusicQuota:
         if count > limit:
             return False, limit, 0
         self._memory[key] = (count, expires)
-        return True, limit, max(0, limit - count)
+        return True, limit, limit - count
 
     def release(self, telegram_id: int | str) -> None:
-        key = f"rahyar:music:generation:{datetime.now(timezone.utc):%Y-%m-%d}:{telegram_id}"
+        day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        key = f"rahyar:music:generation:{day}:{telegram_id}"
         if self._redis:
             try:
                 self._redis.decr(key)
