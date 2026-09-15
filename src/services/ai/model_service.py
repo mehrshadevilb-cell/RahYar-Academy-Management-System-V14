@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 from src.database.models.ai_model import AIModel
@@ -14,12 +16,14 @@ class AIModelService:
 
     @staticmethod
     def _run_async(coro):
-        import asyncio
+        """Run provider I/O from both sync code and an active Telegram event loop."""
         try:
             asyncio.get_running_loop()
         except RuntimeError:
             return asyncio.run(coro)
-        raise RuntimeError("AI model synchronization must run outside an active event loop")
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            return executor.submit(asyncio.run, coro).result()
 
     def sync_models_for_provider(self, provider_id) -> dict[str, int]:
         provider = self.session.get(AIProvider, provider_id)
@@ -34,6 +38,12 @@ class AIModelService:
         if not isinstance(discovered, list):
             raise ValueError("AI provider returned an invalid model discovery payload")
 
+        # Never interpret a transient/permission-limited empty response as proof
+        # that every previously known model disappeared.
+        valid_items = [item for item in discovered if isinstance(item, dict) and str(item.get("model_id") or "").strip()]
+        if not valid_items:
+            raise ValueError("AI provider returned no usable models; existing models were left unchanged")
+
         existing = {
             model.model_id: model
             for model in self.session.query(AIModel).filter(AIModel.provider_id == provider.id).all()
@@ -41,10 +51,8 @@ class AIModelService:
         seen: set[str] = set()
         added = updated = 0
 
-        for item in discovered:
+        for item in valid_items:
             model_id = str(item.get("model_id") or "").strip()
-            if not model_id:
-                continue
             seen.add(model_id)
             model = existing.get(model_id)
             if model is None:
@@ -87,6 +95,42 @@ class AIModelService:
                 self.session.rollback()
                 results.append({"provider_id": str(provider.id), "ok": False, "error": str(exc)})
         return results
+
+    def check_model(self, model_id) -> bool:
+        """Make a minimal real completion to verify that a discovered model works."""
+        model = self.session.get(AIModel, model_id)
+        if model is None or not model.is_active:
+            return False
+        provider = self.session.get(AIProvider, model.provider_id)
+        if provider is None or not provider.is_active:
+            return False
+
+        client = ProviderRegistry.get_client(provider, decrypt_api_key(provider.api_key_encrypted))
+        try:
+            result = self._run_async(
+                client.chat_completion(
+                    model.model_id,
+                    [{"role": "user", "content": "Reply with OK."}],
+                    max_tokens=4,
+                    temperature=0,
+                )
+            )
+            return isinstance(result, dict) and bool(result)
+        except Exception:
+            return False
+
+    def select_working_default(self) -> AIModel | None:
+        """Prefer an actually responding model; fall back to capability/name ranking."""
+        candidates = (
+            self.session.query(AIModel)
+            .filter(AIModel.is_active.is_(True))
+            .order_by(AIModel.is_default.desc(), AIModel.context_window.desc().nullslast())
+            .all()
+        )
+        for model in candidates:
+            if self.check_model(model.id):
+                return self.set_default(model.id)
+        return None
 
     def set_default(self, model_id) -> AIModel:
         model = self.session.get(AIModel, model_id)
