@@ -64,14 +64,7 @@ class AIProviderRouter:
         model = (os.getenv(model_var) or "").strip()
         if not (key and base_url and model):
             return None
-        return AIProvider(
-            name=name,
-            api_key=key,
-            base_url=base_url,
-            models=(model,),
-            priority=priority,
-            provider_type=cls._infer_provider_type(name, base_url),
-        )
+        return AIProvider(name=name, api_key=key, base_url=base_url, models=(model,), priority=priority, provider_type=cls._infer_provider_type(name, base_url))
 
     @staticmethod
     def _is_free_model(model: Any) -> bool:
@@ -92,12 +85,7 @@ class AIProviderRouter:
             except (TypeError, ValueError):
                 pass
         try:
-            return (
-                getattr(model, "pricing_input", None) is not None
-                and getattr(model, "pricing_output", None) is not None
-                and float(model.pricing_input) == 0.0
-                and float(model.pricing_output) == 0.0
-            )
+            return getattr(model, "pricing_input", None) is not None and getattr(model, "pricing_output", None) is not None and float(model.pricing_input) == 0.0 and float(model.pricing_output) == 0.0
         except (TypeError, ValueError):
             return False
 
@@ -106,7 +94,6 @@ class AIProviderRouter:
             from src.database.models.ai_provider import AIProvider as DBProvider
             from src.database.session import SessionLocal
             from src.services.ai.credential_crypto import decrypt_api_key
-
             db = SessionLocal()
             try:
                 rows = db.query(DBProvider).filter(DBProvider.is_active.is_(True)).all()
@@ -120,16 +107,7 @@ class AIProviderRouter:
                         api_key = decrypt_api_key(provider.api_key_encrypted)
                     except Exception:
                         continue
-                    result.append(
-                        AIProvider(
-                            name=provider.name,
-                            api_key=api_key,
-                            base_url=self._normalize_base_url(provider.base_url),
-                            models=tuple(m.model_id for m in active_models),
-                            priority=index,
-                            provider_type=provider.provider_type or self._infer_provider_type(provider.name, provider.base_url),
-                        )
-                    )
+                    result.append(AIProvider(name=provider.name, api_key=api_key, base_url=self._normalize_base_url(provider.base_url), models=tuple(m.model_id for m in active_models), priority=index, provider_type=provider.provider_type or self._infer_provider_type(provider.name, provider.base_url)))
                 return result
             finally:
                 db.close()
@@ -196,7 +174,7 @@ class AIProviderRouter:
         return self._parse()
 
     def _headers(self, provider: AIProvider) -> dict[str, str]:
-        headers = {"Authorization": f"Bearer {provider.api_key}", "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "RahYar-AIProviderRouter/1.2"}
+        headers = {"Authorization": f"Bearer {provider.api_key}", "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "RahYar-AIProviderRouter/1.3"}
         host = (urlparse(provider.base_url).hostname or "").lower()
         if host.endswith("agentrouter.org"):
             headers.update({"Originator": "codex_cli_rs", "Version": "0.101.0"})
@@ -239,6 +217,8 @@ class AIProviderRouter:
                     if isinstance(part, dict) and part.get("text"):
                         parts.append(str(part["text"]))
             return " ".join(parts).strip()
+        if provider_type == "anthropic":
+            return " ".join(str(part.get("text", "")) for part in data.get("content", []) if isinstance(part, dict)).strip() if isinstance(data, dict) else ""
         choices = data.get("choices", []) if isinstance(data, dict) else []
         if not choices or not isinstance(choices[0], dict):
             return ""
@@ -254,7 +234,11 @@ class AIProviderRouter:
         if provider.provider_type == "google":
             url = provider.base_url.rstrip("/") + f"/models/{quote(model, safe='')}:generateContent?key={quote(provider.api_key, safe='')}"
             payload = {"contents": [{"role": "user", "parts": [{"text": "Reply with exactly: OK"}]}], "generationConfig": {"temperature": 0, "maxOutputTokens": 8}}
-            headers = {"Content-Type": "application/json", "Accept": "application/json", "User-Agent": "RahYar-AIProviderRouter/1.2"}
+            headers = {"Content-Type": "application/json", "Accept": "application/json", "User-Agent": "RahYar-AIProviderRouter/1.3"}
+        elif provider.provider_type == "anthropic":
+            url = provider.base_url.rstrip("/") + "/messages"
+            payload = {"model": model, "max_tokens": 8, "temperature": 0, "messages": [{"role": "user", "content": "Reply with exactly: OK"}]}
+            headers = {"x-api-key": provider.api_key, "anthropic-version": "2023-06-01", "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "RahYar-AIProviderRouter/1.3"}
         else:
             url = provider.base_url.rstrip("/") + "/chat/completions"
             payload = {"model": model, "messages": [{"role": "user", "content": "Reply with exactly: OK"}], "max_tokens": 8, "temperature": 0}
