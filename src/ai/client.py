@@ -10,11 +10,22 @@ from src.core.config.settings import get_settings
 
 
 class AIClient:
-    """Small OpenAI-compatible client with provider/transport guardrails."""
+    """Small OpenAI-compatible client with provider/transport guardrails.
+
+    The client is configured lazily so a missing optional AI environment does
+    not prevent the Telegram bot from starting.
+    """
 
     MAX_PROMPT_CHARS = 16_000
 
     def __init__(self) -> None:
+        self.api_key: str | None = None
+        self.base_url = ""
+        self.model = ""
+        self.timeout = 180
+        self._refresh()
+
+    def _refresh(self) -> None:
         settings = get_settings()
         self.api_key = settings.effective_ai_api_key
         self.base_url = settings.effective_ai_base_url.rstrip("/")
@@ -40,6 +51,7 @@ class AIClient:
         }
 
     async def chat(self, prompt: str, **kwargs: Any) -> dict[str, Any]:
+        self._refresh()
         prompt = (prompt or "").strip()
         if not prompt:
             raise ValueError("AI prompt cannot be empty")
@@ -64,7 +76,6 @@ class AIClient:
                 raise RuntimeError("AI provider returned an invalid response")
             return data
         except urllib.error.HTTPError as exc:
-            # Never echo response bodies: providers can accidentally include sensitive data.
             raise RuntimeError(f"AI provider returned HTTP {exc.code}") from exc
         except urllib.error.URLError as exc:
             raise RuntimeError("AI provider is unreachable") from exc
