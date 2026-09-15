@@ -30,6 +30,13 @@ jobs:
       - name: Validate Alembic heads
         run: alembic heads
 
+      - name: Test migration round-trip
+        run: |
+          rm -f rahyar.db
+          alembic upgrade head
+          alembic downgrade base
+          alembic upgrade head
+
       - name: Run tests
         run: pytest -q
 

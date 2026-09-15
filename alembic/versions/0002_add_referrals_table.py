@@ -9,6 +9,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy import inspect
 
 
 # revision identifiers, used by Alembic.
@@ -49,6 +50,12 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     bind = op.get_bind()
+
+    # 0001 imports the full ORM model set and creates the baseline schema.
+    # On a fresh database that baseline already contains referrals; do not
+    # attempt to create the table a second time.
+    if "referrals" in inspect(bind).get_table_names():
+        return
 
     if bind.dialect.name == "postgresql":
         bind.execute(sa.text(
@@ -118,6 +125,11 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     bind = op.get_bind()
+
+    # The table may belong to the 0001 baseline rather than this revision.
+    # Never remove baseline data while downgrading this no-op/adoption step.
+    if "referrals" not in inspect(bind).get_table_names():
+        return
 
     if bind.dialect.name == "postgresql":
         bind.execute(sa.text("DROP TABLE IF EXISTS referrals"))

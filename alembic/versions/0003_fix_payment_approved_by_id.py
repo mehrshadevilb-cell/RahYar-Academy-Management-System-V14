@@ -35,6 +35,11 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     bind = op.get_bind()
+    # SQLite has dynamic INTEGER affinity and cannot execute PostgreSQL-style
+    # ALTER COLUMN TYPE. The baseline SQLite schema already accepts Telegram
+    # IDs, so the widening/drop-FK operation is only meaningful on PostgreSQL.
+    if bind.dialect.name == "sqlite":
+        return
     inspector = sa.inspect(bind)
 
     for fk in inspector.get_foreign_keys("payments"):
@@ -55,6 +60,9 @@ def downgrade() -> None:
     # than 32 bits, or one that doesn't match a real users.id, this
     # will fail - which is expected, since that data is exactly what
     # this migration exists to make valid.
+    bind = op.get_bind()
+    if bind.dialect.name == "sqlite":
+        return
     op.alter_column(
         "payments",
         "approved_by_id",

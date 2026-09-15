@@ -29,6 +29,10 @@ _LABELS = (
 
 
 def upgrade() -> None:
+    if op.get_bind().dialect.name == "sqlite":
+        # SQLite stores this enum as text and cannot execute PostgreSQL DO/
+        # ALTER TYPE statements. The labels are already representable there.
+        return
     # PostgreSQL does not allow a newly-added enum label to be used in the
     # same transaction. Commit each ALTER TYPE block before converting rows.
     for label in _LABELS:
