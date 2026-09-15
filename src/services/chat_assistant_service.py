@@ -12,8 +12,14 @@ from src.database.models.course import ProductDeliveryType
 from src.services.course_service import CourseService
 from src.services.online_course_service import OnlineCourseService
 
+try:
+    import redis
+except ImportError:  # pragma: no cover
+    redis = None
+
 MAX_USER_MESSAGE_CHARS = 1000
 MAX_REPLY_CHARS = 3500
+RATE_LIMIT_WINDOW_SECONDS = 3600
 
 BOT_GUIDE_FA = """
 راهنمای منوی اصلی ربات راه‌یار:
@@ -46,6 +52,18 @@ class ChatAssistantService:
         self.course_service = CourseService()
         self.online_course_service = OnlineCourseService()
         self._recent_messages: dict[str, deque[float]] = defaultdict(deque)
+        self._redis = None
+        if redis is not None and self.settings.REDIS_URL:
+            try:
+                self._redis = redis.Redis.from_url(
+                    self.settings.REDIS_URL,
+                    decode_responses=True,
+                    socket_connect_timeout=2,
+                    socket_timeout=2,
+                )
+                self._redis.ping()
+            except Exception:
+                self._redis = None
 
     def _check_enabled(self) -> None:
         if not self.settings.CHAT_ASSISTANT_ENABLED:
@@ -57,12 +75,35 @@ class ChatAssistantService:
         limit = self.settings.CHAT_ASSISTANT_MAX_MESSAGES_PER_HOUR
         if limit <= 0:
             return
+        if self._redis is not None:
+            key = f"rahyar:chat-assistant:rate:{telegram_id}"
+            script = """
+            local count = redis.call('INCR', KEYS[1])
+            if count == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end
+            return count
+            """
+            try:
+                count = int(self._redis.eval(script, 1, key, RATE_LIMIT_WINDOW_SECONDS))
+                if count > limit:
+                    raise ChatAssistantError(
+                        "تعداد پیام‌های شما به دستیار در این ساعت به حد مجاز رسیده است. "
+                        "لطفاً کمی بعد دوباره تلاش کنید یا از «🆘 پشتیبانی» استفاده کنید."
+                    )
+                return
+            except ChatAssistantError:
+                raise
+            except Exception:
+                self._redis = None
+
         now = time.time()
         window = self._recent_messages[telegram_id]
-        while window and now - window[0] > 3600:
+        while window and now - window[0] > RATE_LIMIT_WINDOW_SECONDS:
             window.popleft()
         if len(window) >= limit:
-            raise ChatAssistantError("تعداد پیام‌های شما به دستیار در این ساعت به حد مجاز رسیده است. لطفاً کمی بعد دوباره تلاش کنید یا از «🆘 پشتیبانی» استفاده کنید.")
+            raise ChatAssistantError(
+                "تعداد پیام‌های شما به دستیار در این ساعت به حد مجاز رسیده است. "
+                "لطفاً کمی بعد دوباره تلاش کنید یا از «🆘 پشتیبانی» استفاده کنید."
+            )
         window.append(now)
 
     def _catalog_context(self, db: Session) -> str:

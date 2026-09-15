@@ -1,23 +1,24 @@
-"""Runtime orchestration for the RahYar AI Developer Agent.
-
-Keeps Telegram concerns out of the core agent and adds three bounded layers:
-- dynamic skill selection from .ai-agent/skills/*.md
-- a read-only planning stage before write operations
-- cancellable asyncio task tracking for the owner UI
-
-Secrets and protected files are never loaded into skill/context text.
-"""
+"""Runtime orchestration for the RahYar AI Developer Agent."""
 
 from __future__ import annotations
 
 import asyncio
 import json
 import re
+import secrets
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Awaitable, Callable
 
+from src.database.models.admin_log import AdminLog
+from src.database.session import SessionLocal
 from src.services.ai_agent_service import AIAgentError, AIAgentService
+from src.core.config.settings import get_settings
+
+try:
+    import redis.asyncio as redis
+except ImportError:  # pragma: no cover
+    redis = None
 
 
 @dataclass(frozen=True)
@@ -41,12 +42,21 @@ class AIAgentRuntime:
     }
     MAX_SKILL_FILES = 6
     MAX_SKILL_CHARS = 18_000
+    REDIS_LOCK_KEY = "rahyar:ai-agent:single-flight"
+    REDIS_LOCK_TTL = 45 * 60
 
     def __init__(self, agent: AIAgentService | None = None) -> None:
         self.agent = agent or AIAgentService()
+        self.settings = get_settings()
         self._tasks: dict[int, asyncio.Task] = {}
         self._task_labels: dict[int, str] = {}
         self._lock = asyncio.Lock()
+        self._redis = None
+        if redis is not None and self.settings.REDIS_URL:
+            try:
+                self._redis = redis.from_url(self.settings.REDIS_URL, decode_responses=True)
+            except Exception:
+                self._redis = None
 
     @property
     def skills_dir(self) -> Path:
@@ -166,6 +176,59 @@ Implement this plan. Preserve the existing architecture. Do not expose secrets,
 modify protected files, weaken tests, or target main. Return complete file contents
 only in the normal agent JSON schema."""
 
+    def _audit(self, user_id: int, action: str, description: str) -> None:
+        """Best-effort audit logging: a logging failure must never break the agent."""
+        db = SessionLocal()
+        try:
+            db.add(
+                AdminLog(
+                    admin_telegram_id=str(user_id),
+                    action=action[:50],
+                    description=description[:500],
+                )
+            )
+            db.commit()
+        except Exception:
+            db.rollback()
+        finally:
+            db.close()
+
+    async def _acquire_distributed_lock(self) -> str | None:
+        if self._redis is None:
+            return None
+        token = secrets.token_urlsafe(24)
+        try:
+            acquired = await self._redis.set(
+                self.REDIS_LOCK_KEY,
+                token,
+                nx=True,
+                ex=self.REDIS_LOCK_TTL,
+            )
+            if not acquired:
+                raise AIAgentError("یک Task مربوط به AI Agent در instance دیگری در حال اجراست. صبر کنید.")
+            return token
+        except AIAgentError:
+            raise
+        except Exception:
+            # Redis outage falls back to the per-instance asyncio lock and the
+            # existing filesystem guard; local/dev operation remains available.
+            self._redis = None
+            return None
+
+    async def _release_distributed_lock(self, token: str | None) -> None:
+        if not token or self._redis is None:
+            return
+        script = """
+        if redis.call('GET', KEYS[1]) == ARGV[1] then
+            return redis.call('DEL', KEYS[1])
+        end
+        return 0
+        """
+        try:
+            await self._redis.eval(script, 1, self.REDIS_LOCK_KEY, token)
+        except Exception:
+            pass
+
     async def run_write(
         self,
         user_id: int,
@@ -177,7 +240,7 @@ only in the normal agent JSON schema."""
             current = self._tasks.get(user_id)
             if current and not current.done():
                 raise AIAgentError("یک Task دیگر برای شما در حال اجراست.")
-            task_handle = asyncio.create_task(self._run_write_inner(task, task_type, progress))
+            task_handle = asyncio.create_task(self._run_write_inner(user_id, task, task_type, progress))
             self._tasks[user_id] = task_handle
             self._task_labels[user_id] = task_type
         try:
@@ -190,6 +253,7 @@ only in the normal agent JSON schema."""
 
     async def _run_write_inner(
         self,
+        user_id: int,
         task: str,
         task_type: str,
         progress: Callable[[str], Awaitable[None]] | None,
@@ -198,14 +262,26 @@ only in the normal agent JSON schema."""
             if progress:
                 await progress(text)
 
-        await report("🔎 بررسی ساختار پروژه و انتخاب Skillها...")
-        plan = await asyncio.to_thread(self.plan, task, task_type)
-        await report("🧠 Planner آماده شد؛ وابستگی‌ها و ریسک‌ها مشخص شدند.")
-        await report("✏️ اجرای تغییرات روی branch ایزوله...")
-        implementation_task = self.build_implementation_task(task, task_type, plan)
-        result = await asyncio.to_thread(self.agent.implement, implementation_task, task_type)
-        await report("🧪 compile و pytest و کنترل‌های نهایی انجام شد.")
-        return result
+        distributed_token = await self._acquire_distributed_lock()
+        self._audit(user_id, "AI_AGENT_START", f"AI Agent started: {task_type} | {task[:350]}")
+        try:
+            await report("🔎 بررسی ساختار پروژه و انتخاب Skillها...")
+            plan = await asyncio.to_thread(self.plan, task, task_type)
+            await report("🧠 Planner آماده شد؛ وابستگی‌ها و ریسک‌ها مشخص شدند.")
+            await report("✏️ اجرای تغییرات روی branch ایزوله...")
+            implementation_task = self.build_implementation_task(task, task_type, plan)
+            result = await asyncio.to_thread(self.agent.implement, implementation_task, task_type)
+            await report("🧪 compile و pytest و کنترل‌های نهایی انجام شد.")
+            self._audit(user_id, "AI_AGENT_SUCCESS", f"AI Agent completed: {result[:400]}")
+            return result
+        except asyncio.CancelledError:
+            self._audit(user_id, "AI_AGENT_FAILURE", "AI Agent task cancelled by owner")
+            raise
+        except Exception as exc:
+            self._audit(user_id, "AI_AGENT_FAILURE", f"AI Agent failed: {type(exc).__name__}: {str(exc)[:420]}")
+            raise
+        finally:
+            await self._release_distributed_lock(distributed_token)
 
     async def cancel(self, user_id: int) -> bool:
         async with self._lock:
