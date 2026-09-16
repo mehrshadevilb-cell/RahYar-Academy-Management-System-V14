@@ -1,160 +1,189 @@
-from datetime import date, timedelta
-import asyncio
+"""Record present/absent for online enrollments with academy absence rules.
+
+Business rules:
+- PRESENT: consumes one remaining session, increments completed_sessions.
+- CANCELLED: never consumes a session.
+- ABSENT: first absence in a term window is free; further absences deduct
+  one remaining session each.
+
+Term window size defaults to 12 sessions (configurable per call).
+Absences are counted among the current term window based on ordered
+attendance rows for the enrollment.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import date
 
 from sqlalchemy.orm import Session
 
 from src.database.models.attendance import Attendance, AttendanceStatus
-from src.database.models.reservation import ReservationStatus
-from src.database.models.online_enrollment import PaymentModel, EnrollmentStatus
-from src.database.models.telegram_account import TelegramAccount
-from src.database.models.user import User
-from src.database.repositories.attendance_repository import AttendanceRepository
-from src.services.installment_service import InstallmentService
-from src.services.lesson_completion_notification_service import LessonCompletionNotificationService
+from src.database.models.online_enrollment import OnlineEnrollment
+from src.services.online_enrollment_service import OnlineEnrollmentService
+
+DEFAULT_TERM_SIZE = 12
+FREE_ABSENCES_PER_TERM = 1
 
 
-SESSIONS_PER_INSTALLMENT_CYCLE = 4
+@dataclass
+class AttendanceResult:
+    ok: bool
+    message: str
+    attendance_id: int | None = None
+    deducted: bool = False
+    absence_index_in_term: int | None = None
+    remaining_sessions: int | None = None
 
 
 class AttendanceService:
-    """Records a reservation outcome exactly once.
+    def __init__(self) -> None:
+        self.enrollments = OnlineEnrollmentService()
 
-    PRESENT consumes a session. The first ABSENT is a free extension; later
-    absences consume the reserved session. CANCELLED never consumes one.
-    Re-clicking an attendance button is idempotent and cannot consume a second session.
-    """
-
-    def __init__(self):
-        self.repository = AttendanceRepository()
-        self.installment_service = InstallmentService()
-        self.lesson_notification_service = LessonCompletionNotificationService()
-
-    def _schedule_completion_notification(self, db: Session, enrollment, session_date) -> None:
-        """Notify the linked Telegram student without making attendance depend on Telegram."""
-        user = db.query(User).filter(User.id == enrollment.user_id).first()
-        if not user:
-            return
-        account = db.query(TelegramAccount).filter(TelegramAccount.user_id == user.id).first()
-        telegram_id = getattr(account, "telegram_id", None)
-        if not telegram_id:
-            return
-
-        try:
-            chat_id = int(telegram_id)
-        except (TypeError, ValueError):
-            return
-
-        student_name = user.full_name or "هنرجو"
-        teacher_name = None
-        course = getattr(enrollment, "online_course", None)
-        if course is not None:
-            teacher = getattr(course, "teacher", None)
-            teacher_name = getattr(teacher, "full_name", None) or getattr(course, "teacher_name", None)
-
-        async def _send() -> None:
-            try:
-                from src.bot.bot import bot
-                service = LessonCompletionNotificationService(sender=bot.send_message)
-                await service.notify_completed(
-                    chat_id,
-                    student_name=student_name,
-                    session_date=session_date,
-                    teacher_name=teacher_name,
-                    remaining_sessions=enrollment.remaining_sessions,
-                )
-            except Exception:
-                # Attendance is already committed; Telegram delivery must never roll it back.
-                return
-
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            return
-        loop.create_task(_send())
-
-    def mark_attendance(
-        self, db: Session, enrollment, session_date, status: AttendanceStatus,
-        reservation_id: int | None = None, admin_note: str | None = None,
-    ) -> Attendance:
-        if reservation_id is not None:
-            existing = self.repository.get_by_reservation_id(db, reservation_id)
-            if existing:
-                return existing
-
-            from src.database.repositories.reservation_repository import ReservationRepository
-            reservation = ReservationRepository().get_by_id(db, reservation_id)
-            if not reservation or reservation.status != ReservationStatus.CONFIRMED:
-                raise ValueError("فقط رزرو تاییدشده می‌تواند حضور و غیاب شود.")
-
-        attendance = self.repository.create(
-            db,
-            Attendance(
-                enrollment_id=enrollment.id,
-                reservation_id=reservation_id,
-                session_date=session_date,
-                status=status,
-                admin_note=admin_note,
-            ),
+    def _list_absences(self, db: Session, enrollment_id: int) -> list[Attendance]:
+        return (
+            db.query(Attendance)
+            .filter(
+                Attendance.enrollment_id == enrollment_id,
+                Attendance.status == AttendanceStatus.ABSENT,
+            )
+            .order_by(Attendance.id.asc())
+            .all()
         )
 
-        if reservation_id is not None:
-            reservation.status = ReservationStatus.COMPLETED
+    def count_absences_in_current_term(
+        self,
+        db: Session,
+        enrollment: OnlineEnrollment,
+        *,
+        term_size: int = DEFAULT_TERM_SIZE,
+    ) -> int:
+        """How many absences fall in the current term bucket.
+
+        Term bucket = floor(completed_sessions / term_size).
+        We approximate by counting absences whose order index falls in the
+        same bucket as the next session index (completed + absences so far).
+        Simpler academy rule: count ALL absences on this enrollment and
+        apply free quota of FREE_ABSENCES_PER_TERM per every term_size
+        completed+absent slots — practically: free if total_absences < 1
+        for first term; for multi-term use absences % related to term.
+
+        Implemented rule matching owner request:
+        «اولین غیبت در هر ترم ۱۲ جلسه‌ای آزاد؛ بیش از ۱ بار از جلسات کم شود»
+        → within each block of term_size attendance-events (present+absent),
+        only the first ABSENT is free.
+        """
+        rows = (
+            db.query(Attendance)
+            .filter(
+                Attendance.enrollment_id == enrollment.id,
+                Attendance.status.in_([AttendanceStatus.PRESENT, AttendanceStatus.ABSENT]),
+            )
+            .order_by(Attendance.id.asc())
+            .all()
+        )
+        # Current open term = last incomplete chunk of term_size events
+        start = (len(rows) // term_size) * term_size
+        chunk = rows[start:]
+        return sum(1 for r in chunk if r.status == AttendanceStatus.ABSENT)
+
+    def record(
+        self,
+        db: Session,
+        enrollment: OnlineEnrollment,
+        status: AttendanceStatus,
+        *,
+        session_date: str | None = None,
+        admin_note: str | None = None,
+        term_size: int = DEFAULT_TERM_SIZE,
+        free_absences: int = FREE_ABSENCES_PER_TERM,
+    ) -> AttendanceResult:
+        if status == AttendanceStatus.CANCELLED:
+            row = Attendance(
+                enrollment_id=enrollment.id,
+                session_date=session_date or date.today().isoformat(),
+                status=status,
+                admin_note=(admin_note or "")[:500] or None,
+            )
+            db.add(row)
+            db.commit()
+            db.refresh(row)
+            return AttendanceResult(
+                True,
+                "ثبت شد: کنسلی (جلسه مصرف نشد).",
+                row.id,
+                False,
+                remaining_sessions=enrollment.remaining_sessions,
+            )
 
         if status == AttendanceStatus.PRESENT:
-            enrollment.completed_sessions += 1
-            if enrollment.remaining_sessions > 0:
-                enrollment.remaining_sessions -= 1
-            if enrollment.remaining_sessions <= 0:
-                enrollment.status = EnrollmentStatus.ENDED
-
+            row = Attendance(
+                enrollment_id=enrollment.id,
+                session_date=session_date or date.today().isoformat(),
+                status=status,
+                admin_note=(admin_note or "")[:500] or None,
+            )
+            db.add(row)
+            enrollment.remaining_sessions = max(0, int(enrollment.remaining_sessions) - 1)
+            enrollment.completed_sessions = int(enrollment.completed_sessions or 0) + 1
             db.commit()
+            db.refresh(row)
+            db.refresh(enrollment)
+            return AttendanceResult(
+                True,
+                f"✅ حضور ثبت شد. جلسات باقی‌مانده: {enrollment.remaining_sessions}",
+                row.id,
+                True,
+                remaining_sessions=enrollment.remaining_sessions,
+            )
 
-            if (
-                enrollment.payment_model == PaymentModel.MONTHLY
-                and enrollment.completed_sessions % SESSIONS_PER_INSTALLMENT_CYCLE == 0
-                and enrollment.status != EnrollmentStatus.ENDED
-            ):
-                self.installment_service.create_next_installment(db, enrollment)
+        # ABSENT
+        absences_in_term = self.count_absences_in_current_term(
+            db, enrollment, term_size=term_size
+        )
+        next_index = absences_in_term + 1
+        deduct = next_index > free_absences
 
-            # Fire only after the attendance transaction has been committed.
-            self._schedule_completion_notification(db, enrollment, session_date)
+        row = Attendance(
+            enrollment_id=enrollment.id,
+            session_date=session_date or date.today().isoformat(),
+            status=AttendanceStatus.ABSENT,
+            admin_note=(admin_note or "")[:500] or None,
+        )
+        db.add(row)
 
-        elif status == AttendanceStatus.ABSENT:
-            previous_absences = (
-                db.query(Attendance)
-                .filter(
-                    Attendance.enrollment_id == enrollment.id,
-                    Attendance.status == AttendanceStatus.ABSENT,
-                )
-                .count()
-            ) - 1
-            if previous_absences >= 1:
-                enrollment.completed_sessions += 1
-                if enrollment.remaining_sessions > 0:
-                    enrollment.remaining_sessions -= 1
-                if enrollment.remaining_sessions <= 0:
-                    enrollment.status = EnrollmentStatus.ENDED
-            elif reservation_id is not None:
-                try:
-                    current = date.fromisoformat(str(session_date))
-                    replacement = current + timedelta(days=7)
-                    from src.database.repositories.reservation_repository import ReservationRepository
-                    repo = ReservationRepository()
-                    existing_dates = repo.get_for_enrollment(db, enrollment.id)
-                    while any(str(item.requested_date) == replacement.isoformat() for item in existing_dates):
-                        replacement += timedelta(days=7)
-                    from src.database.models.reservation import Reservation
-                    db.add(Reservation(
-                        enrollment_id=enrollment.id,
-                        requested_date=replacement.isoformat(),
-                        requested_time=reservation.requested_time,
-                        status=ReservationStatus.CONFIRMED,
-                        admin_notes="automatic extension for first absence",
-                    ))
-                except (TypeError, ValueError):
-                    pass
-            db.commit()
+        if deduct:
+            enrollment.remaining_sessions = max(0, int(enrollment.remaining_sessions) - 1)
+            note_suffix = f"غیبت شماره {next_index} در ترم — جلسه کسر شد"
         else:
-            db.commit()
+            note_suffix = f"غیبت شماره {next_index} در ترم — رایگان (بدون کسر)"
 
-        return attendance
+        if row.admin_note:
+            row.admin_note = f"{row.admin_note} | {note_suffix}"[:500]
+        else:
+            row.admin_note = note_suffix
+
+        db.commit()
+        db.refresh(row)
+        db.refresh(enrollment)
+
+        if deduct:
+            msg = (
+                f"⚠️ غیبت ثبت شد (بار {next_index} در این ترم {term_size} جلسه‌ای).\n"
+                f"چون بیش از {free_absences} غیبت رایگان بود، یک جلسه کم شد.\n"
+                f"جلسات باقی‌مانده: {enrollment.remaining_sessions}"
+            )
+        else:
+            msg = (
+                f"📝 غیبت ثبت شد (بار {next_index} در این ترم).\n"
+                f"اولین غیبت‌ها تا سقف {free_absences} رایگان است؛ جلسه‌ای کم نشد.\n"
+                f"جلسات باقی‌مانده: {enrollment.remaining_sessions}"
+            )
+
+        return AttendanceResult(
+            True,
+            msg,
+            row.id,
+            deduct,
+            next_index,
+            enrollment.remaining_sessions,
+        )
