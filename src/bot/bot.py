@@ -10,7 +10,7 @@ from src.core.logging.logger import get_logger
 from src.bot.telegram_errors import is_benign_telegram_error, should_notify_owner
 
 from src.bot.handlers import start, course, profile, my_courses, payment, admin
-from src.bot.handlers import online_class, admin_online, admin_installments
+from src.bot.handlers import online_class, admin_online_enrollment, admin_online, admin_installments
 from src.bot.handlers import admin_discount, admin_logs, admin_broadcast, admin_reports
 from src.bot.handlers import admin_ai, admin_ai_self_check, referral, support, admin_support
 from src.bot.handlers import assignment, admin_assignments, progress
@@ -130,9 +130,11 @@ async def global_error_handler(event: ErrorEvent):
 
 
 def setup_handlers():
+    # admin_online_enrollment MUST be registered before admin_online so that
+    # student-picker callbacks (admin_online_enroll_, aoes_*, aoe*) take priority.
     for module in (
         start, course, profile, my_courses, payment, admin, online_class,
-        admin_online, admin_installments, admin_discount, admin_logs,
+        admin_online_enrollment, admin_online, admin_installments, admin_discount, admin_logs,
         admin_broadcast, admin_reports, admin_ai, admin_ai_self_check,
         referral, support, admin_support, assignment, admin_assignments,
         progress, group_music_panel, music_generator, ai_agent_knowledge,
