@@ -17,6 +17,10 @@ def admin_ai_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="🧪 Test Models", callback_data="ai_test_models"),
             ],
             [
+                InlineKeyboardButton(text="⚡ سریع‌ترین مدل", callback_data="ai_auto_connect"),
+                InlineKeyboardButton(text="📡 Speed Monitor", callback_data="ai_speed_monitor"),
+            ],
+            [
                 InlineKeyboardButton(text="🔐 Security Audit", callback_data="ai_analyze:security"),
                 InlineKeyboardButton(text="⚙️ Reliability Audit", callback_data="ai_analyze:reliability"),
             ],

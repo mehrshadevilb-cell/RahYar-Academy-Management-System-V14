@@ -12,7 +12,7 @@ from src.bot.telegram_errors import is_benign_telegram_error, should_notify_owne
 from src.bot.handlers import start, course, profile, my_courses, payment, admin
 from src.bot.handlers import online_class, admin_online_enrollment, admin_online, admin_installments
 from src.bot.handlers import admin_discount, admin_logs, admin_broadcast, admin_reports
-from src.bot.handlers import admin_ai, admin_ai_self_check, referral, support, admin_support
+from src.bot.handlers import admin_ai, admin_ai_self_check, admin_ai_speed, referral, support, admin_support
 from src.bot.handlers import assignment, admin_assignments, progress
 from src.bot.handlers import music_generator, group_music_panel
 from src.bot.handlers import chat_assistant
@@ -67,7 +67,7 @@ async def send_error_report(event: ErrorEvent, exc: Exception):
 
     report = (
         "🚨 RahYar Bot Error\n\n"
-        f"Update: {getattr(update, 'update_id', '-') }\n"
+        f"Update: {getattr(update, 'update_id', '-')}\n"
         f"User: {user_id}\n"
         f"Username: @{username}\n"
         f"Chat: {chat_id}\n\n"
@@ -135,7 +135,7 @@ def setup_handlers():
     for module in (
         start, course, profile, my_courses, payment, admin, online_class,
         admin_online_enrollment, admin_online, admin_installments, admin_discount, admin_logs,
-        admin_broadcast, admin_reports, admin_ai, admin_ai_self_check,
+        admin_broadcast, admin_reports, admin_ai, admin_ai_self_check, admin_ai_speed,
         referral, support, admin_support, assignment, admin_assignments,
         progress, group_music_panel, music_generator, ai_agent_knowledge,
         chat_assistant,
