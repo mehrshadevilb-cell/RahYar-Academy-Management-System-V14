@@ -12,3 +12,8 @@ Use this workflow for every development task:
 8. Never rewrite an applied migration; add a new migration.
 9. Run `python -m compileall -q src tests` and `pytest` before PR creation.
 10. Summarize files, tests, risks, and rollback considerations in the PR.
+
+## Speed guidance
+- Prefer surgical edits over full-file rewrites when a function-level change is enough.
+- Reuse existing services/repositories instead of inventing parallel modules.
+- For bug fixes, load the `debug.md` skill and limit the inspection set.
