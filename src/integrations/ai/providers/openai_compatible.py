@@ -9,7 +9,9 @@ from src.integrations.ai.base import BaseAIProvider
 
 class OpenAICompatibleProvider(BaseAIProvider):
     def _headers(self) -> dict[str, str]:
-        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        auth_scheme = str(self.extra_config.get("auth_scheme", "bearer")).lower()
+        authorization = self.api_key if auth_scheme == "raw" else f"Bearer {self.api_key}"
+        headers = {"Authorization": authorization, "Content-Type": "application/json"}
         headers.update(self.extra_config.get("headers", {}))
         return headers
 
@@ -21,7 +23,25 @@ class OpenAICompatibleProvider(BaseAIProvider):
             response = await client.get(f"{self.base_url}/models", headers=self._headers())
             response.raise_for_status()
             payload = response.json()
-        return [self._normalize_model(item) for item in payload.get("data", []) if item.get("id")]
+
+        models_key = str(self.extra_config.get("models_key", "data"))
+        raw_models = payload.get(models_key, []) if isinstance(payload, dict) else []
+        if not isinstance(raw_models, list):
+            return []
+
+        model_id_key = str(self.extra_config.get("model_id_key", "id"))
+        normalized: list[dict[str, Any]] = []
+        for item in raw_models:
+            if isinstance(item, str):
+                normalized.append({"model_id": item, "display_name": item, "raw_metadata": {}})
+                continue
+            if not isinstance(item, dict):
+                continue
+            model_id = item.get(model_id_key) or item.get("id") or item.get("model_id") or item.get("modelId")
+            if not model_id:
+                continue
+            normalized.append(self._normalize_model({**item, "id": str(model_id)}))
+        return normalized
 
     async def chat_completion(self, model: str, messages: list[dict[str, Any]], **kwargs: Any) -> dict[str, Any]:
         body = {"model": model, "messages": messages, **kwargs}
@@ -61,13 +81,13 @@ class OpenAICompatibleProvider(BaseAIProvider):
         metadata = dict(item)
         return {
             "model_id": item["id"],
-            "display_name": item.get("name") or item.get("id"),
-            "context_window": item.get("context_window") or item.get("context_length"),
-            "max_output_tokens": item.get("max_output_tokens"),
-            "supports_vision": bool(item.get("supports_vision", False)),
-            "supports_tools": bool(item.get("supports_tools", False)),
+            "display_name": item.get("name") or item.get("model_name") or item.get("id"),
+            "context_window": item.get("context_window") or item.get("context_length") or item.get("contextLength"),
+            "max_output_tokens": item.get("max_output_tokens") or item.get("maxOutputTokens"),
+            "supports_vision": bool(item.get("supports_vision", item.get("vision", False))),
+            "supports_tools": bool(item.get("supports_tools", item.get("tools", False))),
             "supports_streaming": bool(item.get("supports_streaming", True)),
-            "pricing_input": item.get("pricing_input"),
-            "pricing_output": item.get("pricing_output"),
+            "pricing_input": item.get("pricing_input") or item.get("input_price"),
+            "pricing_output": item.get("pricing_output") or item.get("output_price"),
             "raw_metadata": metadata,
         }
