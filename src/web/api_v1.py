@@ -162,6 +162,9 @@ async def create_order(body: OrderIn, db: Session = Depends(get_db)):
             logger.exception("Failed owner notify for API order %s", payment.id)
 
     card = order_service.get_active_card(db)
+    bot_url = None
+    if settings.BOT_USERNAME:
+        bot_url = f"https://t.me/{settings.BOT_USERNAME.lstrip('@')}?start=webpay_{payment.id}"
     return {
         "ok": True,
         "payment_id": payment.id,
@@ -172,6 +175,7 @@ async def create_order(body: OrderIn, db: Session = Depends(get_db)):
             "number": card.card_number if card else None,
             "holder": card.card_holder if card else None,
         },
+        "bot_url": bot_url,
         "message": "سفارش ثبت شد و در انتظار تأیید ادمین است.",
     }
 

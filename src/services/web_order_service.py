@@ -115,7 +115,7 @@ class WebOrderService:
             amount=product.price,
             status="pending",
             receipt_file_id=receipt_marker,
-            admin_notes="سفارش از وب‌سایت — در انتظار رسید/تأیید",
+            admin_notes="سفارش کارت‌به‌کارت از وب‌سایت — رسید در ربات راه‌یار ارسال می‌شود؛ در انتظار تأیید",
         )
         payment = self.payments.create(db, payment)
         return user, payment, product

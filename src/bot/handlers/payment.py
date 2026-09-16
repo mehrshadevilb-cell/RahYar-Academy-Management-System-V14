@@ -12,6 +12,7 @@ from src.bot.keyboards.artistyar_retry_keyboard import artistyar_retry_keyboard
 
 from src.services.course_service import CourseService
 from src.database.models.course import ProductDeliveryType
+from src.database.models.payment import Payment
 from src.services.payment_service import PaymentService
 from src.services.payment_card_service import PaymentCardService
 from src.services.discount_code_service import DiscountCodeService
@@ -381,16 +382,35 @@ async def receive_receipt(
     )
 
     final_amount = data.get("final_amount") or course.price
-
-    payment = payment_service.create_pending(
-        db=db,
-        user_id=user.id,
-        course_id=course_id,
-        amount=final_amount,
-        receipt_file_id=file_id,
-        discount_code_id=discount_code_id,
-        discount_amount=discount_amount,
-    )
+    web_payment_id = data.get("web_payment_id")
+    if web_payment_id:
+        payment = (
+            db.query(Payment)
+            .filter(
+                Payment.id == int(web_payment_id),
+                Payment.user_id == user.id,
+                Payment.status == "pending",
+            )
+            .first()
+        )
+        if not payment:
+            await message.answer("❌ سفارش وب پیدا نشد یا قبلاً بررسی شده است.")
+            await state.clear()
+            return
+        payment.receipt_file_id = file_id
+        payment.admin_notes = "سفارش وب — رسید در ربات دریافت شد؛ در انتظار تأیید"
+        db.commit()
+        db.refresh(payment)
+    else:
+        payment = payment_service.create_pending(
+            db=db,
+            user_id=user.id,
+            course_id=course_id,
+            amount=final_amount,
+            receipt_file_id=file_id,
+            discount_code_id=discount_code_id,
+            discount_amount=discount_amount,
+        )
 
     await state.clear()
 
