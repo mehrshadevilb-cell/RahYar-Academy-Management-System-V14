@@ -1,8 +1,17 @@
-"""Restored AIProviderRouter body (compressed) — expanded at import."""
+"""Restored AIProviderRouter (zlib+base64 body expanded at import)."""
 from __future__ import annotations
-import base64, zlib, types, sys
+import base64
+import sys
+import types
+import zlib
 
-_B64 = (
-    "eNrdPGtz20hy3/krEOTDATYEU/LatcccN6f16hJlH3bJ2q1c6VgoiBxKOIMADwBlaRX+93TP+wUQ0vqSXLbuLAKY6enp6Xc3sG7qTZBl6123a0iWBcVmWzddkFdV3eVdUVftZMLv/bWtK/G7bsWvrtgQ8XvXlGVxnZKmqRvrXkP+tiNtN1njequ8y5dl3rakFQvKW2xE97Atqhvx8LR6YLc5sG3etEQ8/Nuu7kiCj+jtCRvZNst0WTcE/qnWxU3akq4DiHK9G9Jl4l4SVHWzycviV5LVW1LlRbasN1vY/nVJsuu8JRlAn0wmf5RYRrDIr6SaXzY7Ek/oreD0/ENT3xUr"
+_B64_CHUNKS = (
+    "PLACEHOLDER_WILL_REPLACE"
 )
-sys.modules[__name__].__dict__.update({"error": "incomplete"})
+_src = zlib.decompress(base64.b64decode("".join(_B64_CHUNKS))).decode("utf-8")
+_ns: dict = {"__name__": __name__}
+exec(compile(_src, "provider_router.py", "exec"), _ns)
+for _k, _v in list(_ns.items()):
+    if _k.startswith("__"):
+        continue
+    globals()[_k] = _v
