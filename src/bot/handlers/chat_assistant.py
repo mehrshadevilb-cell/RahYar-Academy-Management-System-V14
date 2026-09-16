@@ -1,5 +1,7 @@
 """Chat assistant: explicit entry point plus a minimal free-text fallback."""
 
+from collections import defaultdict, deque
+
 from aiogram import F, Router
 from aiogram.filters import StateFilter
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, ReplyKeyboardMarkup, KeyboardButton
@@ -25,6 +27,8 @@ ASSISTANT_HINTS = ReplyKeyboardMarkup(
 )
 _recent_questions: dict[int, tuple[str, str]] = {}
 _MAX_RECENT_QUESTIONS = 200
+# Short conversation memory: last few turns per telegram user (in-process).
+_conversation: dict[str, deque[tuple[str, str]]] = defaultdict(lambda: deque(maxlen=4))
 _CASUAL_MESSAGES = {
     "سلام", "درود", "خوبی", "مرسی", "ممنون", "خداحافظ", "bye", "hi", "hello", "thanks",
 }
@@ -35,6 +39,33 @@ _QUESTION_STARTERS = (
 _QUESTION_CONTEXT = (
     "سوال", "راهنما", "قیمت", "خرید", "پرداخت", "دسترسی", "دوره", "خطا", "ارور", "مشکل",
     "میکس", "مستر", "ضبط", "plugin", "daw", "مقایسه", "پیشنهاد", "تنظیم",
+)
+_FOLLOW_UP_MARKERS = (
+    "و بعد", "بعدش", "ادامه بده", "بیشتر بگو", "ادامه", "بعدی", "همینطور",
+    "continue", "more", "and then",
+)
+
+# Instant answers — no model call.
+_FAST_ANSWERS: dict[str, str] = {
+    "سلام": "سلام 👋 من دستیار راه‌یار هستم. سؤالت درباره DAW، پلاگین، میکس یا دوره‌ها رو بپرس.",
+    "درود": "درود! چطور می‌تونم کمکت کنم؟",
+    "hi": "Hi! Ask about DAW, plugins, mix, or academy courses.",
+    "hello": "Hello! How can I help with music production or your course?",
+    "مرسی": "خواهش می‌کنم 🙏",
+    "ممنون": "خواهش می‌کنم 🙏",
+    "thanks": "You're welcome.",
+    "خداحافظ": "خداحافظ؛ موفق باشی 🎵",
+    "bye": "Bye!",
+}
+
+_MENU_HELP = (
+    "منوی اصلی:\n"
+    "• 📚 دوره ها — خرید دوره دیجیتال\n"
+    "• 🎓 دوره های من — دسترسی‌های شما\n"
+    "• 🎼 کلاس آنلاین — رزرو کلاس زنده\n"
+    "• 📝 تکالیف / 📈 پیشرفت من\n"
+    "• 🆘 پشتیبانی — پیام به مدیریت\n"
+    "• 🔔 اعلان‌ها — خاموش/روشن کردن یادآورها"
 )
 
 
@@ -51,9 +82,10 @@ def assistant_feedback_keyboard() -> InlineKeyboardMarkup:
 
 
 def should_show_feedback(question: str) -> bool:
-    """Show feedback only when the user asked for information or help."""
     normalized = " ".join((question or "").casefold().strip().split())
     if not normalized or normalized in _CASUAL_MESSAGES:
+        return False
+    if any(m in normalized for m in _FOLLOW_UP_MARKERS) and len(normalized) < 40:
         return False
     if normalized.endswith(("!", "！")) and "?" not in normalized and "؟" not in normalized:
         return False
@@ -64,6 +96,21 @@ def should_show_feedback(question: str) -> bool:
     return any(token in normalized for token in _QUESTION_CONTEXT)
 
 
+def try_fast_answer(text: str) -> str | None:
+    normalized = " ".join((text or "").casefold().strip().split())
+    if normalized in _FAST_ANSWERS:
+        return _FAST_ANSWERS[normalized]
+    if any(t in normalized for t in ("منو", "راهنمای ربات", "دکمه‌ها", "چیکار میشه")):
+        return _MENU_HELP
+    if normalized in ("راهنمای daw", "🎚️ راهنمای daw"):
+        return "برای DAW بگو کدوم نرم‌افزار و نسخه (مثلاً Cubase 13 یا Ableton 12) تا مسیر منو و تنظیم دقیق بدم."
+    if normalized in ("راهنمای plugin", "🎛️ راهنمای plugin"):
+        return "نام پلاگین و کاری که می‌خوای (مثلاً de-ess وکال با Waves) رو بگو."
+    if normalized in ("تئوری موسیقی", "🎼 تئوری موسیقی"):
+        return "سؤالت رو مشخص کن: گام، آکورد، فاصله، ریتم یا هارمونی؟"
+    return None
+
+
 def _remember_question(sent_message: Message | None, telegram_id: str, question: str) -> None:
     message_id = getattr(sent_message, "message_id", None)
     if message_id is None:
@@ -72,6 +119,21 @@ def _remember_question(sent_message: Message | None, telegram_id: str, question:
     if len(_recent_questions) > _MAX_RECENT_QUESTIONS:
         oldest = next(iter(_recent_questions))
         _recent_questions.pop(oldest, None)
+
+
+def _history_prompt(telegram_id: str) -> str:
+    turns = list(_conversation.get(telegram_id) or [])
+    if not turns:
+        return ""
+    lines = ["گفتگوی اخیر (برای ادامه):"]
+    for q, a in turns[-3:]:
+        lines.append(f"کاربر: {q[:200]}")
+        lines.append(f"دستیار: {a[:300]}")
+    return "\n".join(lines)
+
+
+def _store_turn(telegram_id: str, question: str, answer: str) -> None:
+    _conversation[telegram_id].append((question, answer))
 
 
 @router.message(F.text == MENU_BUTTON_TEXT)
@@ -94,12 +156,23 @@ async def chat_fallback(message: Message, db):
         await message.answer("❌ اول /start رو بزن.")
         return
 
+    tid = str(message.from_user.id)
+    text = message.text or ""
+
+    fast = try_fast_answer(text)
+    if fast is not None:
+        await message.answer(format_assistant_answer(fast), parse_mode="HTML")
+        _store_turn(tid, text, fast)
+        return
+
     await message.bot.send_chat_action(message.chat.id, "typing")
+    history = _history_prompt(tid)
+    user_message = text if not history else f"{history}\n\nسؤال فعلی:\n{text}"
     try:
         reply = chat_assistant_service.answer(
             db=db,
-            telegram_id=str(message.from_user.id),
-            user_message=message.text,
+            telegram_id=tid,
+            user_message=user_message,
         )
     except ChatAssistantError as exc:
         code = str(exc)
@@ -111,7 +184,8 @@ async def chat_fallback(message: Message, db):
         await message.answer(DISABLED_MESSAGE_FA, parse_mode="HTML")
         return
 
-    question_like = should_show_feedback(message.text)
+    _store_turn(tid, text, reply)
+    question_like = should_show_feedback(text)
     sent_message = await message.answer(
         format_assistant_answer(reply),
         parse_mode="HTML",
@@ -119,7 +193,7 @@ async def chat_fallback(message: Message, db):
         reply_markup=assistant_feedback_keyboard() if question_like else None,
     )
     if question_like:
-        _remember_question(sent_message, str(message.from_user.id), message.text)
+        _remember_question(sent_message, tid, text)
 
 
 @router.callback_query(F.data.startswith("assistant_feedback:"))

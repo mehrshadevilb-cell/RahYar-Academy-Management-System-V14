@@ -8,6 +8,7 @@ from aiogram.exceptions import TelegramConflictError, TelegramUnauthorizedError
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 import uvicorn
+from sqlalchemy import text
 
 from src.bot.bot import bot, dp, setup_handlers, ai_agent_knowledge
 from src.core.config.settings import get_settings
@@ -50,7 +51,26 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 @app.api_route("/health", methods=["GET", "HEAD"])
 async def health():
-    return JSONResponse({"ok": True, "build": _build_id()})
+    db_ok = False
+    try:
+        db = SessionLocal()
+        try:
+            db.execute(text("SELECT 1"))
+            db_ok = True
+        finally:
+            db.close()
+    except Exception:
+        logger.exception("health: database check failed")
+    status = 200 if db_ok else 503
+    return JSONResponse(
+        {
+            "ok": db_ok,
+            "build": _build_id(),
+            "database": "up" if db_ok else "down",
+            "chat_assistant": settings.CHAT_ASSISTANT_ENABLED,
+        },
+        status_code=status,
+    )
 
 
 @app.api_route("/", methods=["HEAD"])
@@ -126,16 +146,13 @@ async def _auto_configure_ai_at_startup() -> None:
 
 
 async def _prepare_telegram_polling() -> None:
-    """Validate the token and clear webhook state before starting getUpdates."""
     me = await bot.get_me()
     logger.info("Telegram bot authenticated: @%s (id=%s)", me.username or "unknown", me.id)
-    # Do not discard updates during an ordinary restart or transient conflict.
     await bot.delete_webhook(drop_pending_updates=False)
     logger.info("Telegram webhook cleared; polling can start")
 
 
 async def _poll_telegram_forever() -> None:
-    """Keep polling alive through transient Telegram/network failures."""
     restart_delay = max(2, int(os.getenv("TELEGRAM_POLLING_RESTART_DELAY_SECONDS", "5")))
     max_delay = max(restart_delay, int(os.getenv("TELEGRAM_POLLING_MAX_RESTART_DELAY_SECONDS", "60")))
     consecutive_failures = 0
@@ -158,9 +175,7 @@ async def _poll_telegram_forever() -> None:
         except TelegramConflictError:
             consecutive_failures += 1
             logger.error(
-                "Telegram polling conflict (another getUpdates consumer is active); "
-                "retrying after %ss",
-                min(max_delay, restart_delay * min(2 ** (consecutive_failures - 1), 8)),
+                "Telegram polling conflict; retrying after delay",
             )
         except (asyncio.CancelledError, KeyboardInterrupt):
             raise
@@ -174,8 +189,6 @@ async def _poll_telegram_forever() -> None:
 
 async def start_bot():
     logger.info("Starting RahYar Bot... build=%s", _build_id())
-    # Last-resort heal for columns that production may still be missing when
-    # Alembic history is branched/stamped incorrectly (e.g. reminder_1h_sent).
     try:
         ensure_critical_schema()
         logger.info("schema_guard: critical columns verified")
