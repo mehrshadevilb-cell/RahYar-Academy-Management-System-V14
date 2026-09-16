@@ -6,6 +6,9 @@ class AdminState(StatesGroup):
     waiting_product_photo = State()
     waiting_new_card_number = State()
     waiting_new_card_holder = State()
+    # Aliases used by admin.py handlers (must match set_state filters)
+    waiting_card_number = waiting_new_card_number
+    waiting_card_holder = waiting_new_card_holder
     waiting_student_phone = State()
 
     # --- Product integrations ---
