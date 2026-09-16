@@ -41,21 +41,33 @@ def _safe_html(text: str) -> str:
     return html.escape(text or "", quote=False)
 
 
-AUDIT_PROFILES = {
-    "full": "Audit the entire repository for correctness, security, reliability, data integrity, UX and test gaps.",
-    "security": "Audit only security, authentication, authorization, secrets, privacy, injection and data exposure risks.",
-    "reliability": "Audit provider failover, background tasks, error handling, retries, migrations and operational reliability.",
-}
+# One strong audit prompt. Former security/reliability profiles map here so
+# we never run three overlapping full-repo LLM audits as separate products.
+UNIFIED_AUDIT_PROMPT = (
+    "Perform a single comprehensive repository audit for RahYar Academy Management System.\n"
+    "Cover ALL of these dimensions in one report (do not omit any section):\n"
+    "A) Correctness & business rules (payments, reservations, attendance, installments, licenses)\n"
+    "B) Security (authz, secrets, injection, Telegram callback trust, PII)\n"
+    "C) Reliability (failover, background jobs, migrations, error handling, idempotency)\n"
+    "D) Data integrity & schema risks\n"
+    "E) UX/admin operability gaps\n"
+    "F) Test gaps\n\n"
+    "Return an evidence-based prioritized report with:\n"
+    "- confirmed findings vs needs-verification\n"
+    "- severity\n"
+    "- exact paths/symbols\n"
+    "- impact\n"
+    "- smallest safe fix\n"
+    "- regression test idea\n\n"
+    "End with counts (critical/high/medium/low) and the single next action."
+)
 
 
 def audit_request(profile: str = "full") -> str:
-    selected = AUDIT_PROFILES.get(profile, AUDIT_PROFILES["full"])
-    return (
-        f"{selected}\n"
-        "Return an evidence-based prioritized report. Include confirmed findings, "
-        "needs-verification items, severity, exact paths/symbols, impact, smallest safe fix, "
-        "and a regression test for each finding. End with counts and next action."
-    )
+    """All audit profiles resolve to the unified audit (backward compatible)."""
+    # profile kept for legacy callback_data ai_analyze:security|reliability|full
+    _ = profile
+    return UNIFIED_AUDIT_PROMPT
 
 
 def debug_request(user_input: str) -> str:
@@ -79,7 +91,9 @@ def _home_text() -> str:
         "🔐 Security: محافظت‌شده\n"
         "📂 Repository: متصل\n\n"
         "برای شروع یک عملیات انتخاب کنید.\n"
-        "<i>Write taskها → Plan → Code → Test → PR</i>"
+        "<i>Write taskها → Plan → Code → Test → PR</i>\n\n"
+        "🔎 Audit = یک گزارش واحد (امنیت + پایداری + صحت)\n"
+        "🩺 Diagnostics = self-check + وضعیت API"
     )
 
 
@@ -93,11 +107,23 @@ async def ai_home(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data == "ai_status")
-async def ai_status(callback: CallbackQuery):
+@router.callback_query(F.data.in_({"ai_status", "ai_self_check", "ai_diagnostics"}))
+async def ai_diagnostics(callback: CallbackQuery):
+    """Merged former Self-Check + API Status into one diagnostics action."""
     if not _owner(callback.from_user.id, callback.from_user.username):
         await callback.answer("⛔️", show_alert=True)
         return
+    await callback.answer("🩺 در حال Diagnostics...", show_alert=False)
+
+    parts: list[str] = ["🩺 <b>AI Diagnostics</b>", "━━━━━━━━━━━━━━━━━━"]
+
+    try:
+        self_check = await asyncio.to_thread(runtime.self_check)
+        parts.append(self_check)
+    except Exception as exc:
+        parts.append(f"🔴 Self-check failed: {_safe_html(_safe_error(exc))}")
+
+    parts.append("\n━━━━━━━━━━━━━━━━━━\n📊 <b>API / Agent Status</b>")
     try:
         raw = await asyncio.to_thread(runtime.agent.status)
         lines = []
@@ -111,14 +137,13 @@ async def ai_status(callback: CallbackQuery):
                 lines.append(f"api_test={ping[:300]}")
             else:
                 lines.append(line)
-        result = "\n".join(lines)
+        parts.append(f"<code>{_safe_html(chr(10).join(lines))}</code>")
     except AIAgentError as exc:
-        result = f"❌ {_safe_error(exc)}"
-    await callback.message.answer(
-        f"🧪 <b>AI API / Agent Status</b>\n\n<code>{_safe_html(result)}</code>",
-        parse_mode="HTML",
-    )
-    await callback.answer()
+        parts.append(f"❌ {_safe_html(_safe_error(exc))}")
+
+    text = "\n".join(parts)
+    for chunk in _chunk(text):
+        await callback.message.answer(chunk, parse_mode="HTML")
 
 
 @router.callback_query(F.data == "ai_test_models")
@@ -151,7 +176,8 @@ async def ai_security(callback: CallbackQuery):
         "✅ no automatic merge to main\n"
         "✅ bounded retries\n"
         "✅ Telegram errors redact configured secrets\n"
-        "\n⚠️ اطلاعات حساس را داخل پیام Task یا لاگ ارسال نکنید."
+        "\n⚠️ اطلاعات حساس را داخل پیام Task یا لاگ ارسال نکنید.\n"
+        "برای audit امنیتی کد، از «🔎 Audit کامل» استفاده کنید."
     )
     await callback.message.answer(text, parse_mode="HTML")
     await callback.answer()
@@ -174,14 +200,15 @@ async def ai_analyze(callback: CallbackQuery):
     if not _owner(callback.from_user.id, callback.from_user.username):
         await callback.answer("⛔️", show_alert=True)
         return
-    await callback.answer("در حال Audit...", show_alert=False)
+    await callback.answer("در حال Audit کامل...", show_alert=False)
     try:
+        # Legacy profiles (security/reliability/full) all use the unified prompt.
         profile = callback.data.rsplit(":", 1)[-1]
         result = await asyncio.to_thread(runtime.agent.analyze, audit_request(profile))
     except AIAgentError as exc:
         result = f"❌ {_safe_error(exc)}"
     for index, part in enumerate(_chunk(result)):
-        heading = "🔎 <b>AI Audit</b>\n\n" if index == 0 else ""
+        heading = "🔎 <b>AI Audit (unified)</b>\n\n" if index == 0 else ""
         await callback.message.answer(heading + _safe_html(part), parse_mode="HTML")
 
 
