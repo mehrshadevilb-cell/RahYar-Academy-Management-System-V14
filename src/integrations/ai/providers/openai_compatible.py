@@ -19,8 +19,12 @@ class OpenAICompatibleProvider(BaseAIProvider):
         return float(self.extra_config.get("timeout", 30.0))
 
     async def list_models(self) -> list[dict[str, Any]]:
+        models_url = str(self.extra_config.get("models_url", "")).strip()
+        if not models_url:
+            models_url = f"{self.base_url}/models"
+
         async with httpx.AsyncClient(timeout=self._timeout()) as client:
-            response = await client.get(f"{self.base_url}/models", headers=self._headers())
+            response = await client.get(models_url, headers=self._headers())
             response.raise_for_status()
             payload = response.json()
 
