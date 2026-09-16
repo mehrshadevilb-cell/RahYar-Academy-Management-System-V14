@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from typing import Any
+from urllib.parse import urlparse
 
 from src.ai.provider_router import AIProvider, AIProviderRouter
 
@@ -14,6 +15,13 @@ class LatencyAwareAIProviderRouter(AIProviderRouter):
         self._latency_ms: dict[str, float] = {}
         self._latency_samples: dict[str, int] = {}
         self._last_success: dict[str, float] = {}
+
+    def _headers(self, provider: AIProvider) -> dict[str, str]:
+        headers = super()._headers(provider)
+        host = (urlparse(provider.base_url).hostname or "").lower()
+        if host.endswith("bytez.com"):
+            headers["Authorization"] = provider.api_key
+        return headers
 
     @staticmethod
     def _key(provider: AIProvider, model: str) -> str:
@@ -28,10 +36,6 @@ class LatencyAwareAIProviderRouter(AIProviderRouter):
             key = self._key(provider, model)
             latency = self._latency_ms.get(key)
             last_success = self._last_success.get(key, 0.0)
-            # Fresh successful measurements beat stale measurements. Once a
-            # route has been observed, lower latency is the primary selector.
-            # Unknown routes stay behind measured healthy routes and use the
-            # provider priority as their deterministic tie-breaker.
             measured = 0 if latency is not None else 1
             stale_penalty = 0 if last_success and now - last_success <= 300 else 1
             return (
