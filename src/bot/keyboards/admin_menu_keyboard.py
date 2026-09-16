@@ -4,6 +4,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 def admin_main_menu():
     return InlineKeyboardMarkup(
         inline_keyboard=[
+            [InlineKeyboardButton(text="📊 داشبورد", callback_data="admin_dashboard")],
             [
                 InlineKeyboardButton(text="📚 محصولات", callback_data="admin_products"),
                 InlineKeyboardButton(text="💳 پرداخت‌های در انتظار", callback_data="admin_pending"),
@@ -40,4 +41,20 @@ def admin_main_menu():
 def admin_back_button(callback_data: str = "admin_home"):
     return InlineKeyboardMarkup(
         inline_keyboard=[[InlineKeyboardButton(text="⬅️ بازگشت", callback_data=callback_data)]]
+    )
+
+
+def admin_dashboard_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="💳 پرداخت معلق", callback_data="admin_pending"),
+                InlineKeyboardButton(text="🆘 پشتیبانی", callback_data="admin_support"),
+            ],
+            [
+                InlineKeyboardButton(text="📅 رزروها", callback_data="admin_reservations"),
+                InlineKeyboardButton(text="🧠 AI", callback_data="admin_ai"),
+            ],
+            [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="admin_home")],
+        ]
     )

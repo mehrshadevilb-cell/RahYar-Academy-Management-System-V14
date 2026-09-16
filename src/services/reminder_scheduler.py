@@ -16,6 +16,7 @@ from src.database.repositories.reservation_repository import ReservationReposito
 from src.database.repositories.telegram_repository import TelegramRepository
 from src.database.session import SessionLocal
 from src.services.installment_service import InstallmentService
+from src.services.notification_preference_service import NotificationPreferenceService
 
 logger = logging.getLogger(__name__)
 
@@ -91,10 +92,7 @@ def should_send_one_hour_reminder(class_start: datetime, now: datetime) -> bool:
 
 
 class InstallmentReminderScheduler:
-    """
-    Background loop for installment reminders and confirmed class reservation
-    reminders. Idempotent via persisted flags / status transitions.
-    """
+    """Background loop for installment + class reminders. Respects user mute prefs."""
 
     def __init__(self, bot: Bot, interval_seconds: int = DEFAULT_INTERVAL_SECONDS):
         self.bot = bot
@@ -103,6 +101,7 @@ class InstallmentReminderScheduler:
         self.enrollment_repository = OnlineEnrollmentRepository()
         self.reservation_repository = ReservationRepository()
         self.telegram_repository = TelegramRepository()
+        self.pref_service = NotificationPreferenceService()
         self.settings = get_settings()
         self._task: asyncio.Task | None = None
 
@@ -136,12 +135,10 @@ class InstallmentReminderScheduler:
         for installment, offset in self.installment_service.get_reminder_batch(db):
             enrollment = self.enrollment_repository.get_by_id(db, installment.enrollment_id)
             if not enrollment:
-                logger.warning(
-                    "Installment %s has no matching enrollment; skipping reminder",
-                    installment.id,
-                )
                 continue
-
+            if not self.pref_service.is_enabled(db, enrollment.user_id, "installment_reminders"):
+                self.installment_service.mark_reminder_sent(db, installment, offset)
+                continue
             await self._notify_student(
                 db,
                 enrollment.user_id,
@@ -151,24 +148,18 @@ class InstallmentReminderScheduler:
                     amount=installment.amount,
                 ),
             )
-
             self.installment_service.mark_reminder_sent(db, installment, offset)
 
     async def _handle_newly_overdue(self, db) -> None:
         newly_overdue = self.installment_service.sync_overdue(db)
-
         if not newly_overdue:
             return
-
         for installment in newly_overdue:
             enrollment = self.enrollment_repository.get_by_id(db, installment.enrollment_id)
             if not enrollment:
-                logger.warning(
-                    "Installment %s has no matching enrollment; skipping overdue notice",
-                    installment.id,
-                )
                 continue
-
+            if not self.pref_service.is_enabled(db, enrollment.user_id, "installment_reminders"):
+                continue
             await self._notify_student(
                 db,
                 enrollment.user_id,
@@ -178,7 +169,6 @@ class InstallmentReminderScheduler:
                     amount=installment.amount,
                 ),
             )
-
         if self.settings.OWNER_ID:
             try:
                 await self.bot.send_message(
@@ -189,18 +179,13 @@ class InstallmentReminderScheduler:
                 logger.exception("Failed to notify owner about overdue installments")
 
     async def _send_class_reminders(self, db) -> None:
-        """Class reminders must not break installment cycle on schema drift."""
         try:
             today = date.today()
             today_j = _jalali_str_for_gregorian(today)
             tomorrow_j = _jalali_str_for_gregorian(today + timedelta(days=1))
-
             confirmed = self.reservation_repository.get_confirmed_upcoming(db)
         except (ProgrammingError, SQLAlchemyError):
-            logger.exception(
-                "Class reminder query failed (schema/DB); "
-                "installment reminders continue. Run alembic upgrade head."
-            )
+            logger.exception("Class reminder query failed")
             try:
                 db.rollback()
             except Exception:
@@ -210,13 +195,18 @@ class InstallmentReminderScheduler:
         for reservation in confirmed:
             if reservation.status != ReservationStatus.CONFIRMED:
                 continue
-
             enrollment = self.enrollment_repository.get_by_id(db, reservation.enrollment_id)
             if not enrollment or not enrollment.online_course:
-                logger.warning(
-                    "Reservation %s missing enrollment/course; skipping class reminder",
-                    reservation.id,
-                )
+                continue
+            if not self.pref_service.is_enabled(db, enrollment.user_id, "class_reminders"):
+                # Still mark flags so we do not re-check forever when muted.
+                if not reservation.reminder_1h_sent:
+                    reservation.reminder_1h_sent = True
+                if not reservation.reminder_1d_sent:
+                    reservation.reminder_1d_sent = True
+                if not reservation.reminder_due_sent:
+                    reservation.reminder_due_sent = True
+                db.commit()
                 continue
 
             course_name = enrollment.online_course.name
@@ -225,7 +215,6 @@ class InstallmentReminderScheduler:
                 "time": reservation.requested_time,
                 "date": reservation.requested_date,
             }
-
             class_start = _class_start_in_tehran(reservation.requested_date, reservation.requested_time)
             now = datetime.now(TEHRAN_TZ)
             if (
@@ -233,45 +222,23 @@ class InstallmentReminderScheduler:
                 and should_send_one_hour_reminder(class_start, now)
                 and not reservation.reminder_1h_sent
             ):
-                await self._notify_student(
-                    db, enrollment.user_id, CLASS_REMINDER_1H.format(**payload)
-                )
+                await self._notify_student(db, enrollment.user_id, CLASS_REMINDER_1H.format(**payload))
                 reservation.reminder_1h_sent = True
                 db.commit()
-
-            if (
-                reservation.requested_date == tomorrow_j
-                and not reservation.reminder_1d_sent
-            ):
-                await self._notify_student(
-                    db, enrollment.user_id, CLASS_REMINDER_1D.format(**payload)
-                )
+            if reservation.requested_date == tomorrow_j and not reservation.reminder_1d_sent:
+                await self._notify_student(db, enrollment.user_id, CLASS_REMINDER_1D.format(**payload))
                 reservation.reminder_1d_sent = True
                 db.commit()
-
-            if (
-                reservation.requested_date == today_j
-                and not reservation.reminder_due_sent
-            ):
-                await self._notify_student(
-                    db, enrollment.user_id, CLASS_REMINDER_DUE.format(**payload)
-                )
+            if reservation.requested_date == today_j and not reservation.reminder_due_sent:
+                await self._notify_student(db, enrollment.user_id, CLASS_REMINDER_DUE.format(**payload))
                 reservation.reminder_due_sent = True
                 db.commit()
 
     async def _notify_student(self, db, user_id: int, text: str) -> None:
         telegram_account = self.telegram_repository.get_by_user_id(db, user_id)
-
         if not telegram_account:
-            logger.warning(
-                "User %s has no telegram account; skipping notification",
-                user_id,
-            )
             return
-
         try:
             await self.bot.send_message(chat_id=int(telegram_account.telegram_id), text=text)
         except Exception:
-            logger.exception(
-                "Failed to send notification to user_id=%s", user_id
-            )
+            logger.exception("Failed to send notification to user_id=%s", user_id)

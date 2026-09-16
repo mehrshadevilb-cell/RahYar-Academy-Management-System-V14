@@ -11,7 +11,7 @@ def get_main_menu(role: UserRole | None = None):
         [KeyboardButton(text="🎵 AI Generator")],
         [KeyboardButton(text="📝 تکالیف")],
         [KeyboardButton(text="📈 پیشرفت من")],
-        [KeyboardButton(text="👤 پروفایل")],
+        [KeyboardButton(text="👤 پروفایل"), KeyboardButton(text="🔔 اعلان‌ها")],
         [KeyboardButton(text="🎁 دعوت از دوستان")],
         [KeyboardButton(text="🤖 دستیار هوشمند"), KeyboardButton(text="🆘 پشتیبانی")],
     ]
