@@ -20,6 +20,7 @@ from src.database.seed_online_courses import seed_default_online_courses
 from src.database.session import SessionLocal
 from src.services.ai.auto_configure import auto_configure_ai
 from src.services.reminder_scheduler import InstallmentReminderScheduler
+from src.web.api_ai import router as api_ai_router
 from src.web.api_v1 import router as api_v1_router
 from src.web.router import router as storefront_router
 
@@ -42,7 +43,7 @@ def _build_id() -> str:
 
 app = FastAPI(
     title="RahYar Academy Management System",
-    description="Telegram bot + Web + JSON API sharing one database",
+    description="Telegram bot + Web + JSON API + AI bridge sharing one database",
 )
 
 _cors_origins = [
@@ -60,6 +61,7 @@ app.add_middleware(
 
 app.include_router(storefront_router)
 app.include_router(api_v1_router)
+app.include_router(api_ai_router)
 
 
 @app.exception_handler(Exception)
@@ -82,7 +84,7 @@ async def head_root():
 async def api_status():
     return JSONResponse({
         "status": "running",
-        "service": "RahYar Bot + Web + API v1",
+        "service": "RahYar Bot + Web + API v1 + AI bridge",
         "site": settings.SITE_NAME,
         "build": _build_id(),
         "chat_assistant": settings.CHAT_ASSISTANT_ENABLED,
@@ -90,6 +92,7 @@ async def api_status():
         "ai_agent_knowledge_runtime": True,
         "telegram_polling": True,
         "api_v1": True,
+        "ai_bridge": True,
     })
 
 
