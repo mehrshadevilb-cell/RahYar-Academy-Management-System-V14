@@ -1,5 +1,4 @@
-from src.ai.provider_router import AIProviderRouter
-from src.ai.shared_router import get_shared_router, reset_shared_router
+from src.ai.shared_router import SharedSmartRouter, get_shared_router, reset_shared_router
 
 
 def test_shared_router_is_singleton():
@@ -7,6 +6,7 @@ def test_shared_router_is_singleton():
     a = get_shared_router()
     b = get_shared_router()
     assert a is b
+    assert isinstance(a, SharedSmartRouter)
     reset_shared_router()
 
 
@@ -18,7 +18,7 @@ def test_stale_model_ids_are_skipped(monkeypatch):
     from src.core.config.settings import get_settings
 
     get_settings.cache_clear()
-    router = AIProviderRouter()
+    router = SharedSmartRouter()
     models = [m for _, m in router._ordered_candidates(router.providers())]
     assert "mimo-v2.5-free" not in models
     assert "good:free" in models
@@ -26,7 +26,7 @@ def test_stale_model_ids_are_skipped(monkeypatch):
 
 
 def test_persist_model_cooldown_sets_local_state():
-    router = AIProviderRouter()
+    router = SharedSmartRouter()
     router._redis = None
     router._persist_model_cooldown("primary:dead-model", 120)
     snap = router.cooldown_snapshot()
