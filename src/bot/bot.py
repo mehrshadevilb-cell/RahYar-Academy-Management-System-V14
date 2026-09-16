@@ -9,13 +9,13 @@ from src.core.config.settings import get_settings
 from src.core.logging.logger import get_logger
 from src.bot.telegram_errors import is_benign_telegram_error, should_notify_owner
 
-from src.bot.handlers import start, course, profile, my_courses, payment, admin
+from src.bot.handlers import start, course, profile, my_courses, payment, payment_receipt_ux, admin
 from src.bot.handlers import online_class, admin_online_enrollment, admin_online, admin_installments
 from src.bot.handlers import admin_discount, admin_logs, admin_broadcast, admin_reports, admin_dashboard
 from src.bot.handlers import admin_ai, admin_ai_self_check, referral, support, admin_support
 from src.bot.handlers import assignment, admin_assignments, progress
 from src.bot.handlers import music_generator, group_music_panel
-from src.bot.handlers import chat_assistant
+from src.bot.handlers import chat_assistant, admin_student_search, faq_quick
 from src.bot.middlewares.database import DatabaseMiddleware
 from src.bot.middlewares.security import SecurityMiddleware
 from src.services.ai_agent_knowledge_runtime import AIAgentKnowledgeRuntime
@@ -138,12 +138,15 @@ async def global_error_handler(event: ErrorEvent):
 def setup_handlers():
     # admin_online_enrollment MUST be registered before admin_online so that
     # student-picker callbacks (admin_online_enroll_, aoes_*, aoe*) take priority.
+    # payment_receipt_ux AFTER payment so photo/document receipt handlers win.
+    # support BEFORE faq_quick so menu button is not swallowed by FAQ keywords.
     for module in (
-        start, course, profile, my_courses, payment, admin, online_class,
+        start, course, profile, my_courses, payment, payment_receipt_ux, admin, online_class,
         admin_online_enrollment, admin_online, admin_installments, admin_discount, admin_logs,
-        admin_broadcast, admin_reports, admin_dashboard, admin_ai, admin_ai_self_check,
+        admin_broadcast, admin_reports, admin_dashboard, admin_student_search,
+        admin_ai, admin_ai_self_check,
         referral, support, admin_support, assignment, admin_assignments,
         progress, group_music_panel, music_generator, ai_agent_knowledge,
-        chat_assistant,
+        faq_quick, chat_assistant,
     ):
         dp.include_router(module.router)

@@ -19,7 +19,10 @@ def admin_main_menu():
                 InlineKeyboardButton(text="💳 پرداخت‌های در انتظار", callback_data="admin_pending"),
             ],
             [
+                InlineKeyboardButton(text="🔍 جستجوی هنرجو", callback_data="admin_student_search"),
                 InlineKeyboardButton(text="🏦 کارت‌های پرداخت", callback_data="admin_cards"),
+            ],
+            [
                 InlineKeyboardButton(text="📊 آمار", callback_data="admin_stats"),
             ],
             [
