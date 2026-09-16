@@ -83,17 +83,24 @@ def debug_request(user_input: str) -> str:
 
 
 def _home_text() -> str:
+    write = "روشن" if settings.github_write_ready else "خاموش"
     return (
         "🤖 <b>RahYar AI Developer</b>\n"
         "━━━━━━━━━━━━━━━━━━\n"
         "🟢 API: آماده بررسی\n"
         "🧠 Planner: فعال\n"
         "🔐 Security: محافظت‌شده\n"
-        "📂 Repository: متصل\n\n"
+        "📂 Repository: متصل\n"
+        f"✍️ Write mode (PR): <b>{write}</b>\n\n"
         "برای شروع یک عملیات انتخاب کنید.\n"
         "<i>Write taskها → Plan → Code → Test → PR</i>\n\n"
         "🔎 Audit = یک گزارش واحد (امنیت + پایداری + صحت)\n"
-        "🩺 Diagnostics = self-check + وضعیت API"
+        "🩺 Diagnostics = self-check + وضعیت API\n"
+        "🧪 Test Models = تست زنده همه provider/modelها\n\n"
+        "💡 مدل‌های فعال (free-first) از env/DB خوانده می‌شوند.\n"
+        "حتی وقتی owner آنلاین نیست: Knowledge / Chat Assistant /"
+        " provider failover خودکار کار می‌کنند.\n"
+        "کدنویسی خودکار فقط با AI_AGENT_WRITE_ENABLED + GITHUB_TOKEN."
     )
 
 
