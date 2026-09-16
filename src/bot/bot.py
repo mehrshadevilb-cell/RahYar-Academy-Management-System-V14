@@ -18,6 +18,7 @@ from src.bot.handlers import music_generator, group_music_panel
 from src.bot.handlers import chat_assistant
 from src.bot.middlewares.database import DatabaseMiddleware
 from src.bot.middlewares.security import SecurityMiddleware
+from src.services.ai_agent_auto_fix import auto_fix_service
 from src.services.ai_agent_knowledge_runtime import AIAgentKnowledgeRuntime
 
 settings = get_settings()
@@ -82,6 +83,15 @@ async def send_error_report(event: ErrorEvent, exc: Exception):
         logger.exception("Failed sending admin error report")
 
 
+async def _notify_owner(text: str) -> None:
+    if not settings.OWNER_ID:
+        return
+    try:
+        await bot.send_message(chat_id=settings.OWNER_ID, text=text, parse_mode="HTML")
+    except Exception:
+        logger.exception("Failed owner auto-fix notification")
+
+
 @dp.error()
 async def global_error_handler(event: ErrorEvent):
     exc = event.exception
@@ -106,7 +116,23 @@ async def global_error_handler(event: ErrorEvent):
         return True
 
     logger.exception("Unhandled error: %s", exc)
+    tb = traceback.format_exc()
     await send_error_report(event, exc)
+
+    # Opt-in automatic fix: only ai/* + PR, never merge to main.
+    try:
+        decision = await auto_fix_service.maybe_schedule(
+            owner_telegram_id=settings.OWNER_ID,
+            exc=exc,
+            traceback_text=tb,
+            notify=_notify_owner,
+        )
+        if decision.accepted:
+            logger.info("auto-fix scheduled fingerprint=%s", decision.fingerprint)
+        else:
+            logger.info("auto-fix skipped: %s", decision.reason)
+    except Exception:
+        logger.exception("auto-fix scheduling failed")
 
     chat_id = None
     if event.update.message:
@@ -116,13 +142,19 @@ async def global_error_handler(event: ErrorEvent):
 
     if chat_id:
         try:
-            await bot.send_message(chat_id=chat_id, text="⚠️ متأسفانه خطایی رخ داد. لطفاً دوباره تلاش کنید یا از «🆘 پشتیبانی» پیام بگذارید.")
+            await bot.send_message(
+                chat_id=chat_id,
+                text="⚠️ متأسفانه خطایی رخ داد. لطفاً دوباره تلاش کنید یا از «🆘 پشتیبانی» پیام بگذارید.",
+            )
         except Exception:
             logger.exception("Failed user error message")
 
     if settings.OWNER_ID and should_notify_owner(exc):
         try:
-            await bot.send_message(chat_id=settings.OWNER_ID, text=f"🚨 خطای فنی: {type(exc).__name__}\n{str(exc)[:500]}")
+            await bot.send_message(
+                chat_id=settings.OWNER_ID,
+                text=f"🚨 خطای فنی: {type(exc).__name__}\n{str(exc)[:500]}",
+            )
         except Exception:
             logger.exception("Failed owner notification")
 
