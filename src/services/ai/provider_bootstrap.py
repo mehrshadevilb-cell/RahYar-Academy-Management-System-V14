@@ -60,7 +60,6 @@ class AIProviderBootstrapService:
                 model.is_active = False
                 model.is_default = False
         elif fallback_valid:
-            # Safe because no row currently owns this provider/model unique key.
             replacement = stale_rows[0]
             replacement.model_id = fallback
             replacement.display_name = fallback
@@ -108,6 +107,7 @@ class AIProviderBootstrapService:
                     supports_streaming=preset.supports_streaming,
                     supports_vision=preset.supports_vision,
                     supports_tools=preset.supports_tools,
+                    extra_config=dict(preset.extra_config or {}),
                 )
                 self.session.add(provider)
                 self.session.flush()
@@ -119,6 +119,7 @@ class AIProviderBootstrapService:
                 provider.supports_streaming = preset.supports_streaming
                 provider.supports_vision = preset.supports_vision
                 provider.supports_tools = preset.supports_tools
+                provider.extra_config = dict(preset.extra_config or {})
 
             self._repair_stale_models(provider)
             providers.append(provider)
