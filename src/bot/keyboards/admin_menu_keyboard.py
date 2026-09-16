@@ -15,10 +15,11 @@ def admin_main_menu():
                 ),
             ],
             [
-                InlineKeyboardButton(text="📚 محصولات", callback_data="admin_products"),
+                InlineKeyboardButton(text="👥 هنرجوها", callback_data="admin_students"),
                 InlineKeyboardButton(text="💳 پرداخت‌های در انتظار", callback_data="admin_pending"),
             ],
             [
+                InlineKeyboardButton(text="📚 محصولات", callback_data="admin_products"),
                 InlineKeyboardButton(text="🏦 کارت‌های پرداخت", callback_data="admin_cards"),
             ],
             [
