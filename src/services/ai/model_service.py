@@ -59,8 +59,6 @@ class AIModelService:
         if not isinstance(discovered, list):
             raise ValueError("AI provider returned an invalid model discovery payload")
 
-        # Providers are allowed to return either the canonical model_id used by
-        # our discovery layer or the common OpenAI/Google-style `id` field.
         valid_items: list[dict] = []
         for item in discovered:
             if not isinstance(item, dict):
@@ -102,11 +100,6 @@ class AIModelService:
 
         for model in existing.values():
             if model.model_id not in seen and model.is_active:
-                # Never take the last known route away just because a provider
-                # returned a temporarily incomplete catalog. The next health
-                # selection can replace this default as soon as a new model
-                # responds; until then the router can still use the old model
-                # and its normal fallback/cooldown logic remains available.
                 if model.is_default:
                     continue
                 model.is_active = False
@@ -121,10 +114,10 @@ class AIModelService:
         for provider in self.session.query(AIProvider).filter(AIProvider.is_active.is_(True)).all():
             try:
                 result = self.sync_models_for_provider(provider.id)
-                results.append({"provider_id": str(provider.id), "ok": True, **result})
+                results.append({"provider_id": str(provider.id), "provider": provider.name, "ok": True, **result})
             except Exception as exc:
                 self.session.rollback()
-                results.append({"provider_id": str(provider.id), "ok": False, "error": str(exc)})
+                results.append({"provider_id": str(provider.id), "provider": provider.name, "ok": False, "error": str(exc)})
         return results
 
     def check_model(self, model_id) -> bool:
@@ -136,10 +129,54 @@ class AIModelService:
             return False
         client = ProviderRegistry.get_client(provider, decrypt_api_key(provider.api_key_encrypted))
         try:
-            result = self._run_async(client.chat_completion(model.model_id, [{"role": "user", "content": "Reply with OK."}], max_tokens=4, temperature=0))
+            result = self._run_async(
+                client.chat_completion(
+                    model.model_id,
+                    [{"role": "user", "content": "Reply with OK."}],
+                    max_tokens=4,
+                    temperature=0,
+                )
+            )
             return isinstance(result, dict) and bool(result)
         except Exception:
             return False
+
+    def scan_working_models(self) -> dict:
+        """Probe every discovered active model and persist a lightweight health marker.
+
+        This intentionally uses a tiny completion request so the router can prefer
+        models that have actually responded recently. The normal runtime router
+        still performs immediate failover if a model becomes unavailable later.
+        """
+        models = (
+            self.session.query(AIModel)
+            .join(AIProvider, AIProvider.id == AIModel.provider_id)
+            .filter(AIModel.is_active.is_(True), AIProvider.is_active.is_(True))
+            .all()
+        )
+        working: list[AIModel] = []
+        failed: list[AIModel] = []
+        for model in models:
+            ok = self.check_model(model.id)
+            metadata = dict(model.raw_metadata or {})
+            metadata["health"] = {
+                "working": ok,
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+            }
+            model.raw_metadata = metadata
+            if ok:
+                working.append(model)
+            else:
+                failed.append(model)
+        self.session.commit()
+
+        return {
+            "checked": len(models),
+            "working": len(working),
+            "failed": len(failed),
+            "working_models": [f"{m.provider.name}:{m.model_id}" for m in working],
+            "failed_models": [f"{m.provider.name}:{m.model_id}" for m in failed],
+        }
 
     def select_working_default(self) -> AIModel | None:
         candidates = (
@@ -151,7 +188,6 @@ class AIModelService:
         )
         free = [m for m in candidates if self.is_free(m)]
         paid = [m for m in candidates if not self.is_free(m)]
-        # Free models are always tested first. A paid model is only used if no free model works.
         for model in free + paid:
             if self.check_model(model.id):
                 return self.set_default(model.id)
