@@ -6,6 +6,20 @@ from aiogram.types import Message
 
 router = Router()
 
+_MENU_BUTTONS = {
+    "📚 دوره ها",
+    "🎓 دوره های من",
+    "🎼 کلاس آنلاین",
+    "🎵 AI Generator",
+    "📝 تکالیف",
+    "📈 پیشرفت من",
+    "👤 پروفایل",
+    "🎁 دعوت از دوستان",
+    "🤖 دستیار هوشمند",
+    "🆘 پشتیبانی",
+    "🛠 پنل مدیریت",
+}
+
 _FAQ: list[tuple[tuple[str, ...], str]] = [
     (
         ("لایسنس", "لایسس", "کد دوره", "اسپات", "spotplayer"),
@@ -13,7 +27,7 @@ _FAQ: list[tuple[tuple[str, ...], str]] = [
         "اگر وضعیت ناموفق بود، از «🆘 پشتیبانی» پیام بگذارید.",
     ),
     (
-        ("چطور پرداخت", "پرداخت کنم", "کارت به کارت", "کارت‌به‌کارت", "رسید"),
+        ("چطور پرداخت", "پرداخت کنم", "کارت به کارت", "کارت‌به‌کارت", "رسید پرداخت"),
         "💳 برای خرید: «📚 دوره ها» → انتخاب دوره → کارت‌به‌کارت → ارسال <b>عکس رسید</b>.\n"
         "تا تأیید ادمین، دسترسی فعال نمی‌شود.",
     ),
@@ -26,19 +40,18 @@ _FAQ: list[tuple[tuple[str, ...], str]] = [
         ("اقساط", "قسط"),
         "💰 وضعیت اقساط از پنل ادمین مدیریت می‌شود. یادآوری‌ها طبق تنظیمات آکادمی ارسال می‌شوند.",
     ),
-    (
-        ("پشتیبانی", "کمک", "مشکل"),
-        "🆘 از دکمه «پشتیبانی» در منوی اصلی تیکت بفرستید؛ پاسخ توسط آکادمی انجام می‌شود.",
-    ),
 ]
 
 
 def match_faq(text: str) -> str | None:
-    raw = (text or "").strip().casefold()
-    if len(raw) < 2 or len(raw) > 80:
+    raw = (text or "").strip()
+    if raw in _MENU_BUTTONS:
+        return None
+    lowered = raw.casefold()
+    if len(lowered) < 2 or len(lowered) > 80:
         return None
     for keys, answer in _FAQ:
-        if any(k.casefold() in raw for k in keys):
+        if any(k.casefold() in lowered for k in keys):
             return answer
     return None
 
