@@ -1,52 +1,16 @@
+"""Student product-course listing — delegates to EnrollmentService.
+
+Previously duplicated the same join logic as EnrollmentService.get_user_courses.
+One implementation path only.
+"""
 from sqlalchemy.orm import Session
 
-from src.database.repositories.enrollment_repository import EnrollmentRepository
-from src.database.models.course import Course
-
+from src.services.enrollment_service import EnrollmentService
 
 
 class StudentCourseService:
+    def __init__(self) -> None:
+        self._enrollment_service = EnrollmentService()
 
-
-
-    def __init__(self):
-
-        self.repository = EnrollmentRepository()
-
-
-
-    def get_my_courses(
-        self,
-        db: Session,
-        user_id: int,
-    ):
-
-
-        enrollments = self.repository.get_user_courses(
-            db,
-            user_id,
-        )
-
-
-        courses = []
-
-
-        for item in enrollments:
-
-
-            course = (
-                db.query(Course)
-                .filter(
-                    Course.id == item.course_id
-                )
-                .first()
-            )
-
-
-            if course:
-
-                courses.append(course)
-
-
-
-        return courses
+    def get_my_courses(self, db: Session, user_id: int):
+        return self._enrollment_service.get_user_courses(db, user_id)

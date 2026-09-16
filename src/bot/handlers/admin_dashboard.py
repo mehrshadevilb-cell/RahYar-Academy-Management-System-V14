@@ -1,4 +1,8 @@
-"""Owner daily dashboard, inactive students, and system health."""
+"""Owner daily dashboard, inactive students, and system health.
+
+Also handles legacy callback_data «admin_stats» so the old weak stats
+screen and the new dashboard are one capability.
+"""
 from __future__ import annotations
 
 from aiogram import F, Router
@@ -78,7 +82,7 @@ async def _safe_edit(callback: CallbackQuery, text: str, reply_markup: InlineKey
         await callback.message.answer(text, reply_markup=reply_markup)
 
 
-@router.callback_query(F.data == "admin_dashboard")
+@router.callback_query(F.data.in_({"admin_dashboard", "admin_stats"}))
 async def admin_dashboard(callback: CallbackQuery, db):
     if not is_admin_user(callback.from_user):
         await callback.answer("⛔️ شما دسترسی ندارید.", show_alert=True)

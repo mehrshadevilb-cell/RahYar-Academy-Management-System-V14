@@ -20,7 +20,6 @@ def admin_main_menu():
             ],
             [
                 InlineKeyboardButton(text="🏦 کارت‌های پرداخت", callback_data="admin_cards"),
-                InlineKeyboardButton(text="📊 آمار", callback_data="admin_stats"),
             ],
             [
                 InlineKeyboardButton(text="🎼 ثبت‌نام در کلاس آنلاین", callback_data="admin_online"),
