@@ -15,6 +15,7 @@ from src.core.config.settings import get_settings
 from src.core.logging.logger import get_logger
 from src.core.middleware.request_id import RequestIdMiddleware
 from src.core.diagnostics.startup import startup_step
+from src.core.diagnostics.health import build_health_report
 from src.database.schema_guard import ensure_critical_schema
 from src.database.seed_payment_card import seed_default_card
 from src.database.seed_products import seed_default_products
@@ -72,7 +73,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 @app.api_route("/health", methods=["GET", "HEAD"])
 async def health():
-    return JSONResponse({"ok": True, "build": _build_id()})
+    return JSONResponse(build_health_report(_build_id()))
 
 
 @app.api_route("/", methods=["HEAD"])
