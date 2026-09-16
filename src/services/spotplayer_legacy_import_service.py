@@ -106,7 +106,6 @@ class SpotPlayerLegacyImportService:
     def _get_or_create_user(self, db: Session, full_name: str, phone: str) -> tuple[User, bool]:
         existing = db.query(User).filter(User.phone == phone).first()
         if existing:
-            # Prefer keeping a richer name if the live account has a short placeholder.
             if full_name and (not existing.full_name or len(existing.full_name) < 3):
                 existing.full_name = full_name[:100]
             return existing, False
@@ -202,7 +201,6 @@ class SpotPlayerLegacyImportService:
             )
             if existing_license:
                 continue
-            # Also skip if this user already has an active license for the product.
             active = (
                 db.query(License)
                 .filter(
@@ -252,7 +250,7 @@ class SpotPlayerLegacyImportService:
         try:
             import openpyxl
         except ImportError as exc:  # pragma: no cover
-            raise RuntimeError("openpyxl is required to import XLSX files") from ec
+            raise RuntimeError("openpyxl is required to import XLSX files") from exc
 
         wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
         ws = wb[sheet_name] if sheet_name else wb.active
@@ -300,7 +298,6 @@ class SpotPlayerLegacyImportService:
                     summary.created_users += 1
                 if "user=reused" in result.detail:
                     summary.reused_users += 1
-                # Parse counters loosely from detail.
                 m_en = re.search(r"enroll\+=(\d+)", result.detail)
                 m_lic = re.search(r"license\+=(\d+)", result.detail)
                 if m_en:
