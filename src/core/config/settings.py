@@ -87,7 +87,7 @@ class Settings(BaseSettings):
     MUSIC_GENERATION_PUBLIC_DAILY_LIMIT: int = 8
 
     AI_AGENT_WRITE_ENABLED: bool = False
-    AI_AGENT_WORK_DIR: str = "/tmp/rahyar-agent-agent-repo"
+    AI_AGENT_WORK_DIR: str = "/tmp/rahyar-agent-repo"
     GITHUB_TOKEN: str | None = None
     GITHUB_REPO: str = "mehrshadevilb-cell/RahYar-Academy-Management-System-V14"
 
