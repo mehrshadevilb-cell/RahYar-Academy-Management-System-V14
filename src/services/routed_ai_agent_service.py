@@ -2,34 +2,26 @@ from __future__ import annotations
 
 import time
 
-from src.ai.latency_aware_provider_router import LatencyAwareAIProviderRouter
 from src.ai.provider_router import AIProviderError, AIProviderRouter
+from src.ai.shared_router import get_shared_router
 from src.services.ai_agent_service import AIAgentError, AIAgentService
 from src.services.provider_model_health_service import ProviderModelHealthService
 
 
 class RoutedAIAgentService(AIAgentService):
-    """AI Agent service using one live DB/env provider pool for every agent operation."""
+    """AI Agent service using the shared latency-aware provider pool."""
 
     def __init__(self) -> None:
         super().__init__()
-        self.router = LatencyAwareAIProviderRouter()
+        self.router = get_shared_router()
         self.model_health = ProviderModelHealthService(self.router)
 
     def _api_key(self) -> str:
-        # Do not let legacy AI_API_KEY decide which agent route is active.
-        # The router is the single source of truth for the whole agent.
         if self.router.providers():
             return "router-managed"
         return super()._api_key()
 
     def _selected_candidate(self):
-        """Return the same priority-ordered candidate used by agent requests.
-
-        This is informational/configuration selection only. Actual model calls
-        always go through router.chat(), which can fail over again at request
-        time if this candidate is unhealthy.
-        """
         providers = self.router.providers()
         candidates = self.router._ordered_candidates(providers)
         if not candidates:
@@ -54,7 +46,14 @@ class RoutedAIAgentService(AIAgentService):
 
     def _request_model(self, prompt: str) -> str:
         messages = [
-            {"role": "system", "content": "You are the RahYar senior software engineer. Follow project architecture. Never include secrets. Return concise engineering output."},
+            {
+                "role": "system",
+                "content": (
+                    "You are the RahYar senior software engineer. "
+                    "Follow project architecture. Never include secrets. "
+                    "Return concise engineering output."
+                ),
+            },
             {"role": "user", "content": prompt},
         ]
         attempts = 0
@@ -63,8 +62,6 @@ class RoutedAIAgentService(AIAgentService):
             configured_retries = max(0, int(self.settings.AI_AGENT_MAX_RETRIES))
         except (TypeError, ValueError):
             configured_retries = 2
-        # Candidate count is not a retry budget: a single configured model
-        # still needs bounded recovery from transient 5xx/timeout failures.
         max_attempts = max(1, min(len(candidates) + configured_retries, 24))
         last_empty_model = ""
         cooldown_recovery_attempted = False
@@ -77,13 +74,25 @@ class RoutedAIAgentService(AIAgentService):
                     temperature=0.1,
                     timeout_seconds=self.settings.AI_AGENT_TIMEOUT_SECONDS,
                 )
-                content = data.get("choices", [{}])[0].get("message", {}).get("content")
-                if isinstance(content, list):
-                    content = " ".join(
-                        str(part.get("text", ""))
-                        for part in content
-                        if isinstance(part, dict) and part.get("text")
-                    )
+                content = ""
+                if isinstance(data, dict):
+                    choices = data.get("choices") or []
+                    if choices and isinstance(choices[0], dict):
+                        message = choices[0].get("message") or {}
+                        raw = message.get("content") if isinstance(message, dict) else ""
+                        if isinstance(raw, list):
+                            content = " ".join(
+                                str(part.get("text", ""))
+                                for part in raw
+                                if isinstance(part, dict) and part.get("text")
+                            )
+                        else:
+                            content = str(raw or "")
+                    if not content:
+                        for ptype in ("openai_compatible", "google", "anthropic"):
+                            content = AIProviderRouter._extract_text(data, ptype)
+                            if content:
+                                break
                 content = str(content or "").strip()
 
                 if not content:
@@ -91,7 +100,10 @@ class RoutedAIAgentService(AIAgentService):
                     model_name = str(data.get("_rahyar_model") or "")
                     model_key = f"{provider_name}:{model_name}"
                     if model_name and model_key != last_empty_model:
-                        self.router._model_cooldown_until[model_key] = time.time() + 60
+                        if hasattr(self.router, "_persist_model_cooldown"):
+                            self.router._persist_model_cooldown(model_key, 60)
+                        else:
+                            self.router._model_cooldown_until[model_key] = time.time() + 60
                         last_empty_model = model_key
                         continue
                     raise AIProviderError(
@@ -100,7 +112,6 @@ class RoutedAIAgentService(AIAgentService):
                         retry_after=60,
                         provider=provider_name,
                     )
-
                 return content
             except AIProviderError as exc:
                 detail = str(exc)
@@ -112,8 +123,6 @@ class RoutedAIAgentService(AIAgentService):
                     and "cooling down" in str(exc).lower()
                 ):
                     cooldown_recovery_attempted = True
-                    # A health probe uses the exact same router instance and
-                    # clears stale cooldowns for routes that answer now.
                     try:
                         recovered = self.model_health.test_all(
                             timeout_seconds=min(self.settings.AI_AGENT_TIMEOUT_SECONDS, 15)
@@ -132,7 +141,6 @@ class RoutedAIAgentService(AIAgentService):
         raise AIAgentError("All configured AI models returned no usable output.")
 
     def test_provider_models(self) -> str:
-        """Discover and live-test every model in the same pool used by agent requests."""
         self._check_enabled(require_git=False)
         try:
             results = self.model_health.test_all(timeout_seconds=15)
@@ -144,11 +152,9 @@ class RoutedAIAgentService(AIAgentService):
         lines = [
             "🧪 <b>Live AI Model Test</b>",
             "━━━━━━━━━━━━━━━━━━",
-            "🔎 همان provider pool که Agent برای Planner/Audit/Debug/Fix/Feature استفاده می‌کند live-test می‌شود.",
+            "🔎 shared pool برای Agent + Chat Assistant + Web",
         ]
-        available = 0
-        free_available = 0
-        discovered_models = 0
+        available = free_available = discovered_models = 0
         providers = sorted({str(row["provider"]) for row in results})
         for row in results:
             icon = "🟢" if row["ok"] else "🔴"
@@ -167,9 +173,8 @@ class RoutedAIAgentService(AIAgentService):
                 )
             else:
                 detail = str(row.get("status") or "unknown").upper()
-                retry_after = row.get("retry_after")
-                if retry_after:
-                    detail += f" · retry {retry_after}s"
+                if row.get("retry_after"):
+                    detail += f" · retry {row['retry_after']}s"
                 lines.append(
                     f"\n{icon} <b>{row['provider']}</b> / <code>{row['model']}</code> · {free} · {latency}\n"
                     f"   ❌ <b>{detail}</b> · {source}"
@@ -177,23 +182,29 @@ class RoutedAIAgentService(AIAgentService):
 
         selected = self._selected_candidate()
         selected_text = f"{selected[0].name}/{selected[1]}" if selected else "none"
-        lines.extend([
-            "\n━━━━━━━━━━━━━━━━━━",
-            f"📡 Providerهای بررسی‌شده: <b>{len(providers)}</b>",
-            f"🔎 مدل‌های کشف‌شده از API: <b>{discovered_models}</b>",
-            f"🧪 کل مدل‌های تست‌شده: <b>{len(results)}</b>",
-            f"🟢 مدل‌های واقعاً پاسخ‌دهنده: <b>{available}/{len(results)}</b>",
-            f"🆓 Free آماده: <b>{free_available}</b>",
-            f"🎯 Route انتخابی Agent: <code>{selected_text}</code>",
-            "ℹ️ اگر route فعلی از کار بیفتد، router در همان درخواست به مدل بعدی طبق اولویت Free→Paid failover می‌کند؛ این انتخاب برای همه بخش‌های Agent مشترک است.",
-        ])
+        cool = self.router.cooldown_snapshot()
+        lines.extend(
+            [
+                "\n━━━━━━━━━━━━━━━━━━",
+                f"📡 Providerها: <b>{len(providers)}</b>",
+                f"🔎 کشف‌شده از API: <b>{discovered_models}</b>",
+                f"🧪 تست‌شده: <b>{len(results)}</b>",
+                f"🟢 آماده: <b>{available}/{len(results)}</b>",
+                f"🆓 Free: <b>{free_available}</b>",
+                f"🧊 Cooldown: <b>{len(cool)}</b>",
+                f"🎯 Route: <code>{selected_text}</code>",
+                "ℹ️ Failover: Free→Paid · 404→1h · Redis shared cooldown",
+            ]
+        )
         return "\n".join(lines)
 
     def _live_agent_probe(self) -> tuple[str, str]:
-        """Perform one real routed request and return the route that answered."""
         data = self.router.chat(
             [
-                {"role": "system", "content": "You are a health-check endpoint for RahYar AI Agent. Reply exactly OK."},
+                {
+                    "role": "system",
+                    "content": "You are a health-check endpoint for RahYar AI Agent. Reply exactly OK.",
+                },
                 {"role": "user", "content": "Reply with exactly: OK"},
             ],
             temperature=0,
@@ -207,14 +218,15 @@ class RoutedAIAgentService(AIAgentService):
         return provider, model
 
     def status(self) -> str:
-        """Return health for the exact provider pool used by every agent operation."""
         self._check_enabled(require_git=False)
         providers = self.router.providers()
         if not providers:
             raise AIAgentError("No AI provider is configured")
 
         candidates = self.router._ordered_candidates(providers)
-        free_count = sum(1 for provider, model in candidates if self.router._is_free_model(model))
+        free_count = sum(
+            1 for provider, model in candidates if self.router._is_free_model(model)
+        )
         route_lines = [
             f"{provider.name}/{model}{' [free]' if self.router._is_free_model(model) else ''}"
             for provider, model in candidates
@@ -239,15 +251,18 @@ class RoutedAIAgentService(AIAgentService):
             f"chat_key_configured={bool(self.settings.effective_chat_api_key)}",
             f"router_free_candidates={free_count}",
             f"router_candidates={route_lines!r}",
-            "agent_operations=shared_router(Planner,Audit,Debug,Assistant,Fix,Feature,Refactor,Tests)",
+            f"cooldown_active={len(self.router.cooldown_snapshot())}",
+            "agent_operations=shared_router(Planner,Audit,Debug,Assistant,Fix,Feature,ChatAssistant,Web)",
         ]
         if self._has_git():
             try:
-                lines.extend([
-                    f"branch={self._git('branch', '--show-current')}",
-                    f"head={self._git('rev-parse', '--short', 'HEAD')}",
-                    f"locked={self._lock_path().exists()}",
-                ])
+                lines.extend(
+                    [
+                        f"branch={self._git('branch', '--show-current')}",
+                        f"head={self._git('rev-parse', '--short', 'HEAD')}",
+                        f"locked={self._lock_path().exists()}",
+                    ]
+                )
             except AIAgentError as exc:
                 lines.append(f"git_error={exc}")
         elif self.settings.github_write_ready:
