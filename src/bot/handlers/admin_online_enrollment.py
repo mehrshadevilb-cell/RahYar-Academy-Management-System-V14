@@ -349,3 +349,86 @@ async def purchase_no(callback: CallbackQuery, bot: Bot, db):
     except Exception:
         pass
     await callback.answer("رد شد")
+
+
+@router.message(AdminState.waiting_student_phone)
+async def enroll_phone(message: Message, state: FSMContext, db):
+    if not _is_owner(message.from_user.id):
+        return
+    identifier = (message.text or "").strip()
+    normalized = identifier.upper().replace(" ", "")
+    if normalized.startswith("RH") or (normalized.isdigit() and not normalized.startswith("09")):
+        student = profile_service.get_profile_by_student_number(db, normalized)
+    else:
+        student = profile_service.get_profile_by_phone(db, identifier)
+    if not student:
+        await message.answer("❌ هنرجویی پیدا نشد. دوباره شماره هنرجویی یا موبایل را بفرستید:")
+        return
+    data = await state.get_data()
+    course_id = data.get("online_course_id")
+    await state.clear()
+    if not course_id:
+        await message.answer("نشست منقضی شد. دوباره از منوی کلاس شروع کنید.")
+        return
+    existing = online_enrollment_service.get_active_for_user_course(db, student.id, course_id)
+    if existing:
+        await message.answer(
+            f"ℹ️ «{student.full_name}» از قبل ثبت‌نام فعال دارد.\nجلسات باقی‌مانده: {existing.remaining_sessions}",
+            reply_markup=admin_enrollment_detail_keyboard(existing),
+        )
+        return
+    await message.answer(
+        f"نوع پرداخت «{student.full_name}» برای این کلاس را انتخاب کنید:",
+        reply_markup=payment_model_keyboard(student.id, course_id),
+    )
+
+
+@router.callback_query(F.data.startswith("admin_online_plan_"))
+async def enroll_finish(callback: CallbackQuery, bot: Bot, db):
+    if not _is_owner(callback.from_user.id):
+        await callback.answer("⛔️", show_alert=True)
+        return
+    parts = callback.data.replace("admin_online_plan_", "").split("_")
+    if len(parts) < 3:
+        await callback.answer("داده نامعتبر", show_alert=True)
+        return
+    user_id, course_id, plan = int(parts[0]), int(parts[1]), parts[2]
+    course = online_course_service.get_course_by_id(db, course_id)
+    if not course:
+        await callback.answer("کلاس پیدا نشد", show_alert=True)
+        return
+    existing = online_enrollment_service.get_active_for_user_course(db, user_id, course_id)
+    if existing:
+        await callback.answer("ثبت‌نام فعال از قبل هست.", show_alert=True)
+        return
+    payment_model = PaymentModel.MONTHLY if plan == "monthly" else PaymentModel.TERM
+    enrollment = online_enrollment_service.create_enrollment(
+        db=db, user_id=user_id, online_course=course, payment_model=payment_model,
+    )
+    student = profile_service.get_profile_by_id(db, user_id)
+    tg = telegram_repository.get_by_user_id(db, user_id)
+    try:
+        admin_log_service.log(
+            db, callback.from_user.id, admin_actions.ONLINE_ENROLLMENT_CREATE,
+            f"«{student.full_name if student else user_id}» در کلاس «{course.name}» ثبت‌نام شد",
+        )
+    except Exception:
+        pass
+    if tg:
+        plan_fa = "ماهانه" if payment_model == PaymentModel.MONTHLY else "ترمی"
+        try:
+            await bot.send_message(
+                chat_id=int(tg.telegram_id),
+                text=(
+                    f"🎼 شما در کلاس «{course.name}» با پرداخت {plan_fa} ثبت‌نام شدید. "
+                    "از منوی «کلاس آنلاین» رزرو کنید."
+                ),
+            )
+        except Exception:
+            pass
+    name = student.full_name if student else str(user_id)
+    await callback.message.edit_text(
+        f"✅ «{name}» در «{course.name}» ثبت‌نام شد.\nجلسات: {enrollment.remaining_sessions}",
+        reply_markup=admin_enrollment_detail_keyboard(enrollment),
+    )
+    await callback.answer("ثبت شد")
