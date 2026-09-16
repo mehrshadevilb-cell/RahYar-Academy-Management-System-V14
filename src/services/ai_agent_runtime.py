@@ -34,16 +34,39 @@ class AgentPlan:
 
 
 class AIAgentRuntime:
-    ALWAYS_SKILLS = ("security.md", "coding.md", "review.md")
+    ALWAYS_SKILLS = ("security.md", "coding.md", "review.md", "artistyar_brand.md")
     KEYWORD_SKILLS = {
-        "telegram_ui.md": ("telegram", "bot", "keyboard", "button", "ui", "ux", "پیام", "دکمه"),
-        "ai_ui_design.md": ("ai developer", "dashboard", "agent ui", "agent", "پنل", "داشبورد"),
-        "security.md": ("security", "auth", "permission", "secret", "token", "payment", "امنیت", "دسترسی"),
-        "coding.md": ("code", "implement", "feature", "refactor", "کد", "قابلیت"),
-        "review.md": ("review", "audit", "bug", "fix", "test", "بازبینی", "باگ", "تست"),
+        "web_ui_design.md": (
+            "website", "web ui", "next.js", "tailwind", "landing", "frontend",
+            "سایت", "طراحی", "ui", "ux", "مینیمال", "artistyar", "آرتیست",
+        ),
+        "product_ux.md": (
+            "journey", "onboarding", "checkout", "panel", "reservation flow",
+            "پنل", "رزرو", "سفارش", "ux", "تجربه کاربری",
+        ),
+        "telegram_ui.md": (
+            "telegram", "bot", "keyboard", "button", "پیام", "دکمه", "ربات",
+        ),
+        "ai_ui_design.md": (
+            "ai developer", "dashboard", "agent ui", "assistant", "دستیار",
+            "داشبورد", "agent",
+        ),
+        "artistyar_brand.md": (
+            "brand", "برند", "آرتیست‌یار", "artistyar", "voice", "tone",
+        ),
+        "security.md": (
+            "security", "auth", "permission", "secret", "token", "payment",
+            "امنیت", "دسترسی",
+        ),
+        "coding.md": (
+            "code", "implement", "feature", "refactor", "کد", "قابلیت", "api",
+        ),
+        "review.md": (
+            "review", "audit", "bug", "fix", "test", "بازبینی", "باگ", "تست",
+        ),
     }
-    MAX_SKILL_FILES = 6
-    MAX_SKILL_CHARS = 18_000
+    MAX_SKILL_FILES = 8
+    MAX_SKILL_CHARS = 22_000
     REDIS_LOCK_KEY = "rahyar:ai-agent:single-flight"
     REDIS_LOCK_TTL = 45 * 60
 
@@ -65,7 +88,6 @@ class AIAgentRuntime:
         return self.agent.repo / ".ai-agent" / "skills"
 
     def self_check(self) -> str:
-        """Run deterministic local checks without invoking the model or mutating files."""
         return AIAgentSelfChecker(self.agent.repo).format()
 
     def select_skills(self, task: str) -> list[str]:
@@ -99,7 +121,7 @@ class AIAgentRuntime:
 
     def _plan_prompt(self, task: str, task_type: str) -> str:
         skills = self.skill_context(task)
-        return f"""You are planning a change for the RahYar Academy Management System.
+        return f"""You are planning a change for the RahYar Academy Management System and/or ArtistYar website.
 This is READ-ONLY planning: do not modify files.
 
 TASK TYPE: {task_type}
