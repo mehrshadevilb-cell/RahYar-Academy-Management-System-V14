@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     DEFAULT_CARD_NUMBER: str | None = None
     DEFAULT_CARD_HOLDER: str | None = None
     SPOTPLAYER_API_KEY: str | None = None
+    # When true, every license create sends test=true to SpotPlayer (no paid quota).
+    # Production student payments should keep this false.
+    SPOTPLAYER_TEST_MODE: bool = False
     BOT_USERNAME: str | None = "Mb_tutorialbot"
     SITE_NAME: str = "آکادمی راه‌یار"
     SITE_TAGLINE: str = "آموزش حرفه‌ای موسیقی — دوره‌های دیجیتال و کلاس آنلاین"
@@ -122,9 +125,6 @@ class Settings(BaseSettings):
     def effective_ai_model(self) -> str:
         model = (self.AI_MODEL or self.AI_AGENT_MODEL or "gpt-4o-mini").strip()
         host = (urlparse(self.effective_ai_base_url).hostname or "").lower()
-        # AgentRouter's current OpenAI-compatible catalog does not expose the
-        # old mimo-v2.5-free identifier. Keep deployments that still have that
-        # stale value from hard-failing every Agent request with HTTP 404.
         if host.endswith("agentrouter.org") and model.lower() in {"mimo-v2.5-free", "mimo-v2.5"}:
             fallback = (self.AI_FALLBACK_MODEL or "gpt-5.5").strip()
             return fallback or "gpt-5.5"
