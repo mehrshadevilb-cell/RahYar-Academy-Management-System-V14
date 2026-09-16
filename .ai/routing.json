@@ -1,0 +1,12 @@
+{
+  "version": "1.0",
+  "project": "RahYar Academy Management System",
+  "agents": {
+    "architecture": ["backend", "database", "api-design"],
+    "debug": ["python-debugging", "testing", "error-analysis"],
+    "security": ["api-security", "dependency-review"],
+    "deployment": ["docker", "ci-cd", "infrastructure"],
+    "optimization": ["performance", "refactoring"]
+  },
+  "stack": ["Python", "FastAPI", "SQLAlchemy", "Alembic", "PostgreSQL", "Redis", "Telegram Bot"]
+}
