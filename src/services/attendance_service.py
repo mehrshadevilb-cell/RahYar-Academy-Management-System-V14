@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from src.database.models.attendance import Attendance, AttendanceStatus
 from src.database.models.online_enrollment import OnlineEnrollment
+from src.database.models.reservation import Reservation, ReservationStatus
 from src.services.online_enrollment_service import OnlineEnrollmentService
 
 DEFAULT_TERM_SIZE = 12
@@ -82,7 +83,7 @@ class AttendanceService:
             .all()
         )
         # Current open term = last incomplete chunk of term_size events
-        start = (len(rows) // term_size) * term_size
+        start = ((len(rows) - 1) // term_size) * term_size if rows else 0
         chunk = rows[start:]
         return sum(1 for r in chunk if r.status == AttendanceStatus.ABSENT)
 
@@ -125,6 +126,9 @@ class AttendanceService:
             db.add(row)
             enrollment.remaining_sessions = max(0, int(enrollment.remaining_sessions) - 1)
             enrollment.completed_sessions = int(enrollment.completed_sessions or 0) + 1
+            if enrollment.remaining_sessions == 0:
+                from src.database.models.online_enrollment import EnrollmentStatus
+                enrollment.status = EnrollmentStatus.ENDED
             db.commit()
             db.refresh(row)
             db.refresh(enrollment)
@@ -153,6 +157,7 @@ class AttendanceService:
 
         if deduct:
             enrollment.remaining_sessions = max(0, int(enrollment.remaining_sessions) - 1)
+            enrollment.completed_sessions = int(enrollment.completed_sessions or 0) + 1
             note_suffix = f"غیبت شماره {next_index} در ترم — جلسه کسر شد"
         else:
             note_suffix = f"غیبت شماره {next_index} در ترم — رایگان (بدون کسر)"
@@ -187,3 +192,49 @@ class AttendanceService:
             next_index,
             enrollment.remaining_sessions,
         )
+
+    def mark_attendance(
+        self,
+        db: Session,
+        enrollment: OnlineEnrollment,
+        session_date: str,
+        status: AttendanceStatus,
+        reservation_id: int | None = None,
+    ) -> AttendanceResult:
+        """Backward-compatible reservation-facing attendance entry point.
+
+        Older admin handlers call this method directly. Repeated callbacks for
+        the same reservation must not consume another session.
+        """
+        if reservation_id is not None:
+            existing = (
+                db.query(Attendance)
+                .filter(Attendance.reservation_id == reservation_id)
+                .first()
+            )
+            if existing:
+                return AttendanceResult(
+                    True,
+                    "حضور این جلسه قبلاً ثبت شده است.",
+                    existing.id,
+                    False,
+                    remaining_sessions=enrollment.remaining_sessions,
+                )
+
+        result = self.record(
+            db,
+            enrollment,
+            status,
+            session_date=session_date,
+        )
+        if result.attendance_id and reservation_id is not None:
+            row = db.query(Attendance).filter(Attendance.id == result.attendance_id).first()
+            if row:
+                row.reservation_id = reservation_id
+                reservation = db.query(Reservation).filter(Reservation.id == reservation_id).first()
+                if reservation and status == AttendanceStatus.PRESENT:
+                    reservation.status = ReservationStatus.COMPLETED
+                elif reservation and status == AttendanceStatus.CANCELLED:
+                    reservation.status = ReservationStatus.CANCELLED
+                db.commit()
+        return result

@@ -53,7 +53,9 @@ class ProviderModelHealthService:
         except urllib.error.HTTPError as exc:
             body = ""
             try:
-                body = exc.read().decode("utf-8", errors="replace")[:300]
+                raw_body = exc.read()
+                if raw_body:
+                    body = raw_body.decode("utf-8", errors="replace")[:300]
             except Exception:
                 pass
             return [], {
@@ -151,12 +153,22 @@ class ProviderModelHealthService:
         if retry_after:
             self.router._model_cooldown_until[key] = time.time() + min(max(int(retry_after), 1), 86400)
 
-    def test_all(self, *, timeout_seconds: int = 15) -> list[dict[str, Any]]:
+    def test_all(
+        self,
+        *,
+        timeout_seconds: int = 15,
+        discover_catalog: bool = True,
+        sort_results: bool = True,
+    ) -> list[dict[str, Any]]:
         providers = self.router.providers()
         results: list[dict[str, Any]] = []
         seen: set[tuple[str, str, str]] = set()
         for provider in providers:
-            discovered, discovery = self.discover(provider, timeout_seconds=min(timeout_seconds, 20))
+            discovered, discovery = (
+                self.discover(provider, timeout_seconds=min(timeout_seconds, 20))
+                if discover_catalog
+                else ([], None)
+            )
             catalog = discovered or [{"model_id": model, "display_name": model, "raw_metadata": {}} for model in provider.models]
             for item in catalog:
                 model = str(item.get("model_id") or "").strip()
@@ -197,7 +209,9 @@ class ProviderModelHealthService:
                 except urllib.error.HTTPError as exc:
                     body = ""
                     try:
-                        body = exc.read().decode("utf-8", errors="replace")[:300]
+                        raw_body = exc.read()
+                        if raw_body:
+                            body = raw_body.decode("utf-8", errors="replace")[:300]
                     except Exception:
                         pass
                     retry_after = self.router._retry_after(exc.headers, body)
@@ -212,5 +226,6 @@ class ProviderModelHealthService:
                 finally:
                     row["latency_ms"] = row["latency_ms"] or round((time.perf_counter() - started) * 1000)
                 results.append(row)
-        results.sort(key=lambda row: (row["pricing_status"] != "known_free", not row["ok"], row["latency_ms"], row["provider"], row["model"]))
+        if sort_results:
+            results.sort(key=lambda row: (row["pricing_status"] != "known_free", not row["ok"], row["latency_ms"], row["provider"], row["model"]))
         return results

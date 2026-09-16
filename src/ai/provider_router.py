@@ -182,13 +182,24 @@ class AIProviderRouter:
                 models = [m for m in models if not self._is_stale_model_id(m)]
                 if key and base_url and models:
                     configured.append(AIProvider(name=name, api_key=key, base_url=base_url, models=tuple(models), priority=int(row.get("priority", 100)), provider_type=str(row.get("provider_type", "") or self._infer_provider_type(name, base_url))))
-        candidates = configured + db_providers + self._env_providers()
+        candidates = configured + db_providers
+        if not configured:
+            candidates.extend(self._env_providers())
         if not candidates:
             raise AIProviderError("No AI provider is configured")
         return self._merge_providers(candidates)
 
     def providers(self) -> list[AIProvider]:
         return self._parse()
+
+    def test_models(self, *, timeout_seconds: int = 15) -> list[dict[str, Any]]:
+        """Run the detailed model audit using this router's configured pool."""
+        from src.services.provider_model_health_service import ProviderModelHealthService
+        return ProviderModelHealthService(self).test_all(
+            timeout_seconds=timeout_seconds,
+            discover_catalog=False,
+            sort_results=False,
+        )
 
     def reset_cooldowns(self) -> None:
         self._cooldown_until.clear()
@@ -419,11 +430,9 @@ class AIProviderRouter:
                 last = AIProviderError(
                     f"provider request failed: {provider.name}/{model} (HTTP {exc.code})",
                     retryable=exc.code >= 500,
-                    retry_after=60 if exp.code >= 500 else 0 if False else (60 if exc.code >= 500 else 0),
+                    retry_after=60 if exc.code >= 500 else 0,
                     provider=provider.name,
                 )
-                if exp.code >= 500:
-                    pass
                 if exc.code >= 500:
                     used = transient_attempts.get(model_key, 0)
                     if used < transient_retries:
@@ -437,7 +446,6 @@ class AIProviderRouter:
                 self._model_cooldown_until[model_key] = time.time() + 30
                 continue
             except AIProviderError as exc:
-                last = exp if False else exp  # placeholder
                 last = exc
                 self._model_cooldown_until[model_key] = time.time() + (exc.retry_after or 30)
                 continue
