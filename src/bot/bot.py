@@ -14,7 +14,7 @@ from src.bot.handlers import online_class, admin_online_enrollment, admin_online
 from src.bot.handlers import admin_discount, admin_logs, admin_broadcast, admin_reports, admin_dashboard
 from src.bot.handlers import admin_ai, admin_ai_self_check, referral, support, admin_support
 from src.bot.handlers import assignment, admin_assignments, progress
-from src.bot.handlers import music_generator, group_music_panel
+from src.bot.handlers import music_generator, group_music_panel, group_personality
 from src.bot.handlers import chat_assistant
 from src.bot.middlewares.database import DatabaseMiddleware
 from src.bot.middlewares.security import SecurityMiddleware
@@ -136,14 +136,12 @@ async def global_error_handler(event: ErrorEvent):
 
 
 def setup_handlers():
-    # admin_online_enrollment MUST be registered before admin_online so that
-    # student-picker callbacks (admin_online_enroll_, aoes_*, aoe*) take priority.
     for module in (
         start, course, profile, my_courses, payment, admin, online_class,
         admin_online_enrollment, admin_online, admin_installments, admin_discount, admin_logs,
         admin_broadcast, admin_reports, admin_dashboard, admin_ai, admin_ai_self_check,
         referral, support, admin_support, assignment, admin_assignments,
-        progress, group_music_panel, music_generator, ai_agent_knowledge,
+        progress, group_music_panel, group_personality, music_generator, ai_agent_knowledge,
         chat_assistant,
     ):
         dp.include_router(module.router)
