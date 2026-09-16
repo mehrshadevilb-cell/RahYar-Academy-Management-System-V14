@@ -17,6 +17,7 @@ from src.database.seed_products import seed_default_products
 from src.database.seed_online_courses import seed_default_online_courses
 from src.database.session import SessionLocal
 from src.services.ai.auto_configure import auto_configure_ai
+from src.services.ai.model_speed_monitor import model_speed_monitor
 from src.services.reminder_scheduler import InstallmentReminderScheduler
 from src.web.router import router as storefront_router
 
@@ -59,6 +60,7 @@ async def head_root():
 
 @app.get("/api/status")
 async def api_status():
+    snap = model_speed_monitor.snapshot()
     return JSONResponse({
         "status": "running",
         "service": "RahYar Bot + Web",
@@ -68,6 +70,9 @@ async def api_status():
         "knowledge": settings.KNOWLEDGE_ENABLED,
         "ai_agent_knowledge_runtime": True,
         "telegram_polling": True,
+        "ai_fastest_route": snap.get("route"),
+        "ai_probe_working": snap.get("working"),
+        "ai_probe_tested": snap.get("tested"),
     })
 
 
@@ -125,16 +130,13 @@ async def _auto_configure_ai_at_startup() -> None:
 
 
 async def _prepare_telegram_polling() -> None:
-    """Validate the token and clear webhook state before starting getUpdates."""
     me = await bot.get_me()
     logger.info("Telegram bot authenticated: @%s (id=%s)", me.username or "unknown", me.id)
-    # Do not discard updates during an ordinary restart or transient conflict.
     await bot.delete_webhook(drop_pending_updates=False)
     logger.info("Telegram webhook cleared; polling can start")
 
 
 async def _poll_telegram_forever() -> None:
-    """Keep polling alive through transient Telegram/network failures."""
     restart_delay = max(2, int(os.getenv("TELEGRAM_POLLING_RESTART_DELAY_SECONDS", "5")))
     max_delay = max(restart_delay, int(os.getenv("TELEGRAM_POLLING_MAX_RESTART_DELAY_SECONDS", "60")))
     consecutive_failures = 0
@@ -157,8 +159,7 @@ async def _poll_telegram_forever() -> None:
         except TelegramConflictError:
             consecutive_failures += 1
             logger.error(
-                "Telegram polling conflict (another getUpdates consumer is active); "
-                "retrying after %ss",
+                "Telegram polling conflict (another getUpdates consumer is active); retrying after %ss",
                 min(max_delay, restart_delay * min(2 ** (consecutive_failures - 1), 8)),
             )
         except (asyncio.CancelledError, KeyboardInterrupt):
@@ -182,10 +183,12 @@ async def start_bot():
     installment_scheduler = InstallmentReminderScheduler(bot)
     installment_scheduler.start()
     ai_agent_knowledge.start()
+    model_speed_monitor.start()
 
     try:
         await _poll_telegram_forever()
     finally:
+        await model_speed_monitor.stop()
         await ai_agent_knowledge.stop()
         if installment_scheduler._task:
             installment_scheduler._task.cancel()
