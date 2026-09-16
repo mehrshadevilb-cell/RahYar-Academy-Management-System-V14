@@ -84,7 +84,7 @@ async def send_error_report(event: ErrorEvent, exc: Exception):
 
 @dp.error()
 async def global_error_handler(event: ErrorEvent):
-    exc = event.exception
+    exp = event.exception
     callback_query = event.update.callback_query
 
     if callback_query:
@@ -93,15 +93,15 @@ async def global_error_handler(event: ErrorEvent):
         except Exception:
             logger.exception("Failed callback answer")
 
-    if isinstance(exc, TelegramConflictError):
-        logger.warning("Telegram conflict: %s", exc)
+    if isinstance(exp, TelegramConflictError):
+        logger.warning("Telegram conflict: %s", exp)
         return True
 
-    if isinstance(exc, TelegramUnauthorizedError):
+    if isinstance(exp, TelegramUnauthorizedError):
         logger.error("Telegram token invalid")
         return True
 
-    if is_benign_telegram_error(exc):
+    if is_benign_telegram_error(exp):
         logger.info("Benign Telegram error: %s", exp)
         return True
 
@@ -116,13 +116,19 @@ async def global_error_handler(event: ErrorEvent):
 
     if chat_id:
         try:
-            await bot.send_message(chat_id=chat_id, text="⚠️ متأسفانه خطایی رخ داد. لطفاً دوباره تلاش کنید یا از «🆘 پشتیبانی» پیام بگذارید.")
+            await bot.send_message(
+                chat_id=chat_id,
+                text="⚠️ متأسفانه خطایی رخ داد. لطفاً دوباره تلاش کنید یا از «🆘 پشتیبانی» پیام بگذارید.",
+            )
         except Exception:
             logger.exception("Failed user error message")
 
-    if settings.OWNER_ID and should_notify_owner(exc):
+    if settings.OWNER_ID and should_notify_owner(exp):
         try:
-            await bot.send_message(chat_id=settings.OWNER_ID, text=f"🚨 خطای فنی: {type(exc).__name__}\n{str(exc)[:500]}")
+            await bot.send_message(
+                chat_id=settings.OWNER_ID,
+                text=f"🚨 خطای فنی: {type(exp).__name__}\n{str(exp)[:500]}",
+            )
         except Exception:
             logger.exception("Failed owner notification")
 
