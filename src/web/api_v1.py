@@ -29,6 +29,7 @@ class ProductOut(BaseModel):
     description: str | None = None
     price: int
     is_active: bool = True
+    delivery_type: str = "spotplayer"
 
 
 class ClassOut(BaseModel):
@@ -83,6 +84,7 @@ async def list_products(db: Session = Depends(get_db)):
             description=getattr(p, "description", None),
             price=int(p.price or 0),
             is_active=bool(p.is_active),
+            delivery_type=getattr(p.delivery_type, "value", str(p.delivery_type or "spotplayer")),
         )
         for p in products
     ]
@@ -99,6 +101,7 @@ async def get_product(product_id: int, db: Session = Depends(get_db)):
         description=getattr(product, "description", None),
         price=int(product.price or 0),
         is_active=bool(product.is_active),
+        delivery_type=getattr(product.delivery_type, "value", str(product.delivery_type or "spotplayer")),
     )
 
 
