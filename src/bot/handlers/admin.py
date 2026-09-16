@@ -19,7 +19,6 @@ from src.bot.keyboards.admin_products_keyboard import (
 from src.services.course_service import CourseService
 from src.services.payment_service import PaymentService
 from src.services.payment_card_service import PaymentCardService
-from src.services.stats_service import StatsService
 from src.services.product_integration_service import ProductIntegrationService
 from src.services.admin_log_service import AdminLogService
 from src.core.constants import admin_actions
@@ -30,7 +29,6 @@ router = Router()
 course_service = CourseService()
 payment_service = PaymentService()
 payment_card_service = PaymentCardService()
-stats_service = StatsService()
 product_integration_service = ProductIntegrationService()
 admin_log_service = AdminLogService()
 
@@ -371,31 +369,31 @@ async def admin_card_add_start(callback: CallbackQuery, state: FSMContext):
     if not is_admin_user(callback.from_user):
         await callback.answer("⛔️ شما دسترسی ندارید.", show_alert=True)
         return
-    await state.set_state(AdminState.waiting_new_card_number)
-    await callback.message.answer("شماره کارت جدید را بفرستید (فقط عدد، بدون فاصله):")
+    await state.set_state(AdminState.waiting_card_number)
+    await callback.message.answer("شماره کارت جدید را بفرستید (۱۶ رقم):")
     await callback.answer()
 
 
-@router.message(AdminState.waiting_new_card_number)
-async def admin_card_add_number(message: Message, state: FSMContext):
+@router.message(AdminState.waiting_card_number)
+async def admin_card_number(message: Message, state: FSMContext):
     if not is_admin_user(message.from_user):
         return
-    card_number = (message.text or "").replace(" ", "").replace("-", "").strip()
-    if not card_number.isdigit() or len(card_number) != 16:
-        await message.answer("❌ شماره کارت باید ۱۶ رقم و فقط عدد باشد. دوباره بفرستید:")
+    card_number = (message.text or "").replace(" ", "").strip()
+    if not card_number.isdigit() or len(card_number) < 12:
+        await message.answer("❌ شماره کارت معتبر نیست. دوباره بفرستید:")
         return
     await state.update_data(card_number=card_number)
-    await state.set_state(AdminState.waiting_new_card_holder)
+    await state.set_state(AdminState.waiting_card_holder)
     await message.answer("نام صاحب کارت را بفرستید:")
 
 
-@router.message(AdminState.waiting_new_card_holder)
-async def admin_card_add_holder(message: Message, state: FSMContext, db):
+@router.message(AdminState.waiting_card_holder)
+async def admin_card_holder(message: Message, state: FSMContext, db):
     if not is_admin_user(message.from_user):
         return
     card_holder = (message.text or "").strip()
     if not card_holder:
-        await message.answer("❌ نام نمی‌تواند خالی باشد. دوباره بفرستید:")
+        await message.answer("❌ نام نمی‌تواند خالی باشد.")
         return
     data = await state.get_data()
     card_number = data.get("card_number")
@@ -403,15 +401,3 @@ async def admin_card_add_holder(message: Message, state: FSMContext, db):
     admin_log_service.log(db, message.from_user.id, admin_actions.PAYMENT_CARD_ADD, f"کارت پرداخت جدید به نام «{card_holder}» ثبت و فعال شد")
     await state.clear()
     await message.answer("✅ کارت جدید ثبت و فعال شد.", reply_markup=admin_back_button())
-
-
-# ---------------- Stats ----------------
-
-@router.callback_query(F.data == "admin_stats")
-async def admin_stats_view(callback: CallbackQuery, db):
-    if not is_admin_user(callback.from_user):
-        await callback.answer("⛔️ شما دسترسی ندارید.", show_alert=True)
-        return
-    summary = stats_service.get_summary(db)
-    await callback.message.edit_text(text=f"📊 آمار کلی\n\n👥 تعداد کاربران: {summary['total_users']:,}\n✅ پرداخت‌های تایید شده: {summary['approved_count']:,}\n⏳ پرداخت‌های در انتظار: {summary['pending_count']:,}\n💰 مجموع درآمد: {summary['total_revenue']:,} تومان\n", reply_markup=admin_back_button())
-    await callback.answer()
