@@ -25,6 +25,11 @@ class AdminState(StatesGroup):
     waiting_online_course_field_edit = State()
     waiting_online_slot = State()
 
+    # --- Online enrollment management ---
+    waiting_enrollment_sessions = State()
+    waiting_enrollment_fee = State()
+    waiting_enrollment_note = State()
+
     # --- Discount codes ---
     waiting_discount_code_text = State()
     waiting_discount_code_type = State()

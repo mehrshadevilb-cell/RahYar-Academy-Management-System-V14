@@ -1,8 +1,4 @@
-"""
-Action-name constants for `AdminLog.action`. Kept as plain strings (not a
-DB enum) so new action types can be added without a migration - the
-column is just an indexed `String(50)`.
-"""
+"""Action-name constants for AdminLog.action."""
 
 PRODUCT_TOGGLE = "product_toggle"
 PRODUCT_PRICE_CHANGE = "product_price_change"
@@ -22,6 +18,9 @@ ONLINE_COURSE_CREATE = "online_course_create"
 ONLINE_COURSE_EDIT = "online_course_edit"
 ONLINE_COURSE_TOGGLE = "online_course_toggle"
 ONLINE_ENROLLMENT_CREATE = "online_enrollment_create"
+ONLINE_ENROLLMENT_EDIT = "online_enrollment_edit"
+ONLINE_PURCHASE_APPROVE = "online_purchase_approve"
+ONLINE_PURCHASE_REJECT = "online_purchase_reject"
 RESERVATION_CONFIRM = "reservation_confirm"
 RESERVATION_REJECT = "reservation_reject"
 ATTENDANCE_MARK = "attendance_mark"

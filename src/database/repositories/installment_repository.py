@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 
-from src.database.models.installment import Installment
+from src.database.models.installment import Installment, InstallmentStatus
 
 
 class InstallmentRepository:
@@ -19,6 +19,17 @@ class InstallmentRepository:
             .first()
         )
 
+    def get_pending_for_enrollment(self, db: Session, enrollment_id: int):
+        return (
+            db.query(Installment)
+            .filter(
+                Installment.enrollment_id == enrollment_id,
+                Installment.status == InstallmentStatus.PENDING,
+            )
+            .order_by(Installment.installment_number.desc())
+            .first()
+        )
+
     def get_by_id(self, db: Session, installment_id: int):
         return (
             db.query(Installment)
@@ -27,8 +38,6 @@ class InstallmentRepository:
         )
 
     def get_pending(self, db: Session):
-        from src.database.models.installment import InstallmentStatus
-
         return (
             db.query(Installment)
             .filter(Installment.status == InstallmentStatus.PENDING)
@@ -37,8 +46,6 @@ class InstallmentRepository:
         )
 
     def get_overdue(self, db: Session):
-        from src.database.models.installment import InstallmentStatus
-
         return (
             db.query(Installment)
             .filter(Installment.status == InstallmentStatus.OVERDUE)
