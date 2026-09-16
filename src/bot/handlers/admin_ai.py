@@ -16,6 +16,9 @@ from src.services.ai_agent_service import AIAgentError
 router = Router()
 settings = get_settings()
 
+# Only surface "در حال تحلیل" when the model is genuinely slow.
+_SLOW_RESPONSE_SECONDS = 1.5
+
 
 def _owner(user_id: int, username: str | None = None) -> bool:
     return is_admin_user(user_id, username)
@@ -81,6 +84,24 @@ def _home_text() -> str:
         "برای شروع یک عملیات انتخاب کنید.\n"
         "<i>Write taskها → Plan → Code → Test → PR</i>"
     )
+
+
+async def _run_with_optional_progress(message: Message, work_coro):
+    """Await work; only send progress text if it takes longer than the threshold."""
+    task = asyncio.create_task(work_coro)
+    progress_msg: Message | None = None
+    try:
+        try:
+            return await asyncio.wait_for(asyncio.shield(task), timeout=_SLOW_RESPONSE_SECONDS)
+        except asyncio.TimeoutError:
+            progress_msg = await message.answer("⏳ در حال تحلیل...")
+            return await task
+    finally:
+        if progress_msg is not None:
+            try:
+                await progress_msg.delete()
+            except Exception:
+                pass
 
 
 @router.callback_query(F.data == "admin_ai")
@@ -245,9 +266,11 @@ async def ai_consult_message(message: Message, state: FSMContext):
         "Do not modify files or expose secrets. Answer in Persian; paths/symbols in English.\n\n"
         + (debug_request(text) if mode == "debug" else f"OWNER INPUT:\n{text}")
     )
-    await message.answer("⏳ در حال تحلیل...")
     try:
-        result = await asyncio.to_thread(runtime.agent.analyze, prompt)
+        result = await _run_with_optional_progress(
+            message,
+            asyncio.to_thread(runtime.agent.analyze, prompt),
+        )
     except AIAgentError as exc:
         result = f"❌ {_safe_error(exc)}"
     for part in _chunk(f"{'🐞' if mode == 'debug' else '💬'} نتیجه\n\n{result}"):

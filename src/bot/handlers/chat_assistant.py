@@ -1,5 +1,7 @@
 """Chat assistant: explicit entry point plus a minimal free-text fallback."""
 
+import asyncio
+
 from aiogram import F, Router
 from aiogram.filters import StateFilter
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, ReplyKeyboardMarkup, KeyboardButton
@@ -25,6 +27,9 @@ ASSISTANT_HINTS = ReplyKeyboardMarkup(
 )
 _recent_questions: dict[int, tuple[str, str]] = {}
 _MAX_RECENT_QUESTIONS = 200
+# Show the visible "analyzing" line only when the model is truly slow.
+_SLOW_RESPONSE_SECONDS = 1.5
+_MAX_ANSWER_CHUNK = 3900
 _CASUAL_MESSAGES = {
     "سلام", "درود", "خوبی", "مرسی", "ممنون", "خداحافظ", "bye", "hi", "hello", "thanks",
 }
@@ -35,6 +40,10 @@ _QUESTION_STARTERS = (
 _QUESTION_CONTEXT = (
     "سوال", "راهنما", "قیمت", "خرید", "پرداخت", "دسترسی", "دوره", "خطا", "ارور", "مشکل",
     "میکس", "مستر", "ضبط", "plugin", "daw", "مقایسه", "پیشنهاد", "تنظیم",
+)
+_FOLLOW_UP_MARKERS = (
+    "و بعد", "بعدش", "ادامه بده", "بیشتر بگو", "ادامه", "بعدی", "همینطور",
+    "continue", "more", "and then",
 )
 
 
@@ -51,9 +60,15 @@ def assistant_feedback_keyboard() -> InlineKeyboardMarkup:
 
 
 def should_show_feedback(question: str) -> bool:
-    """Show feedback only when the user asked for information or help."""
+    """Show feedback only for a complete information/help question.
+
+    Partial follow-ups ("ادامه بده", "بیشتر بگو") and casual turns must not
+    get feedback buttons — those are mid-conversation, not finished answers.
+    """
     normalized = " ".join((question or "").casefold().strip().split())
     if not normalized or normalized in _CASUAL_MESSAGES:
+        return False
+    if any(marker in normalized for marker in _FOLLOW_UP_MARKERS) and len(normalized) < 40:
         return False
     if normalized.endswith(("!", "！")) and "?" not in normalized and "؟" not in normalized:
         return False
@@ -64,6 +79,13 @@ def should_show_feedback(question: str) -> bool:
     return any(token in normalized for token in _QUESTION_CONTEXT)
 
 
+def _chunk_answer(text: str, size: int = _MAX_ANSWER_CHUNK) -> list[str]:
+    text = text or ""
+    if len(text) <= size:
+        return [text]
+    return [text[i : i + size] for i in range(0, len(text), size)]
+
+
 def _remember_question(sent_message: Message | None, telegram_id: str, question: str) -> None:
     message_id = getattr(sent_message, "message_id", None)
     if message_id is None:
@@ -72,6 +94,32 @@ def _remember_question(sent_message: Message | None, telegram_id: str, question:
     if len(_recent_questions) > _MAX_RECENT_QUESTIONS:
         oldest = next(iter(_recent_questions))
         _recent_questions.pop(oldest, None)
+
+
+async def _answer_with_optional_progress(message: Message, db, user_message: str) -> str:
+    """Run the model; only surface "در حال تحلیل" if the reply is slow."""
+    await message.bot.send_chat_action(message.chat.id, "typing")
+    work = asyncio.create_task(
+        asyncio.to_thread(
+            chat_assistant_service.answer,
+            db,
+            str(message.from_user.id),
+            user_message,
+        )
+    )
+    progress_msg: Message | None = None
+    try:
+        try:
+            return await asyncio.wait_for(asyncio.shield(work), timeout=_SLOW_RESPONSE_SECONDS)
+        except asyncio.TimeoutError:
+            progress_msg = await message.answer("⏳ در حال تحلیل...")
+            return await work
+    finally:
+        if progress_msg is not None:
+            try:
+                await progress_msg.delete()
+            except Exception:
+                pass
 
 
 @router.message(F.text == MENU_BUTTON_TEXT)
@@ -94,13 +142,8 @@ async def chat_fallback(message: Message, db):
         await message.answer("❌ اول /start رو بزن.")
         return
 
-    await message.bot.send_chat_action(message.chat.id, "typing")
     try:
-        reply = chat_assistant_service.answer(
-            db=db,
-            telegram_id=str(message.from_user.id),
-            user_message=message.text,
-        )
+        reply = await _answer_with_optional_progress(message, db, message.text)
     except ChatAssistantError as exc:
         code = str(exc)
         if code == "empty_message":
@@ -111,14 +154,21 @@ async def chat_fallback(message: Message, db):
         await message.answer(DISABLED_MESSAGE_FA, parse_mode="HTML")
         return
 
+    formatted = format_assistant_answer(reply)
+    chunks = _chunk_answer(formatted)
     question_like = should_show_feedback(message.text)
-    sent_message = await message.answer(
-        format_assistant_answer(reply),
-        parse_mode="HTML",
-        disable_web_page_preview=True,
-        reply_markup=assistant_feedback_keyboard() if question_like else None,
-    )
-    if question_like:
+    sent_message = None
+    for index, part in enumerate(chunks):
+        is_last = index == len(chunks) - 1
+        # Feedback only on the final complete answer message — never on mid-chunks.
+        keyboard = assistant_feedback_keyboard() if (question_like and is_last) else None
+        sent_message = await message.answer(
+            part,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+            reply_markup=keyboard,
+        )
+    if question_like and sent_message is not None:
         _remember_question(sent_message, str(message.from_user.id), message.text)
 
 
@@ -136,16 +186,36 @@ async def assistant_retry(callback, db):
         await callback.answer("برای پاسخ بهتر، سؤال را دوباره بفرستید.", show_alert=True)
         return
     telegram_id, question = source
+    await callback.answer("⏳ در حال ساخت پاسخ بهتر...")
     try:
-        reply = chat_assistant_service.answer(db=db, telegram_id=telegram_id, user_message=question)
+        work = asyncio.create_task(
+            asyncio.to_thread(chat_assistant_service.answer, db, telegram_id, question)
+        )
+        try:
+            reply = await asyncio.wait_for(asyncio.shield(work), timeout=_SLOW_RESPONSE_SECONDS)
+            progress_msg = None
+        except asyncio.TimeoutError:
+            progress_msg = await callback.message.answer("⏳ در حال تحلیل...")
+            reply = await work
+        if progress_msg is not None:
+            try:
+                await progress_msg.delete()
+            except Exception:
+                pass
     except ChatAssistantError:
-        await callback.answer("فعلاً امکان تولید پاسخ جدید نیست.", show_alert=True)
+        await callback.message.answer("فعلاً امکان تولید پاسخ جدید نیست.")
         return
-    sent_message = await callback.message.answer(
-        format_assistant_answer(reply),
-        parse_mode="HTML",
-        disable_web_page_preview=True,
-        reply_markup=assistant_feedback_keyboard(),
-    )
-    _remember_question(sent_message, telegram_id, question)
-    await callback.answer("پاسخ جدید آماده شد.")
+
+    formatted = format_assistant_answer(reply)
+    chunks = _chunk_answer(formatted)
+    sent_message = None
+    for index, part in enumerate(chunks):
+        is_last = index == len(chunks) - 1
+        sent_message = await callback.message.answer(
+            part,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+            reply_markup=assistant_feedback_keyboard() if is_last else None,
+        )
+    if sent_message is not None:
+        _remember_question(sent_message, telegram_id, question)
