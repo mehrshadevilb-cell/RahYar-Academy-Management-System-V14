@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     BOT_TOKEN: str = ""
     SECRET_KEY: str = ""
     OWNER_ID: int = 0
+    # Comma-separated Telegram numeric user ids that receive FULL admin access
+    # (same capabilities as OWNER_ID). Prefer this over usernames when possible.
+    ADMIN_IDS: str = ""
     ADMIN_USERNAMES: str = "Hi_all"
     NEW_MEMBER_NOTIFICATION_CHAT_ID: int = 0
     PROXY_URL: str | None = None
@@ -48,6 +51,12 @@ class Settings(BaseSettings):
     BOT_USERNAME: str | None = "Mb_tutorialbot"
     SITE_NAME: str = "آکادمی راه‌یار"
     SITE_TAGLINE: str = "آموزش حرفه‌ای موسیقی — دوره‌های دیجیتال و کلاس آنلاین"
+
+    # Group UX
+    GROUP_WELCOME_ENABLED: bool = True
+    GROUP_ASK_ENABLED: bool = True
+    GROUP_ASK_MAX_PER_HOUR: int = 8
+    GROUP_WELCOME_TEXT: str = ""
 
     AI_AGENT_ENABLED: bool = True
     AI_AGENT_REPO_PATH: str = "."
@@ -122,9 +131,6 @@ class Settings(BaseSettings):
     def effective_ai_model(self) -> str:
         model = (self.AI_MODEL or self.AI_AGENT_MODEL or "gpt-4o-mini").strip()
         host = (urlparse(self.effective_ai_base_url).hostname or "").lower()
-        # AgentRouter's current OpenAI-compatible catalog does not expose the
-        # old mimo-v2.5-free identifier. Keep deployments that still have that
-        # stale value from hard-failing every Agent request with HTTP 404.
         if host.endswith("agentrouter.org") and model.lower() in {"mimo-v2.5-free", "mimo-v2.5"}:
             fallback = (self.AI_FALLBACK_MODEL or "gpt-5.5").strip()
             return fallback or "gpt-5.5"
@@ -173,6 +179,20 @@ class Settings(BaseSettings):
         return {value.strip().lstrip("@").casefold() for value in self.ADMIN_USERNAMES.split(",") if value.strip()}
 
     @property
+    def admin_ids(self) -> set[int]:
+        """Numeric Telegram user ids with full admin access."""
+        result: set[int] = set()
+        for value in (self.ADMIN_IDS or "").split(","):
+            raw = value.strip()
+            if not raw:
+                continue
+            try:
+                result.add(int(raw))
+            except ValueError:
+                continue
+        return result
+
+    @property
     def new_member_notification_chat_id(self) -> int:
         return self.NEW_MEMBER_NOTIFICATION_CHAT_ID or self.OWNER_ID
 
@@ -182,6 +202,23 @@ class Settings(BaseSettings):
             return None
         username = self.BOT_USERNAME.lstrip("@").strip()
         return f"https://t.me/{username}" if username else None
+
+    def default_group_welcome_text(self) -> str:
+        custom = (self.GROUP_WELCOME_TEXT or "").strip()
+        if custom:
+            return custom
+        bot_link = self.bot_deep_link_base or "ربات راه‌یار"
+        return (
+            "سلام {name} 👋\n\n"
+            f"به گروه <b>{self.SITE_NAME}</b> خوش اومدی.\n\n"
+            "📋 <b>قوانین کوتاه:</b>\n"
+            "• احترام متقابل\n"
+            "• اسپم و تبلیغ ممنوع\n"
+            "• سؤال فنی را با /ask بپرس\n"
+            "• خرید و پشتیبانی از طریق ربات\n\n"
+            f"🤖 شروع ربات: {bot_link}\n"
+            "دستورات گروه: /ask — /ai_generator"
+        )
 
 
 @lru_cache
