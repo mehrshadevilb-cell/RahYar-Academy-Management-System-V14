@@ -26,6 +26,12 @@ def admin_main_menu():
                 InlineKeyboardButton(text="⚙️ مدیریت کلاس‌های آنلاین", callback_data="admin_online_manage"),
             ],
             [
+                InlineKeyboardButton(
+                    text="💬 ثبت کلاس با چت",
+                    callback_data="admin_online_chat_enroll",
+                )
+            ],
+            [
                 InlineKeyboardButton(text="📅 رزروهای در انتظار", callback_data="admin_reservations"),
                 InlineKeyboardButton(text="💰 اقساط", callback_data="admin_installments"),
             ],

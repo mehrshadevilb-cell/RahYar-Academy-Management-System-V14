@@ -15,7 +15,7 @@ from src.bot.handlers import admin_discount, admin_logs, admin_broadcast, admin_
 from src.bot.handlers import admin_ai, admin_ai_self_check, referral, support, admin_support
 from src.bot.handlers import assignment, admin_assignments, progress
 from src.bot.handlers import music_generator, group_music_panel
-from src.bot.handlers import chat_assistant
+from src.bot.handlers import chat_assistant, admin_online_chat_enroll
 from src.bot.middlewares.database import DatabaseMiddleware
 from src.bot.middlewares.security import SecurityMiddleware
 from src.services.ai_agent_knowledge_runtime import AIAgentKnowledgeRuntime
@@ -141,7 +141,8 @@ def setup_handlers():
     for module in (
         start, course, profile, my_courses, payment, admin, online_class,
         admin_online_enrollment, admin_online, admin_installments, admin_discount, admin_logs,
-        admin_broadcast, admin_reports, admin_dashboard, admin_ai, admin_ai_self_check,
+        admin_broadcast, admin_reports, admin_dashboard, admin_online_chat_enroll,
+        admin_ai, admin_ai_self_check,
         referral, support, admin_support, assignment, admin_assignments,
         progress, group_music_panel, music_generator, ai_agent_knowledge,
         chat_assistant,

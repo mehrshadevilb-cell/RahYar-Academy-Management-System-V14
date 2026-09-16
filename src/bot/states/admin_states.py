@@ -29,6 +29,7 @@ class AdminState(StatesGroup):
     waiting_enrollment_sessions = State()
     waiting_enrollment_fee = State()
     waiting_enrollment_note = State()
+    waiting_online_chat_enroll = State()
 
     # --- Discount codes ---
     waiting_discount_code_text = State()
