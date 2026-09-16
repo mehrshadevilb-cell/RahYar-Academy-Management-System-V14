@@ -9,7 +9,7 @@ from src.core.config.settings import get_settings
 from src.core.logging.logger import get_logger
 from src.bot.telegram_errors import is_benign_telegram_error, should_notify_owner
 
-from src.bot.handlers import start, course, profile, my_courses, payment, admin
+from src.bot.handlers import start, course, profile, my_courses, payment, payment_receipt_ux, admin
 from src.bot.handlers import online_class, admin_online_enrollment, admin_online, admin_installments
 from src.bot.handlers import admin_discount, admin_logs, admin_broadcast, admin_reports
 from src.bot.handlers import admin_ai, admin_ai_self_check, referral, support, admin_support
@@ -130,10 +130,12 @@ async def global_error_handler(event: ErrorEvent):
 
 
 def setup_handlers():
+    # payment before payment_receipt_ux so photo/document receipt wins over the
+    # generic waiting_receipt text guidance handler.
     # admin_online_enrollment MUST be registered before admin_online so that
     # student-picker callbacks (admin_online_enroll_, aoes_*, aoe*) take priority.
     for module in (
-        start, course, profile, my_courses, payment, admin, online_class,
+        start, course, profile, my_courses, payment, payment_receipt_ux, admin, online_class,
         admin_online_enrollment, admin_online, admin_installments, admin_discount, admin_logs,
         admin_broadcast, admin_reports, admin_ai, admin_ai_self_check,
         referral, support, admin_support, assignment, admin_assignments,
