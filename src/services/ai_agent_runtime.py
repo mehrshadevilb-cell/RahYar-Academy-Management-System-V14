@@ -15,6 +15,11 @@ from src.database.models.admin_log import AdminLog
 from src.database.session import SessionLocal
 from src.services.ai_agent_service import AIAgentError
 from src.services.ai_agent_self_check import AIAgentSelfChecker
+from src.services.ai_agent_speed import (
+    ordered_skills_for_task,
+    skill_budget_chars,
+    wants_debug_skill,
+)
 from src.services.routed_ai_agent_service import RoutedAIAgentService
 
 try:
@@ -36,6 +41,10 @@ class AgentPlan:
 class AIAgentRuntime:
     ALWAYS_SKILLS = ("security.md", "coding.md", "review.md")
     KEYWORD_SKILLS = {
+        "debug.md": (
+            "bug", "error", "exception", "traceback", "stack", "crash", "fix",
+            "broken", "regression", "باگ", "خطا", "خرابی", "اصلاح",
+        ),
         "telegram_ui.md": ("telegram", "bot", "keyboard", "button", "ui", "ux", "پیام", "دکمه"),
         "ai_ui_design.md": ("ai developer", "dashboard", "agent ui", "agent", "پنل", "داشبورد"),
         "security.md": ("security", "auth", "permission", "secret", "token", "payment", "امنیت", "دسترسی"),
@@ -65,31 +74,34 @@ class AIAgentRuntime:
         return self.agent.repo / ".ai-agent" / "skills"
 
     def self_check(self) -> str:
-        """Run deterministic local checks without invoking the model or mutating files."""
         return AIAgentSelfChecker(self.agent.repo).format()
 
-    def select_skills(self, task: str) -> list[str]:
+    def select_skills(self, task: str, task_type: str = "feature") -> list[str]:
         text = (task or "").lower()
-        selected: list[str] = []
+        available: list[str] = []
         for name in self.ALWAYS_SKILLS:
             if (self.skills_dir / name).is_file():
-                selected.append(name)
+                available.append(name)
+        if wants_debug_skill(task, task_type) and (self.skills_dir / "debug.md").is_file():
+            available.append("debug.md")
         for name, keywords in self.KEYWORD_SKILLS.items():
-            if name in selected or len(selected) >= self.MAX_SKILL_FILES:
+            if name in available or len(available) >= self.MAX_SKILL_FILES:
                 continue
             if any(keyword in text for keyword in keywords) and (self.skills_dir / name).is_file():
-                selected.append(name)
-        return selected[: self.MAX_SKILL_FILES]
+                available.append(name)
+        ordered = ordered_skills_for_task(task, task_type, available)
+        return ordered[: self.MAX_SKILL_FILES]
 
-    def skill_context(self, task: str) -> str:
+    def skill_context(self, task: str, task_type: str = "feature") -> str:
+        budget = skill_budget_chars(task_type, task)
         chunks: list[str] = []
         used = 0
-        for name in self.select_skills(task):
+        for name in self.select_skills(task, task_type):
             try:
                 content = (self.skills_dir / name).read_text(encoding="utf-8")
             except OSError:
                 continue
-            remaining = self.MAX_SKILL_CHARS - used
+            remaining = budget - used
             if remaining <= 0:
                 break
             content = content[:remaining]
@@ -98,10 +110,16 @@ class AIAgentRuntime:
         return "\n\n".join(chunks)
 
     def _plan_prompt(self, task: str, task_type: str) -> str:
-        skills = self.skill_context(task)
+        skills = self.skill_context(task, task_type)
+        speed_hint = ""
+        if wants_debug_skill(task, task_type):
+            speed_hint = (
+                "\nSPEED MODE: prioritize root-cause evidence, minimal file set, "
+                "and a focused regression test. Avoid broad refactors.\n"
+            )
         return f"""You are planning a change for the RahYar Academy Management System.
 This is READ-ONLY planning: do not modify files.
-
+{speed_hint}
 TASK TYPE: {task_type}
 TASK:
 {task}
@@ -151,7 +169,7 @@ Keep the plan minimal, specific and safe. Never request secrets."""
             + "\nInspect:\n- " + "\n- ".join(plan.inspect or ["the relevant source and tests"])
             + "\nRisks:\n- " + "\n- ".join(plan.risks or ["regression and security exposure"])
             + "\nRequired tests:\n- " + "\n- ".join(plan.tests or ["compileall and the full pytest suite"])
-            + f"\n\nSelected skills:\n{self.skill_context(task) or '(skills unavailable)'}\n\n"
+            + f"\n\nSelected skills:\n{self.skill_context(task, task_type) or '(skills unavailable)'}\n\n"
             "Implement this plan. Preserve the existing architecture. Do not expose secrets, "
             "modify protected files, weaken tests, or target main. Return complete file contents "
             "only in the normal agent JSON schema."
