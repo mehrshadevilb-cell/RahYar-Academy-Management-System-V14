@@ -5,21 +5,39 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from sqlalchemy import text
+
+from src.database.session import SessionLocal
+
+
+async def _check_database() -> str:
+    """Check database availability without breaking the health endpoint."""
+    try:
+        with SessionLocal() as session:
+            session.execute(text("SELECT 1"))
+        return "ok"
+    except Exception:
+        return "error"
+
 
 async def build_health_report(build_id: str = "unknown") -> dict[str, Any]:
-    """Return a safe health payload.
+    """Return production health information.
 
-    Dependency checks are intentionally isolated here so they can be expanded
-    without increasing startup complexity in main.py.
+    Checks are isolated from application startup so monitoring failures do not
+    affect bot availability.
     """
+    database_status = await _check_database()
+
+    checks = {
+        "application": "ok",
+        "database": database_status,
+        "redis": "pending",
+        "telegram": "pending",
+    }
+
     return {
-        "ok": True,
+        "ok": all(value in {"ok", "pending"} for value in checks.values()),
         "build": build_id,
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "checks": {
-            "application": "ok",
-            "database": "pending",
-            "redis": "pending",
-            "telegram": "pending",
-        },
+        "checks": checks,
     }
