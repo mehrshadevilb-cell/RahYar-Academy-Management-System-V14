@@ -6,6 +6,7 @@ import os
 
 from src.database.session import SessionLocal
 from src.services.ai.model_service import AIModelService
+from src.services.ai.provider_bootstrap import AIProviderBootstrapService
 
 logger = logging.getLogger(__name__)
 
@@ -13,7 +14,7 @@ DEFAULT_INTERVAL_SECONDS = 6 * 60 * 60
 
 
 class AIModelRefreshScheduler:
-    """Periodically refresh catalogs and choose a working free model."""
+    """Continuously discover providers/models and probe their live availability."""
 
     def __init__(self, interval_seconds: int | None = None) -> None:
         configured = interval_seconds or int(
@@ -32,6 +33,13 @@ class AIModelRefreshScheduler:
             self._task = None
 
     async def _loop(self) -> None:
+        # Do not wait six hours after deployment before discovering newly added
+        # API keys. The first scan runs immediately, then repeats on schedule.
+        try:
+            await self.run_once()
+        except Exception:
+            logger.exception("Initial AI provider/model scan failed")
+
         while True:
             try:
                 await asyncio.sleep(self.interval_seconds)
@@ -45,16 +53,24 @@ class AIModelRefreshScheduler:
         def refresh() -> dict:
             db = SessionLocal()
             try:
+                # Re-read runtime settings every cycle so newly added provider
+                # keys are picked up without a code change or DB migration.
+                bootstrap = AIProviderBootstrapService(db)
+                providers = bootstrap.provision_configured()
+
                 service = AIModelService(db)
                 sync_results = service.sync_all_active_providers()
+                health = service.scan_working_models()
                 selected = service.select_working_default()
                 return {
+                    "providers_configured": len(providers),
                     "sync": sync_results,
+                    "health": health,
                     "selected_model": selected.model_id if selected else None,
                 }
             finally:
                 db.close()
 
         result = await asyncio.to_thread(refresh)
-        logger.info("AI model catalog refreshed: %s", result)
+        logger.info("AI provider/model scan completed: %s", result)
         return result
