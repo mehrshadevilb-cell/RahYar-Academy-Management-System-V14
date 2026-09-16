@@ -13,6 +13,7 @@ from src.services.course_service import CourseService
 from src.services.online_course_service import OnlineCourseService
 from src.services.web_research_service import WebResearchService
 from src.services.music_knowledge_pack_service import MusicKnowledgePackService
+from src.services.member_personality_service import MemberPersonalityService
 
 try:
     import redis
@@ -51,6 +52,7 @@ SYSTEM_PROMPT_FA = """
 هرگز اطلاعات خصوصی کاربران، اطلاعات پرداخت، کلید API یا داده محرمانه را بازگو نکن.
 اگر سؤال درباره پرداخت/شکایت/دسترسی اختصاصی است، کاربر را به «🆘 پشتیبانی» ارجاع بده.
 برای موضوعات نرم‌افزاری، منبع رسمی manual/help/support بر منبع ثالث اولویت دارد.
+اگر «شناخت تعاملی» از گروه موجود است، لحن را با سبک یادگیری او هماهنگ کن ولی قضاوت توهین‌آمیز نکن.
 """
 
 UI_PROMPT_FA = """
@@ -76,7 +78,6 @@ ANSWER_CONTRACT_PROMPT_FA = """
 
 
 def _question_guidance(question: str) -> str:
-    """Add small deterministic hints so the model chooses the right answer shape."""
     normalized = question.casefold()
     if any(token in normalized for token in ("قیمت", "خرید", "پرداخت", "دسترسی", "دوره")):
         return "راهنمای سؤال: داده کاتالوگ فعلی اولویت دارد؛ قیمت یا دسترسی را از خودت نساز."
@@ -116,6 +117,7 @@ class ChatAssistantService:
         self.online_course_service = OnlineCourseService()
         self.web_research = WebResearchService()
         self.music_packs = MusicKnowledgePackService()
+        self.personality = MemberPersonalityService()
         self._recent_messages: dict[str, deque[float]] = defaultdict(deque)
         self._redis = None
         if redis is not None and self.settings.REDIS_URL:
@@ -234,6 +236,7 @@ class ChatAssistantService:
         from src.services.ai_agent_knowledge_runtime import AIAgentKnowledgeRuntime
         knowledge = AIAgentKnowledgeRuntime().context(db, limit=12)
         pack_context = self.music_packs.retrieval_context(text)
+        personality_ctx = self.personality.context_for_assistant(db, telegram_id)
         base_context = [
             {"role": "system", "content": SYSTEM_PROMPT_FA},
             {"role": "system", "content": UI_PROMPT_FA},
@@ -245,6 +248,8 @@ class ChatAssistantService:
             {"role": "system", "content": "دانش جمع‌آوری و پالایش‌شده داخلی:\n" + (knowledge or "هنوز مطلب آموزشی ثبت نشده است.")},
             {"role": "system", "content": _question_guidance(text)},
         ]
+        if personality_ctx:
+            base_context.append({"role": "system", "content": personality_ctx})
 
         if self._needs_web_research(text, knowledge):
             research = self.web_research.research(
