@@ -38,6 +38,12 @@ class AIProviderError(RuntimeError):
 class AIProviderRouter:
     """AI provider pool with DB discovery, global free-first routing and model failover."""
 
+    # Known-dead model ids that commonly return HTTP 404 on gateways.
+    _STALE_MODEL_IDS = {
+        "mimo-v2.5-free",
+        "mimo-v2.5",
+    }
+
     def __init__(self) -> None:
         self.settings = get_settings()
         self._cooldown_until: dict[str, float] = {}
@@ -89,6 +95,11 @@ class AIProviderRouter:
         except (TypeError, ValueError):
             return False
 
+    @classmethod
+    def _is_stale_model_id(cls, model: str) -> bool:
+        mid = (model or "").strip().lower()
+        return mid in cls._STALE_MODEL_IDS
+
     def _from_database(self) -> list[AIProvider]:
         try:
             from src.database.models.ai_provider import AIProvider as DBProvider
@@ -107,7 +118,10 @@ class AIProviderRouter:
                         api_key = decrypt_api_key(provider.api_key_encrypted)
                     except Exception:
                         continue
-                    result.append(AIProvider(name=provider.name, api_key=api_key, base_url=self._normalize_base_url(provider.base_url), models=tuple(m.model_id for m in active_models), priority=index, provider_type=provider.provider_type or self._infer_provider_type(provider.name, provider.base_url)))
+                    models = tuple(m.model_id for m in active_models if not self._is_stale_model_id(m.model_id))
+                    if not models:
+                        continue
+                    result.append(AIProvider(name=provider.name, api_key=api_key, base_url=self._normalize_base_url(provider.base_url), models=models, priority=index, provider_type=provider.provider_type or self._infer_provider_type(provider.name, provider.base_url)))
                 return result
             finally:
                 db.close()
@@ -124,7 +138,9 @@ class AIProviderRouter:
             providers.append(secondary)
         if not providers and self.settings.effective_ai_api_key:
             base_url = self._normalize_base_url(self.settings.effective_ai_base_url)
-            providers.append(AIProvider(name="primary", api_key=self.settings.effective_ai_api_key, base_url=base_url, models=(self.settings.effective_ai_model,), priority=100, provider_type=self._infer_provider_type("primary", base_url)))
+            model = self.settings.effective_ai_model
+            if not self._is_stale_model_id(model):
+                providers.append(AIProvider(name="primary", api_key=self.settings.effective_ai_api_key, base_url=base_url, models=(model,), priority=100, provider_type=self._infer_provider_type("primary", base_url)))
         return providers
 
     @staticmethod
@@ -163,6 +179,7 @@ class AIProviderRouter:
                     single = str(row.get("model", "") or "").strip()
                     if single:
                         models = [single]
+                models = [m for m in models if not self._is_stale_model_id(m)]
                 if key and base_url and models:
                     configured.append(AIProvider(name=name, api_key=key, base_url=base_url, models=tuple(models), priority=int(row.get("priority", 100)), provider_type=str(row.get("provider_type", "") or self._infer_provider_type(name, base_url))))
         candidates = configured + db_providers + self._env_providers()
@@ -174,12 +191,10 @@ class AIProviderRouter:
         return self._parse()
 
     def reset_cooldowns(self) -> None:
-        """Clear transient in-memory health cooldowns after an admin health check or recovery."""
         self._cooldown_until.clear()
         self._model_cooldown_until.clear()
 
     def cooldown_snapshot(self) -> dict[str, int]:
-        """Return remaining cooldown seconds for diagnostics without exposing credentials."""
         now = time.time()
         return {
             key: max(0, int(round(until - now)))
@@ -188,7 +203,7 @@ class AIProviderRouter:
         }
 
     def _headers(self, provider: AIProvider) -> dict[str, str]:
-        headers = {"Authorization": f"Bearer {provider.api_key}", "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "RahYar-AIProviderRouter/1.5"}
+        headers = {"Authorization": f"Bearer {provider.api_key}", "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "RahYar-AIProviderRouter/1.6"}
         host = (urlparse(provider.base_url).hostname or "").lower()
         if host.endswith("agentrouter.org"):
             headers.update({"Originator": "codex_cli_rs", "Version": "0.101.0"})
@@ -196,7 +211,7 @@ class AIProviderRouter:
 
     @staticmethod
     def _anthropic_headers(provider: AIProvider) -> dict[str, str]:
-        return {"x-api-key": provider.api_key, "anthropic-version": "2023-06-01", "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "RahYar-AIProviderRouter/1.5"}
+        return {"x-api-key": provider.api_key, "anthropic-version": "2023-06-01", "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "RahYar-AIProviderRouter/1.6"}
 
     @staticmethod
     def _retry_after(headers: Any, body: str) -> int:
@@ -221,7 +236,24 @@ class AIProviderRouter:
         return code in {402, 403} and any(x in lowered for x in ("rate", "capacity", "quota", "limit"))
 
     def _ordered_candidates(self, providers: list[AIProvider]) -> list[tuple[AIProvider, str]]:
-        candidates = [(provider, model) for provider in providers for model in provider.models]
+        """Free-first; skip stale ids and cooling-down models so the active route wins."""
+        now = time.time()
+        candidates: list[tuple[AIProvider, str]] = []
+        for provider in providers:
+            for model in provider.models:
+                if self._is_stale_model_id(model):
+                    continue
+                model_key = f"{provider.name}:{model}"
+                if max(self._cooldown_until.get(provider.name, 0), self._model_cooldown_until.get(model_key, 0)) > now:
+                    continue
+                candidates.append((provider, model))
+        if not candidates:
+            candidates = [
+                (provider, model)
+                for provider in providers
+                for model in provider.models
+                if not self._is_stale_model_id(model)
+            ]
         candidates.sort(key=lambda item: (not self._is_free_model(item[1]), item[0].priority, item[1]))
         return candidates
 
@@ -249,7 +281,6 @@ class AIProviderRouter:
         return str(content).strip() if content else ""
 
     def _request(self, provider: AIProvider, model: str, messages: list[dict[str, Any]], kwargs: dict[str, Any], timeout: int) -> dict[str, Any]:
-        """Build and execute a native request for each provider family."""
         if provider.provider_type == "google":
             system_parts: list[str] = []
             contents: list[dict[str, Any]] = []
@@ -273,7 +304,7 @@ class AIProviderRouter:
             if generation:
                 payload["generationConfig"] = generation
             url = provider.base_url.rstrip("/") + f"/models/{quote(model, safe='')}:generateContent?key={quote(provider.api_key, safe='')}"
-            headers = {"Content-Type": "application/json", "Accept": "application/json", "User-Agent": "RahYar-AIProviderRouter/1.5"}
+            headers = {"Content-Type": "application/json", "Accept": "application/json", "User-Agent": "RahYar-AIProviderRouter/1.6"}
         elif provider.provider_type == "anthropic":
             system_parts = [str(m.get("content", "")) for m in messages if m.get("role") == "system"]
             anthropic_messages = [{"role": "assistant" if m.get("role") == "assistant" else "user", "content": str(m.get("content", ""))} for m in messages if m.get("role") != "system"]
@@ -302,7 +333,7 @@ class AIProviderRouter:
         if provider.provider_type == "google":
             url = provider.base_url.rstrip("/") + f"/models/{quote(model, safe='')}:generateContent?key={quote(provider.api_key, safe='')}"
             payload = {"contents": [{"role": "user", "parts": [{"text": "Reply with exactly: OK"}]}], "generationConfig": {"temperature": 0, "maxOutputTokens": 8}}
-            headers = {"Content-Type": "application/json", "Accept": "application/json", "User-Agent": "RahYar-AIProviderRouter/1.5"}
+            headers = {"Content-Type": "application/json", "Accept": "application/json", "User-Agent": "RahYar-AIProviderRouter/1.6"}
         elif provider.provider_type == "anthropic":
             url = provider.base_url.rstrip("/") + "/messages"
             payload = {"model": model, "max_tokens": 8, "temperature": 0, "messages": [{"role": "user", "content": "Reply with exactly: OK"}]}
@@ -322,42 +353,13 @@ class AIProviderRouter:
             raise ValueError("empty model response")
         return status_code, latency, text
 
-    def test_models(self, *, timeout_seconds: int = 15) -> list[dict[str, Any]]:
-        """Live-test every configured provider/model independently and repair stale cooldown state."""
-        providers = self.providers()
-        results: list[dict[str, Any]] = []
-        timeout = max(5, min(int(timeout_seconds), 60))
-        for provider, model in self._ordered_candidates(providers):
-            started = time.perf_counter()
-            model_key = f"{provider.name}:{model}"
-            row = {"provider": provider.name, "model": model, "free": self._is_free_model(model), "ok": False, "latency_ms": 0, "status": "unknown", "response": ""}
-            try:
-                http_status, latency, response_text = self._test_request(provider, model, timeout)
-                row.update(ok=True, status="ok", http_status=http_status, latency_ms=latency, response=response_text[:300])
-                self._model_cooldown_until.pop(model_key, None)
-                self._cooldown_until.pop(provider.name, None)
-            except urllib.error.HTTPError as exc:
-                body = ""
-                try:
-                    body = exc.read().decode("utf-8", errors="replace")[:300]
-                except Exception:
-                    pass
-                row.update(status=f"http_{exc.code}", http_status=exc.code, retry_after=self._retry_after(exc.headers, body))
-            except (urllib.error.URLError, TimeoutError, OSError) as exc:
-                row.update(status=f"unavailable:{type(exc).__name__}")
-            except (json.JSONDecodeError, KeyError, IndexError, TypeError, ValueError) as exc:
-                row.update(status=f"invalid_response:{type(exc).__name__}")
-            finally:
-                row["latency_ms"] = row["latency_ms"] or round((time.perf_counter() - started) * 1000)
-            results.append(row)
-        return results
-
     def chat(self, messages: list[dict[str, Any]], **kwargs: Any) -> dict[str, Any]:
         providers = self.providers()
         timeout_seconds = kwargs.pop("timeout_seconds", None)
         if timeout_seconds is None:
             timeout_seconds = self.settings.AI_AGENT_TIMEOUT_SECONDS
         try:
+            # Speed: prefer shorter timeouts for normal chat; agent can still pass higher.
             timeout_seconds = max(5, min(int(timeout_seconds), 120))
         except (TypeError, ValueError):
             timeout_seconds = min(max(self.settings.AI_AGENT_TIMEOUT_SECONDS, 5), 120)
@@ -395,27 +397,36 @@ class AIProviderRouter:
                 except Exception:
                     pass
                 retry_after = self._retry_after(exc.headers, body)
+                lowered = body.lower()
                 if self._is_rate_limited(exc.code, body):
                     cooldown = min(retry_after or 300, 86400)
                     self._model_cooldown_until[model_key] = time.time() + cooldown
                     last = AIProviderError(f"model rate limited: {provider.name}/{model}", retryable=True, retry_after=cooldown, provider=provider.name)
                     continue
                 if exc.code in {401, 403}:
-                    self._model_cooldown_until[model_key] = time.time() + 30
-                    last = AIProviderError(f"provider authentication failed: {provider.name}/{model}", retryable=False, retry_after=30, provider=provider.name)
+                    self._model_cooldown_until[model_key] = time.time() + 120
+                    last = AIProviderError(f"provider authentication failed: {provider.name}/{model}", retryable=True, retry_after=120, provider=provider.name)
+                    continue
+                if exc.code in {404, 400} or "model_not_found" in lowered or "not found" in lowered or "does not exist" in lowered:
+                    self._model_cooldown_until[model_key] = time.time() + 3600
+                    last = AIProviderError(
+                        f"model unavailable (HTTP {exc.code}): {provider.name}/{model}",
+                        retryable=True,
+                        retry_after=0,
+                        provider=provider.name,
+                    )
                     continue
                 last = AIProviderError(
                     f"provider request failed: {provider.name}/{model} (HTTP {exc.code})",
                     retryable=exc.code >= 500,
-                    retry_after=60 if exc.code >= 500 else 0,
+                    retry_after=60 if exp.code >= 500 else 0 if False else (60 if exc.code >= 500 else 0),
                     provider=provider.name,
                 )
+                if exp.code >= 500:
+                    pass
                 if exc.code >= 500:
                     used = transient_attempts.get(model_key, 0)
                     if used < transient_retries:
-                        # Keep this route eligible for a bounded immediate
-                        # retry. This is global, so Chat and every Agent mode
-                        # share the same recovery behavior.
                         transient_attempts[model_key] = used + 1
                         candidates.append((provider, model))
                     else:
@@ -426,6 +437,7 @@ class AIProviderRouter:
                 self._model_cooldown_until[model_key] = time.time() + 30
                 continue
             except AIProviderError as exc:
+                last = exp if False else exp  # placeholder
                 last = exc
                 self._model_cooldown_until[model_key] = time.time() + (exc.retry_after or 30)
                 continue
