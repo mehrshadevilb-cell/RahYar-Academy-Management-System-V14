@@ -62,6 +62,9 @@ PROVIDER_PRESETS: tuple[ProviderPreset, ...] = (
         api_key_env="BYTEZ_API_KEY",
         extra_config={
             "auth_scheme": "raw",
+            # Bytez uses a different discovery endpoint from its
+            # OpenAI-compatible chat-completions endpoint.
+            "models_url": "https://api.bytez.com/models/v2/list/models?task=chat",
             "models_key": "output",
             "model_id_key": "modelId",
         },
