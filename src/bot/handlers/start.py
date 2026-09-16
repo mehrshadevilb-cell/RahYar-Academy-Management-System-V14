@@ -11,7 +11,10 @@ from src.services.online_course_service import OnlineCourseService
 from src.services.referral_service import ReferralService
 from src.services.telegram_service import TelegramService
 from src.services.profile_service import ProfileService
+from src.services.legacy_import_service import LegacyImportService
 from src.bot.states.start_states import StartState
+from src.bot.states.payment_states import PaymentState
+from src.database.models.payment import Payment
 
 router = Router()
 
@@ -20,6 +23,7 @@ referral_service = ReferralService()
 course_repository = CourseRepository()
 online_course_service = OnlineCourseService()
 profile_service = ProfileService()
+legacy_import_service = LegacyImportService()
 
 PHONE_REQUEST_KEYBOARD = ReplyKeyboardMarkup(
     keyboard=[[KeyboardButton(text="📱 ارسال شماره موبایل", request_contact=True)]],
@@ -30,6 +34,7 @@ PHONE_REQUEST_KEYBOARD = ReplyKeyboardMarkup(
 REFERRAL_PAYLOAD_PREFIX = "ref_"
 BUY_PAYLOAD_PREFIX = "buy_"
 CLASS_PAYLOAD_PREFIX = "class_"
+WEB_PAYMENT_PAYLOAD_PREFIX = "webpay_"
 
 
 def normalize_iranian_mobile(value: str | None) -> str | None:
@@ -53,6 +58,36 @@ def normalize_iranian_mobile(value: str | None) -> str | None:
     if len(digits) != 11 or not digits.startswith("09"):
         return None
     return digits
+
+
+async def _resume_web_payment(message: Message, state: FSMContext, db, user, payment_id: int) -> bool:
+    payment = (
+        db.query(Payment)
+        .filter(Payment.id == payment_id, Payment.user_id == user.id, Payment.status == "pending")
+        .first()
+    )
+    if not payment:
+        await message.answer("❌ سفارش وب پیدا نشد یا قبلاً بررسی شده است.")
+        return False
+    course = course_repository.get_by_id(db, payment.course_id)
+    if not course:
+        await message.answer("❌ دورهٔ سفارش پیدا نشد.")
+        return False
+    await state.update_data(
+        course_id=course.id,
+        web_payment_id=payment.id,
+        final_amount=payment.amount,
+        discount_code_id=None,
+        discount_amount=0,
+    )
+    await state.set_state(PaymentState.waiting_receipt)
+    await message.answer(
+        f"🧾 سفارش وب #{payment.id}\n\n"
+        f"🎵 دوره: {course.title}\n"
+        f"💳 مبلغ: {payment.amount:,} تومان\n\n"
+        "حالا عکس یا فایل رسید کارت‌به‌کارت را همینجا بفرستید تا به همان سفارش وصل شود."
+    )
+    return True
 
 
 async def _notify_new_member_start(message: Message, *, is_new: bool, full_name: str, username: str | None) -> None:
@@ -99,6 +134,12 @@ async def start_handler(
     )
 
     args = (command.args or "").strip()
+    web_payment_id = None
+    if args.startswith(WEB_PAYMENT_PAYLOAD_PREFIX):
+        raw_payment_id = args[len(WEB_PAYMENT_PAYLOAD_PREFIX):]
+        if raw_payment_id.isdigit():
+            web_payment_id = int(raw_payment_id)
+            await state.update_data(pending_web_payment_id=web_payment_id)
 
     if is_new and args.startswith(REFERRAL_PAYLOAD_PREFIX):
         referrer_telegram_id = args[len(REFERRAL_PAYLOAD_PREFIX):]
@@ -129,6 +170,10 @@ async def start_handler(
             "برای ثبت‌نام و رزرو کلاس آنلاین، لطفاً شماره موبایل خود را با دکمه زیر ارسال کنید.",
             reply_markup=PHONE_REQUEST_KEYBOARD,
         )
+        return
+
+    if web_payment_id:
+        await _resume_web_payment(message, state, db, user, web_payment_id)
         return
 
     # Deep links from the public website (same catalog / same bot).
@@ -178,8 +223,15 @@ async def start_get_phone(message: Message, state: FSMContext, db):
         return
     existing = profile_service.get_profile_by_phone(db, phone)
     if existing and existing.id != user.id:
-        await message.answer("❌ این شماره قبلاً برای حساب دیگری ثبت شده است.")
-        return
+        if existing.telegram_account is None:
+            legacy_import_service.merge_into_live_user(db, existing, user)
+        else:
+            await message.answer("❌ این شماره قبلاً برای حساب دیگری ثبت شده است.")
+            return
     profile_service.update_contact_info(db=db, user=user, full_name=user.full_name, phone=phone)
+    data = await state.get_data()
+    pending_web_payment_id = data.get("pending_web_payment_id")
     await state.clear()
     await message.answer("✅ شماره شما با موفقیت ثبت شد.", reply_markup=get_main_menu(user.role))
+    if pending_web_payment_id:
+        await _resume_web_payment(message, state, db, user, int(pending_web_payment_id))

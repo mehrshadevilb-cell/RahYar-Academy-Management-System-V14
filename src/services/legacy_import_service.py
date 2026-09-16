@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from src.database.models.user import User
 from src.database.models.enrollment import Enrollment
 from src.database.models.license import License
+from src.database.models.payment import Payment
 
 
 class LegacyImportService:
@@ -69,6 +70,10 @@ class LegacyImportService:
 
         db.query(License).filter(
             License.user_id == legacy_user.id
+        ).update({"user_id": live_user.id})
+
+        db.query(Payment).filter(
+            Payment.user_id == legacy_user.id
         ).update({"user_id": live_user.id})
 
         db.delete(legacy_user)
