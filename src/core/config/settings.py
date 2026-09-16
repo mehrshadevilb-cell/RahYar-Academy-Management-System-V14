@@ -65,6 +65,11 @@ class Settings(BaseSettings):
     AI_FALLBACK_MODEL: str = "gpt-5.5"
     AI_PROVIDERS_JSON: str = ""
 
+    # Continuous model speed monitor: probe all models and pin the fastest responder.
+    # Interval is clamped to >= 5s to protect API quotas (not every literal second).
+    AI_MODEL_CONTINUOUS_PROBE_ENABLED: bool = True
+    AI_MODEL_PROBE_INTERVAL_SECONDS: int = 15
+
     ORCAROUTER_API_KEY: str | None = None
     KIRAAI_API_KEY: str | None = None
     OPENROUTER_API_KEY: str | None = None
@@ -122,9 +127,6 @@ class Settings(BaseSettings):
     def effective_ai_model(self) -> str:
         model = (self.AI_MODEL or self.AI_AGENT_MODEL or "gpt-4o-mini").strip()
         host = (urlparse(self.effective_ai_base_url).hostname or "").lower()
-        # AgentRouter's current OpenAI-compatible catalog does not expose the
-        # old mimo-v2.5-free identifier. Keep deployments that still have that
-        # stale value from hard-failing every Agent request with HTTP 404.
         if host.endswith("agentrouter.org") and model.lower() in {"mimo-v2.5-free", "mimo-v2.5"}:
             fallback = (self.AI_FALLBACK_MODEL or "gpt-5.5").strip()
             return fallback or "gpt-5.5"
