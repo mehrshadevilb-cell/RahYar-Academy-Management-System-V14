@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from src.database.models.course import Course
 from src.database.models.payment import Payment
 from src.database.models.payment_card import PaymentCard
+from src.database.models.license import License
 from src.database.models.user import User, UserRole
 from src.database.repositories.course_repository import CourseRepository
 from src.database.repositories.payment_repository import PaymentRepository
@@ -145,3 +146,24 @@ class WebOrderService:
             .first()
         )
         return row
+
+    def get_payment_for_phone(
+        self,
+        db: Session,
+        *,
+        payment_id: int,
+        phone: str,
+    ) -> tuple[User, Payment, Course] | None:
+        return self.get_product_order_status(db, payment_id=payment_id, phone=phone)
+
+    def list_licenses_for_phone(self, db: Session, *, phone: str):
+        normalized_phone = self.normalize_phone(phone)
+        return (
+            db.query(License, Course, Payment)
+            .join(User, User.id == License.user_id)
+            .join(Course, Course.id == License.product_id)
+            .outerjoin(Payment, Payment.id == License.payment_id)
+            .filter(User.phone == normalized_phone)
+            .order_by(License.created_at.desc())
+            .all()
+        )

@@ -659,22 +659,42 @@ async def approve_payment(
 
     telegram_account = telegram_repository.get_by_user_id(db, payment.user_id)
 
-    if telegram_account and course and user:
+    if course and user:
 
         if course.delivery_type == ProductDeliveryType.SPOTPLAYER:
 
             await callback.answer("در حال صدور لایسنس... ⏳")
 
-            await _deliver_spotplayer(
-                bot=bot,
-                db=db,
-                user=user,
-                telegram_id=telegram_account.telegram_id,
-                course=course,
-                payment_id=payment.id,
-            )
+            if telegram_account:
+                await _deliver_spotplayer(
+                    bot=bot,
+                    db=db,
+                    user=user,
+                    telegram_id=telegram_account.telegram_id,
+                    course=course,
+                    payment_id=payment.id,
+                )
+            else:
+                license_ = await license_service.issue_license(
+                    db=db,
+                    user_id=user.id,
+                    user_full_name=user.full_name,
+                    user_phone=user.phone,
+                    product=course,
+                    payment_id=payment.id,
+                )
+                if license_.status != "active":
+                    await bot.send_message(
+                        chat_id=settings.OWNER_ID,
+                        text=(
+                            f"⚠️ صدور لایسنس وب برای «{course.title}» ناموفق بود.\n"
+                            f"پرداخت #{payment.id} — کاربر {user.phone or user.id}\n"
+                            "از گزینه تلاش مجدد لایسنس استفاده کنید."
+                        ),
+                        reply_markup=license_retry_keyboard(license_.id),
+                    )
 
-        elif course.delivery_type == ProductDeliveryType.TELEGRAM:
+        elif course.delivery_type == ProductDeliveryType.TELEGRAM and telegram_account:
 
             await callback.answer("در حال ساخت لینک‌های دعوت... ⏳")
 

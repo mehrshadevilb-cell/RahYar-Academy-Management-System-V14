@@ -6,7 +6,8 @@ the owner approves in Telegram.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from aiogram.types import BufferedInputFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -14,6 +15,7 @@ from src.bot.bot import bot
 from src.core.config.settings import get_settings
 from src.core.logging.logger import get_logger
 from src.services.web_order_service import WebOrderError, WebOrderService
+from src.bot.keyboards.payment_review_keyboard import payment_review_keyboard
 from src.web.deps import get_db
 
 logger = get_logger("web.api_v1")
@@ -58,6 +60,16 @@ class OrderStatusOut(BaseModel):
     product_title: str
     amount: int
     status: str
+    created_at: str
+
+
+class LicenseOut(BaseModel):
+    id: int
+    product_title: str
+    status: str
+    license_key: str | None = None
+    license_url: str | None = None
+    payment_id: int | None = None
     created_at: str
 
 
@@ -208,6 +220,86 @@ async def order_status(
         status=str(payment.status),
         created_at=payment.created_at.isoformat(),
     )
+
+
+@router.post("/orders/{payment_id}/receipt")
+async def upload_order_receipt(
+    payment_id: int,
+    phone: str = Form(..., min_length=10, max_length=20),
+    receipt: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    if not settings.OWNER_ID:
+        raise HTTPException(status_code=503, detail="owner_notifications_unavailable")
+    if not receipt.content_type or not (
+        receipt.content_type.startswith("image/")
+        or receipt.content_type == "application/pdf"
+    ):
+        raise HTTPException(status_code=400, detail="receipt_must_be_image_or_pdf")
+    data = await receipt.read()
+    if not data or len(data) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="receipt_size_invalid")
+    row = order_service.get_payment_for_phone(db, payment_id=payment_id, phone=phone)
+    if not row:
+        raise HTTPException(status_code=404, detail="order_not_found")
+    user, payment, product = row
+    if payment.status != "pending":
+        raise HTTPException(status_code=409, detail="order_already_reviewed")
+
+    payment.receipt_file_id = f"web-upload:{payment.id}"
+    payment.admin_notes = "رسید از سایت دریافت شد؛ در انتظار تأیید ادمین"
+    db.commit()
+    caption = (
+        "🧾 رسید پرداخت از سایت آرتیست‌یار\n\n"
+        f"👤 نام: {user.full_name}\n"
+        f"📱 موبایل: {user.phone or 'ثبت نشده'}\n"
+        f"🎵 دوره: {product.title}\n"
+        f"💳 مبلغ: {payment.amount:,} تومان\n"
+        f"🆔 شماره پرداخت: {payment.id}\n"
+        "\nبا دکمه زیر تأیید یا رد کنید."
+    )
+    telegram_file = BufferedInputFile(data, filename=receipt.filename or f"receipt-{payment.id}")
+    if receipt.content_type.startswith("image/"):
+        sent = await bot.send_photo(
+            chat_id=settings.OWNER_ID,
+            photo=telegram_file,
+            caption=caption,
+            reply_markup=payment_review_keyboard(payment.id),
+        )
+        payment.receipt_file_id = sent.photo[-1].file_id
+    else:
+        sent = await bot.send_document(
+            chat_id=settings.OWNER_ID,
+            document=telegram_file,
+            caption=caption,
+            reply_markup=payment_review_keyboard(payment.id),
+        )
+        payment.receipt_file_id = sent.document.file_id
+    db.commit()
+    return {"ok": True, "payment_id": payment.id, "status": payment.status, "message": "رسید برای بررسی ارسال شد."}
+
+
+@router.get("/licenses", response_model=list[LicenseOut])
+async def list_licenses(
+    phone: str = Query(min_length=10, max_length=20),
+    db: Session = Depends(get_db),
+):
+    try:
+        rows = order_service.list_licenses_for_phone(db, phone=phone)
+    except WebOrderError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return [
+        LicenseOut(
+            id=license_.id,
+            product_title=course.title,
+            status=license_.status,
+            license_key=license_.license_key,
+            license_url=license_.license_url,
+            payment_id=license_.payment_id,
+            created_at=license_.created_at.isoformat(),
+        )
+        for license_, course, _payment in rows
+    ]
 
 
 @router.post("/class-inquiries")
