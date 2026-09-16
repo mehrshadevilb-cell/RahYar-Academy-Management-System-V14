@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -13,11 +14,12 @@ class ProviderPreset:
     supports_streaming: bool = True
     supports_vision: bool = False
     supports_tools: bool = True
+    extra_config: dict[str, Any] | None = None
 
 
 # Known gateways. API keys stay in environment variables and are encrypted
 # before being persisted to the database. Model IDs are intentionally not
-# hard-coded: every provider is discovered through its models endpoint.
+# hard-coded: every provider is discovered through its live models endpoint.
 PROVIDER_PRESETS: tuple[ProviderPreset, ...] = (
     ProviderPreset(
         name="orcarouter",
@@ -41,8 +43,6 @@ PROVIDER_PRESETS: tuple[ProviderPreset, ...] = (
     ProviderPreset(
         name="agentrouter",
         display_name="AgentRouter",
-        # Official OpenAI-compatible endpoint. The bare agentrouter.org URL
-        # is not the API base and would cause /v1/models to resolve incorrectly.
         base_url="https://co.agentrouter.org/v1",
         api_key_env="AGENTROUTER_API_KEY",
         supports_vision=True,
@@ -54,6 +54,23 @@ PROVIDER_PRESETS: tuple[ProviderPreset, ...] = (
         provider_type="google",
         api_key_env="GOOGLE_API_KEY",
         supports_vision=True,
+    ),
+    ProviderPreset(
+        name="bytez",
+        display_name="Bytez",
+        base_url="https://api.bytez.com/models/v2/openai/v1",
+        api_key_env="BYTEZ_API_KEY",
+        extra_config={
+            "auth_scheme": "raw",
+            "models_key": "output",
+            "model_id_key": "modelId",
+        },
+    ),
+    ProviderPreset(
+        name="dahl",
+        display_name="Dahl",
+        base_url="https://inference.dahl.global/v1",
+        api_key_env="DAHL_API_KEY",
     ),
 )
 
