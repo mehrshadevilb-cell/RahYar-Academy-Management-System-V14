@@ -7,6 +7,7 @@ def get_main_menu(role: UserRole | None = None):
     keyboard = [
         [KeyboardButton(text="📚 دوره ها")],
         [KeyboardButton(text="🎓 دوره های من")],
+        [KeyboardButton(text="🧾 وضعیت پرداخت")],
         [KeyboardButton(text="🎼 کلاس آنلاین")],
         [KeyboardButton(text="🎵 AI Generator")],
         [KeyboardButton(text="📝 تکالیف")],

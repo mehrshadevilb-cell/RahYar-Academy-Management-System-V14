@@ -1,5 +1,6 @@
 import pytest
 
+from src.services.ai_agent_self_check import AIAgentSelfChecker
 from src.services.ai_agent_runtime import AIAgentRuntime
 
 
@@ -20,6 +21,7 @@ class FakeAgent:
 async def test_runtime_write_records_audit_and_completes(monkeypatch):
     runtime = AIAgentRuntime(FakeAgent())
     runtime._redis = None
+    monkeypatch.setattr(AIAgentSelfChecker, "run", lambda self: [])
     events = []
     monkeypatch.setattr(runtime, "_audit", lambda user_id, action, description: events.append(action))
 
@@ -35,6 +37,7 @@ async def test_runtime_records_failure(monkeypatch):
     agent.implement = lambda task, task_type: (_ for _ in ()).throw(RuntimeError("boom"))
     runtime = AIAgentRuntime(agent)
     runtime._redis = None
+    monkeypatch.setattr(AIAgentSelfChecker, "run", lambda self: [])
     events = []
     monkeypatch.setattr(runtime, "_audit", lambda user_id, action, description: events.append(action))
 

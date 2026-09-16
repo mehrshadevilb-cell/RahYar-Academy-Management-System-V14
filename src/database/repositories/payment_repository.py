@@ -33,3 +33,12 @@ class PaymentRepository:
             .order_by(Payment.id.desc())
             .all()
         )
+
+    def get_for_user(self, db: Session, user_id: int, *, limit: int = 5):
+        return (
+            db.query(Payment)
+            .filter(Payment.user_id == user_id)
+            .order_by(Payment.id.desc())
+            .limit(limit)
+            .all()
+        )

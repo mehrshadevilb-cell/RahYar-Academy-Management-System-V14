@@ -119,3 +119,29 @@ class WebOrderService:
         )
         payment = self.payments.create(db, payment)
         return user, payment, product
+
+    def get_product_order_status(
+        self,
+        db: Session,
+        *,
+        payment_id: int,
+        phone: str,
+    ) -> tuple[User, Payment, Course] | None:
+        """Return a product order only when its payment id and phone match.
+
+        The phone check prevents the public tracking endpoint from becoming a
+        payment-enumeration API while keeping the flow usable without a full
+        student account.
+        """
+        normalized_phone = self.normalize_phone(phone)
+        row = (
+            db.query(User, Payment, Course)
+            .join(Payment, Payment.user_id == User.id)
+            .join(Course, Course.id == Payment.course_id)
+            .filter(
+                Payment.id == payment_id,
+                User.phone == normalized_phone,
+            )
+            .first()
+        )
+        return row

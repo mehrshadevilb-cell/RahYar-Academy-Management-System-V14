@@ -6,7 +6,7 @@ the owner approves in Telegram.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -50,6 +50,14 @@ class InquiryIn(BaseModel):
     full_name: str = Field(min_length=2, max_length=100)
     phone: str = Field(min_length=10, max_length=20)
     message: str | None = Field(default=None, max_length=1000)
+
+
+class OrderStatusOut(BaseModel):
+    payment_id: int
+    product_title: str
+    amount: int
+    status: str
+    created_at: str
 
 
 @router.get("/health")
@@ -163,6 +171,36 @@ async def create_order(body: OrderIn, db: Session = Depends(get_db)):
         },
         "message": "سفارش ثبت شد و در انتظار تأیید ادمین است.",
     }
+
+
+@router.get("/orders/{payment_id}/status", response_model=OrderStatusOut)
+async def order_status(
+    payment_id: int,
+    phone: str = Query(min_length=10, max_length=20),
+    db: Session = Depends(get_db),
+):
+    try:
+        result = order_service.get_product_order_status(
+            db,
+            payment_id=payment_id,
+            phone=phone,
+        )
+    except WebOrderError as exc:
+        if str(exc) == "invalid_phone":
+            raise HTTPException(status_code=400, detail="invalid_phone") from exc
+        raise
+
+    if not result:
+        raise HTTPException(status_code=404, detail="order_not_found")
+
+    _, payment, product = result
+    return OrderStatusOut(
+        payment_id=payment.id,
+        product_title=product.title,
+        amount=int(payment.amount or 0),
+        status=str(payment.status),
+        created_at=payment.created_at.isoformat(),
+    )
 
 
 @router.post("/class-inquiries")
