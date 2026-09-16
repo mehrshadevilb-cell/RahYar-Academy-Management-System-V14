@@ -19,9 +19,13 @@ from src.bot.handlers import chat_assistant
 from src.bot.middlewares.database import DatabaseMiddleware
 from src.bot.middlewares.security import SecurityMiddleware
 from src.services.ai_agent_knowledge_runtime import AIAgentKnowledgeRuntime
+from src.ai.wire_chat_assistant import wire_chat_assistant_shared_router
 
 settings = get_settings()
 logger = get_logger("bot.errors")
+
+# Chat Assistant shares Agent free-first failover + Redis model cooldowns.
+wire_chat_assistant_shared_router()
 
 
 def build_fsm_storage():
