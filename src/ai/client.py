@@ -2,16 +2,17 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.ai.provider_router import AIProviderError, AIProviderRouter
+from src.ai.provider_router import AIProviderError
+from src.ai.shared_router import get_shared_router
 
 
 class AIClient:
-    """Small OpenAI-compatible client backed by the multi-provider router."""
+    """Small OpenAI-compatible client backed by the shared multi-provider router."""
 
     MAX_PROMPT_CHARS = 16_000
 
     def __init__(self) -> None:
-        self.router = AIProviderRouter()
+        self.router = get_shared_router()
 
     async def chat(self, prompt: str, **kwargs: Any) -> dict[str, Any]:
         prompt = (prompt or "").strip()
