@@ -7,6 +7,7 @@ import traceback
 
 from src.core.config.settings import get_settings
 from src.core.logging.logger import get_logger
+from src.core.admin_access import all_admin_telegram_ids
 from src.bot.telegram_errors import is_benign_telegram_error, should_notify_owner
 
 from src.bot.handlers import start, course, profile, my_courses, payment, admin
@@ -15,6 +16,7 @@ from src.bot.handlers import admin_discount, admin_logs, admin_broadcast, admin_
 from src.bot.handlers import admin_ai, admin_ai_self_check, referral, support, admin_support
 from src.bot.handlers import assignment, admin_assignments, progress
 from src.bot.handlers import music_generator, group_music_panel
+from src.bot.handlers import group_welcome, group_ask, group_admin_quick
 from src.bot.handlers import chat_assistant
 from src.bot.middlewares.database import DatabaseMiddleware
 from src.bot.middlewares.security import SecurityMiddleware
@@ -51,7 +53,8 @@ ai_agent_knowledge = AIAgentKnowledgeRuntime(bot=bot)
 
 
 async def send_error_report(event: ErrorEvent, exc: Exception):
-    if not settings.OWNER_ID:
+    admin_ids = all_admin_telegram_ids()
+    if not admin_ids:
         return
 
     update = event.update
@@ -76,10 +79,11 @@ async def send_error_report(event: ErrorEvent, exc: Exception):
         f"Traceback:\n{traceback.format_exc()[:2500]}"
     )
 
-    try:
-        await bot.send_message(chat_id=settings.OWNER_ID, text=report)
-    except Exception:
-        logger.exception("Failed sending admin error report")
+    for admin_id in admin_ids:
+        try:
+            await bot.send_message(chat_id=admin_id, text=report)
+        except Exception:
+            logger.exception("Failed sending admin error report to %s", admin_id)
 
 
 @dp.error()
@@ -123,27 +127,30 @@ async def global_error_handler(event: ErrorEvent):
         except Exception:
             logger.exception("Failed user error message")
 
-    if settings.OWNER_ID and should_notify_owner(exp):
-        try:
-            await bot.send_message(
-                chat_id=settings.OWNER_ID,
-                text=f"🚨 خطای فنی: {type(exp).__name__}\n{str(exp)[:500]}",
-            )
-        except Exception:
-            logger.exception("Failed owner notification")
+    if should_notify_owner(exp):
+        for admin_id in all_admin_telegram_ids():
+            try:
+                await bot.send_message(
+                    chat_id=admin_id,
+                    text=f"🚨 خطای فنی: {type(exp).__name__}\n{str(exp)[:500]}",
+                )
+            except Exception:
+                logger.exception("Failed admin notification to %s", admin_id)
 
     return True
 
 
 def setup_handlers():
     # admin_online_enrollment MUST be registered before admin_online so that
-    # student-picker callbacks (admin_online_enroll_, aoes_*, aoe*) take priority.
+    # student-picker callbacks take priority.
+    # Group routers early so commands are not swallowed by private text fallbacks.
     for module in (
         start, course, profile, my_courses, payment, admin, online_class,
         admin_online_enrollment, admin_online, admin_installments, admin_discount, admin_logs,
         admin_broadcast, admin_reports, admin_dashboard, admin_ai, admin_ai_self_check,
         referral, support, admin_support, assignment, admin_assignments,
-        progress, group_music_panel, music_generator, ai_agent_knowledge,
+        progress, group_welcome, group_ask, group_admin_quick, group_music_panel,
+        music_generator, ai_agent_knowledge,
         chat_assistant,
     ):
         dp.include_router(module.router)
