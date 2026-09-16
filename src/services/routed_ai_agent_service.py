@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import time
+from typing import Any
 
 from src.ai.latency_aware_provider_router import LatencyAwareAIProviderRouter
-from src.ai.provider_router import AIProviderError, AIProviderRouter
+from src.ai.provider_router import AIProviderError
 from src.services.ai_agent_service import AIAgentError, AIAgentService
 from src.services.provider_model_health_service import ProviderModelHealthService
 
@@ -15,21 +16,15 @@ class RoutedAIAgentService(AIAgentService):
         super().__init__()
         self.router = LatencyAwareAIProviderRouter()
         self.model_health = ProviderModelHealthService(self.router)
+        self._last_recovery_at: float = 0.0
+        self._last_recovered_route: str | None = None
 
     def _api_key(self) -> str:
-        # Do not let legacy AI_API_KEY decide which agent route is active.
-        # The router is the single source of truth for the whole agent.
         if self.router.providers():
             return "router-managed"
         return super()._api_key()
 
     def _selected_candidate(self):
-        """Return the same priority-ordered candidate used by agent requests.
-
-        This is informational/configuration selection only. Actual model calls
-        always go through router.chat(), which can fail over again at request
-        time if this candidate is unhealthy.
-        """
         providers = self.router.providers()
         candidates = self.router._ordered_candidates(providers)
         if not candidates:
@@ -52,6 +47,85 @@ class RoutedAIAgentService(AIAgentService):
         selected = self._selected_candidate()
         return selected[1] if selected else super()._model()
 
+    def recover_working_route(self, *, force: bool = False, prefer_fastest: bool = True) -> dict[str, Any]:
+        now = time.time()
+        if not force and self._last_recovery_at and now - self._last_recovery_at < 20:
+            selected = self._selected_candidate()
+            return {
+                "ok": bool(selected),
+                "skipped": True,
+                "reason": "recovery_cooldown",
+                "route": f"{selected[0].name}/{selected[1]}" if selected else None,
+                "last_recovered": self._last_recovered_route,
+            }
+
+        self._last_recovery_at = now
+        results = self.model_health.test_all_parallel(timeout_seconds=12)
+        working = [row for row in results if row.get("ok")]
+        if not working:
+            return {"ok": False, "skipped": False, "reason": "no_working_model", "tested": len(results), "route": None}
+
+        if prefer_fastest:
+            working.sort(key=lambda row: (int(row.get("latency_ms") or 10_000), 0 if row.get("free") else 1, str(row.get("provider") or ""), str(row.get("model") or "")))
+        else:
+            working.sort(key=lambda row: (0 if row.get("free") else 1, int(row.get("latency_ms") or 10_000), str(row.get("provider") or ""), str(row.get("model") or "")))
+
+        best = working[0]
+        provider_name = str(best["provider"])
+        model_id = str(best["model"])
+        route = f"{provider_name}/{model_id}"
+        latency = int(best.get("latency_ms") or 0)
+
+        for row in working:
+            p, m = str(row.get("provider") or ""), str(row.get("model") or "")
+            if p and m:
+                self.router._model_cooldown_until.pop(f"{p}:{m}", None)
+                self.router._cooldown_until.pop(p, None)
+                if hasattr(self.router, "record_probe_latency") and row.get("ok"):
+                    self.router.record_probe_latency(p, m, int(row.get("latency_ms") or 0))
+
+        if hasattr(self.router, "prefer_route"):
+            self.router.prefer_route(provider_name, model_id, latency)
+
+        persisted = False
+        try:
+            from src.database.models.ai_model import AIModel
+            from src.database.models.ai_provider import AIProvider
+            from src.database.session import SessionLocal
+            from src.services.ai.model_service import AIModelService
+
+            db = SessionLocal()
+            try:
+                model_row = (
+                    db.query(AIModel)
+                    .join(AIProvider, AIProvider.id == AIModel.provider_id)
+                    .filter(AIProvider.name == provider_name, AIModel.model_id == model_id, AIModel.is_active.is_(True), AIProvider.is_active.is_(True))
+                    .first()
+                )
+                if model_row is not None:
+                    AIModelService(db).set_default(model_row.id)
+                    persisted = True
+            finally:
+                db.close()
+        except Exception:
+            persisted = False
+
+        self._last_recovered_route = route
+        return {
+            "ok": True,
+            "skipped": False,
+            "reason": "recovered",
+            "route": route,
+            "provider": provider_name,
+            "model": model_id,
+            "free": bool(best.get("free")),
+            "latency_ms": latency,
+            "persisted_default": persisted,
+            "working_count": len(working),
+            "tested": len(results),
+            "prefer_fastest": prefer_fastest,
+        }
+
     def _request_model(self, prompt: str) -> str:
         messages = [
             {"role": "system", "content": "You are the RahYar senior software engineer. Follow project architecture. Never include secrets. Return concise engineering output."},
@@ -63,29 +137,18 @@ class RoutedAIAgentService(AIAgentService):
             configured_retries = max(0, int(self.settings.AI_AGENT_MAX_RETRIES))
         except (TypeError, ValueError):
             configured_retries = 2
-        # Candidate count is not a retry budget: a single configured model
-        # still needs bounded recovery from transient 5xx/timeout failures.
         max_attempts = max(1, min(len(candidates) + configured_retries, 24))
         last_empty_model = ""
-        cooldown_recovery_attempted = False
+        catalog_recovery_attempted = False
 
         while attempts < max_attempts:
             attempts += 1
             try:
-                data = self.router.chat(
-                    messages,
-                    temperature=0.1,
-                    timeout_seconds=self.settings.AI_AGENT_TIMEOUT_SECONDS,
-                )
+                data = self.router.chat(messages, temperature=0.1, timeout_seconds=self.settings.AI_AGENT_TIMEOUT_SECONDS)
                 content = data.get("choices", [{}])[0].get("message", {}).get("content")
                 if isinstance(content, list):
-                    content = " ".join(
-                        str(part.get("text", ""))
-                        for part in content
-                        if isinstance(part, dict) and part.get("text")
-                    )
+                    content = " ".join(str(part.get("text", "")) for part in content if isinstance(part, dict) and part.get("text"))
                 content = str(content or "").strip()
-
                 if not content:
                     provider_name = str(data.get("_rahyar_provider") or "")
                     model_name = str(data.get("_rahyar_model") or "")
@@ -94,34 +157,22 @@ class RoutedAIAgentService(AIAgentService):
                         self.router._model_cooldown_until[model_key] = time.time() + 60
                         last_empty_model = model_key
                         continue
-                    raise AIProviderError(
-                        "AI provider returned an empty response",
-                        retryable=True,
-                        retry_after=60,
-                        provider=provider_name,
-                    )
-
+                    raise AIProviderError("AI provider returned an empty response", retryable=True, retry_after=60, provider=provider_name)
                 return content
             except AIProviderError as exc:
                 detail = str(exc)
                 if exc.retry_after:
                     detail += f" (retry_after={exc.retry_after}s)"
-                if (
-                    exc.retryable
-                    and not cooldown_recovery_attempted
-                    and "cooling down" in str(exc).lower()
-                ):
-                    cooldown_recovery_attempted = True
-                    # A health probe uses the exact same router instance and
-                    # clears stale cooldowns for routes that answer now.
+                lowered = str(exc).lower()
+                needs_recovery = "cooling down" in lowered or "temporarily unavailable" in lowered or (exc.retryable and attempts >= max(2, max_attempts // 2))
+                if needs_recovery and not catalog_recovery_attempted:
+                    catalog_recovery_attempted = True
                     try:
-                        recovered = self.model_health.test_all(
-                            timeout_seconds=min(self.settings.AI_AGENT_TIMEOUT_SECONDS, 15)
-                        )
-                        if any(bool(row.get("ok")) for row in recovered):
-                            attempts -= 1
+                        recovered = self.recover_working_route(force=True, prefer_fastest=True)
+                        if recovered.get("ok"):
+                            attempts = max(0, attempts - 1)
                             continue
-                    except (AIProviderError, OSError, TimeoutError, ValueError, TypeError):
+                    except Exception:
                         pass
                 if attempts < max_attempts and exc.retryable:
                     continue
@@ -129,68 +180,69 @@ class RoutedAIAgentService(AIAgentService):
             except (KeyError, IndexError, TypeError) as exc:
                 raise AIAgentError("AI provider returned an unexpected response.") from exc
 
+        if not catalog_recovery_attempted:
+            try:
+                recovered = self.recover_working_route(force=True, prefer_fastest=True)
+                if recovered.get("ok"):
+                    data = self.router.chat(messages, temperature=0.1, timeout_seconds=self.settings.AI_AGENT_TIMEOUT_SECONDS)
+                    content = data.get("choices", [{}])[0].get("message", {}).get("content")
+                    if isinstance(content, list):
+                        content = " ".join(str(part.get("text", "")) for part in content if isinstance(part, dict) and part.get("text"))
+                    content = str(content or "").strip()
+                    if content:
+                        return content
+            except Exception:
+                pass
         raise AIAgentError("All configured AI models returned no usable output.")
 
     def test_provider_models(self) -> str:
-        """Discover and live-test every model in the same pool used by agent requests."""
         self._check_enabled(require_git=False)
         try:
-            results = self.model_health.test_all(timeout_seconds=15)
+            recovery = self.recover_working_route(force=True, prefer_fastest=True)
+            results = self.model_health.test_all_parallel(timeout_seconds=12)
         except AIProviderError as exc:
             raise AIAgentError(str(exc)) from exc
         if not results:
             return "🧪 هیچ provider/model فعالی برای تست پیدا نشد."
-
-        lines = [
-            "🧪 <b>Live AI Model Test</b>",
-            "━━━━━━━━━━━━━━━━━━",
-            "🔎 همان provider pool که Agent برای Planner/Audit/Debug/Fix/Feature استفاده می‌کند live-test می‌شود.",
-        ]
-        available = 0
-        free_available = 0
-        discovered_models = 0
-        providers = sorted({str(row["provider"]) for row in results})
+        lines = ["🧪 <b>Live AI Model Test (parallel + fastest)</b>", "━━━━━━━━━━━━━━━━━━"]
+        available = free_available = 0
         for row in results:
             icon = "🟢" if row["ok"] else "🔴"
-            free = "FREE" if row["free"] else "PAID"
-            latency = f"{row['latency_ms']}ms"
-            source = "API catalog" if row.get("discovered") else "configured fallback"
-            if row.get("discovered"):
-                discovered_models += 1
+            free = "FREE" if row.get("free") else "PAID"
+            latency = f"{row.get('latency_ms')}ms"
             if row["ok"]:
                 available += 1
-                free_available += int(row["free"])
+                free_available += int(bool(row.get("free")))
                 response = str(row.get("response") or "").replace("\n", " ").strip()
-                lines.append(
-                    f"\n{icon} <b>{row['provider']}</b> / <code>{row['model']}</code> · {free} · {latency}\n"
-                    f"   ✅ <b>READY</b> · {source} · پاسخ: <code>{response[:220]}</code>"
-                )
+                lines.append(f"\n{icon} <b>{row['provider']}</b> / <code>{row['model']}</code> · {free} · {latency}\n   ✅ READY · <code>{response[:180]}</code>")
             else:
-                detail = str(row.get("status") or "unknown").upper()
-                retry_after = row.get("retry_after")
-                if retry_after:
-                    detail += f" · retry {retry_after}s"
-                lines.append(
-                    f"\n{icon} <b>{row['provider']}</b> / <code>{row['model']}</code> · {free} · {latency}\n"
-                    f"   ❌ <b>{detail}</b> · {source}"
-                )
-
+                lines.append(f"\n{icon} <b>{row['provider']}</b> / <code>{row['model']}</code> · {free} · {latency}\n   ❌ {str(row.get('status') or 'unknown').upper()}")
         selected = self._selected_candidate()
         selected_text = f"{selected[0].name}/{selected[1]}" if selected else "none"
-        lines.extend([
-            "\n━━━━━━━━━━━━━━━━━━",
-            f"📡 Providerهای بررسی‌شده: <b>{len(providers)}</b>",
-            f"🔎 مدل‌های کشف‌شده از API: <b>{discovered_models}</b>",
-            f"🧪 کل مدل‌های تست‌شده: <b>{len(results)}</b>",
-            f"🟢 مدل‌های واقعاً پاسخ‌دهنده: <b>{available}/{len(results)}</b>",
-            f"🆓 Free آماده: <b>{free_available}</b>",
-            f"🎯 Route انتخابی Agent: <code>{selected_text}</code>",
-            "ℹ️ اگر route فعلی از کار بیفتد، router در همان درخواست به مدل بعدی طبق اولویت Free→Paid failover می‌کند؛ این انتخاب برای همه بخش‌های Agent مشترک است.",
-        ])
+        lines.extend(["\n━━━━━━━━━━━━━━━━━━", f"🟢 پاسخ‌دهنده: <b>{available}/{len(results)}</b> · 🆓 <b>{free_available}</b>", f"🎯 Route فعال: <code>{selected_text}</code>"])
+        if recovery.get("route"):
+            lines.append(f"⚡ Fastest pin: <code>{recovery['route']}</code> · {recovery.get('latency_ms')}ms")
+        lines.append("ℹ️ مانیتور مداوم در پس‌زمینه همیشه به سریع‌ترین مدل پاسخ‌دهنده سوئیچ می‌کند.")
         return "\n".join(lines)
 
+    def auto_connect_working_model(self) -> str:
+        self._check_enabled(require_git=False)
+        try:
+            result = self.recover_working_route(force=True, prefer_fastest=True)
+        except AIProviderError as exc:
+            raise AIAgentError(str(exc)) from exc
+        if not result.get("ok"):
+            return "🔴 <b>اتصال خودکار ناموفق</b>\nهیچ مدلی پاسخ نداد. API key / base URL را در Render چک کنید."
+        free_label = "🆓 رایگان" if result.get("free") else "💳 پولی"
+        return (
+            "🟢 <b>سریع‌ترین مدل وصل شد</b>\n━━━━━━━━━━━━━━━━━━\n"
+            f"⚡ Route: <code>{result.get('route')}</code>\n"
+            f"⏱ {result.get('latency_ms')}ms · {free_label}\n"
+            f"🧪 سالم: <b>{result.get('working_count')}/{result.get('tested')}</b>\n"
+            "مانیتور مداوم این انتخاب را به‌روز نگه می‌دارد."
+        )
+
     def _live_agent_probe(self) -> tuple[str, str]:
-        """Perform one real routed request and return the route that answered."""
         data = self.router.chat(
             [
                 {"role": "system", "content": "You are a health-check endpoint for RahYar AI Agent. Reply exactly OK."},
@@ -207,51 +259,38 @@ class RoutedAIAgentService(AIAgentService):
         return provider, model
 
     def status(self) -> str:
-        """Return health for the exact provider pool used by every agent operation."""
         self._check_enabled(require_git=False)
         providers = self.router.providers()
         if not providers:
             raise AIAgentError("No AI provider is configured")
-
         candidates = self.router._ordered_candidates(providers)
-        free_count = sum(1 for provider, model in candidates if self.router._is_free_model(model))
-        route_lines = [
-            f"{provider.name}/{model}{' [free]' if self.router._is_free_model(model) else ''}"
-            for provider, model in candidates
-        ]
+        free_count = sum(1 for _, model in candidates if self.router._is_free_model(model))
+        route_lines = [f"{p.name}/{m}{' [free]' if self.router._is_free_model(m) else ''}" for p, m in candidates]
         try:
             active_provider, active_model = self._live_agent_probe()
             live = f"{active_provider}/{active_model}"
         except (AIProviderError, AIAgentError) as exc:
-            live = f"FAILED: {str(exc)[:180]}"
+            try:
+                recovered = self.recover_working_route(force=True, prefer_fastest=True)
+                live = f"RECOVERED:{recovered.get('route')}" if recovered.get("ok") else f"FAILED: {str(exc)[:160]}"
+            except Exception:
+                live = f"FAILED: {str(exc)[:160]}"
         write = self._write_capable()
         lines = [
             f"enabled={self.settings.AI_AGENT_ENABLED}",
-            f"api_key_configured={bool(providers)}",
             f"model={live}",
-            f"base_url=hidden ({len(providers)} provider route(s))",
+            f"api_key_configured={bool(providers)}",
             f"max_retries={self.settings.AI_AGENT_MAX_RETRIES}",
-            f"repo={self.repo}",
-            f"git_available={self._has_git()}",
-            f"github_write_ready={self.settings.github_write_ready}",
-            f"write_mode={'yes' if write else 'no (status/analyze only)'}",
-            f"chat_assistant_enabled={self.settings.CHAT_ASSISTANT_ENABLED}",
-            f"chat_key_configured={bool(self.settings.effective_chat_api_key)}",
+            f"write_mode={'yes' if write else 'no'}",
             f"router_free_candidates={free_count}",
             f"router_candidates={route_lines!r}",
-            "agent_operations=shared_router(Planner,Audit,Debug,Assistant,Fix,Feature,Refactor,Tests)",
+            "auto_recover=enabled",
+            "continuous_fastest_probe=enabled",
         ]
-        if self._has_git():
-            try:
-                lines.extend([
-                    f"branch={self._git('branch', '--show-current')}",
-                    f"head={self._git('rev-parse', '--short', 'HEAD')}",
-                    f"locked={self._lock_path().exists()}",
-                ])
-            except AIAgentError as exc:
-                lines.append(f"git_error={exc}")
-        elif self.settings.github_write_ready:
-            lines.append("note=Online write: clone on demand to AI_AGENT_WORK_DIR, push ai/* + PR")
-        else:
-            lines.append("note=برای نوشتن کد: AI_AGENT_WRITE_ENABLED + GITHUB_TOKEN + GITHUB_REPO")
+        if self._last_recovered_route:
+            lines.append(f"last_auto_recovered={self._last_recovered_route}")
+        if hasattr(self.router, "latency_snapshot"):
+            snap = self.router.latency_snapshot()[:5]
+            if snap:
+                lines.append(f"latency_top={snap!r}")
         return "\n".join(lines)
