@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     AI_AGENT_MODEL: str = "gpt-4o-mini"
     AI_AGENT_MAX_RETRIES: int = 2
     AI_AGENT_TIMEOUT_SECONDS: int = 180
+    # Opt-in: when true, non-benign runtime errors may trigger an ai/* auto-fix PR.
+    # Never merges to main. Requires AI_AGENT_ENABLED and write-capable agent config.
+    AI_AGENT_AUTO_FIX_ON_ERROR: bool = False
     AI_API_KEY: str | None = None
     AI_BASE_URL: str | None = None
     AI_MODEL: str | None = None
@@ -122,9 +125,6 @@ class Settings(BaseSettings):
     def effective_ai_model(self) -> str:
         model = (self.AI_MODEL or self.AI_AGENT_MODEL or "gpt-4o-mini").strip()
         host = (urlparse(self.effective_ai_base_url).hostname or "").lower()
-        # AgentRouter's current OpenAI-compatible catalog does not expose the
-        # old mimo-v2.5-free identifier. Keep deployments that still have that
-        # stale value from hard-failing every Agent request with HTTP 404.
         if host.endswith("agentrouter.org") and model.lower() in {"mimo-v2.5-free", "mimo-v2.5"}:
             fallback = (self.AI_FALLBACK_MODEL or "gpt-5.5").strip()
             return fallback or "gpt-5.5"
