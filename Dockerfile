@@ -13,6 +13,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY docker-build-id.txt /tmp/rahyar-build-id.txt
 COPY . .
 
-ENV RAHYAR_BUILD_ID=20260916-enroll-plan-phone-v23
+ENV RAHYAR_BUILD_ID=20260916-schema-guard-1h-v24
 
 CMD ["sh", "-c", "alembic upgrade head && python -m src.main"]

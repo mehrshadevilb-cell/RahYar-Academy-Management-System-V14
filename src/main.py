@@ -12,6 +12,7 @@ import uvicorn
 from src.bot.bot import bot, dp, setup_handlers, ai_agent_knowledge
 from src.core.config.settings import get_settings
 from src.core.logging.logger import get_logger
+from src.database.schema_guard import ensure_critical_schema
 from src.database.seed_payment_card import seed_default_card
 from src.database.seed_products import seed_default_products
 from src.database.seed_online_courses import seed_default_online_courses
@@ -173,6 +174,13 @@ async def _poll_telegram_forever() -> None:
 
 async def start_bot():
     logger.info("Starting RahYar Bot... build=%s", _build_id())
+    # Last-resort heal for columns that production may still be missing when
+    # Alembic history is branched/stamped incorrectly (e.g. reminder_1h_sent).
+    try:
+        ensure_critical_schema()
+        logger.info("schema_guard: critical columns verified")
+    except Exception:
+        logger.exception("schema_guard failed; bot may hit UndefinedColumn errors")
     seed_default_card()
     seed_default_products()
     seed_default_online_courses()
