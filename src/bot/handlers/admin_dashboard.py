@@ -1,4 +1,4 @@
-"""Owner daily dashboard — thin Telegram layer over OwnerDashboardService."""
+"""Owner daily dashboard, inactive students, and system health."""
 from __future__ import annotations
 
 from aiogram import F, Router
@@ -6,9 +6,11 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from src.core.admin_access import is_admin_user
 from src.services.owner_dashboard_service import OwnerDashboardService
+from src.services.system_health_service import SystemHealthService
 
 router = Router()
 _dashboard = OwnerDashboardService()
+_health = SystemHealthService()
 
 
 def _dashboard_keyboard() -> InlineKeyboardMarkup:
@@ -28,6 +30,16 @@ def _dashboard_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     text="💰 اقساط",
                     callback_data="admin_installments",
+                ),
+                InlineKeyboardButton(
+                    text="😴 هنرجویان غیرفعال",
+                    callback_data="admin_inactive_students",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🩺 وضعیت سیستم",
+                    callback_data="admin_system_health",
                 ),
                 InlineKeyboardButton(
                     text="📊 خروجی CSV",
@@ -50,6 +62,22 @@ def _dashboard_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def _back_to_dashboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="⬅️ بازگشت به گزارش امروز", callback_data="admin_dashboard")],
+            [InlineKeyboardButton(text="🏠 منوی ادمین", callback_data="admin_home")],
+        ]
+    )
+
+
+async def _safe_edit(callback: CallbackQuery, text: str, reply_markup: InlineKeyboardMarkup) -> None:
+    try:
+        await callback.message.edit_text(text, reply_markup=reply_markup)
+    except Exception:
+        await callback.message.answer(text, reply_markup=reply_markup)
+
+
 @router.callback_query(F.data == "admin_dashboard")
 async def admin_dashboard(callback: CallbackQuery, db):
     if not is_admin_user(callback.from_user):
@@ -57,12 +85,28 @@ async def admin_dashboard(callback: CallbackQuery, db):
         return
 
     summary = _dashboard.get_summary(db)
-    text = summary.format_persian()
+    await _safe_edit(callback, summary.format_persian(), _dashboard_keyboard())
+    await callback.answer()
 
-    try:
-        await callback.message.edit_text(text, reply_markup=_dashboard_keyboard())
-    except Exception:
-        # e.g. message content unchanged on refresh
-        await callback.message.answer(text, reply_markup=_dashboard_keyboard())
 
+@router.callback_query(F.data == "admin_inactive_students")
+async def admin_inactive_students(callback: CallbackQuery, db):
+    if not is_admin_user(callback.from_user):
+        await callback.answer("⛔️ شما دسترسی ندارید.", show_alert=True)
+        return
+
+    rows = _dashboard.list_inactive_enrollments(db, days=14, limit=25)
+    text = _dashboard.format_inactive_list(rows, days=14)
+    await _safe_edit(callback, text, _back_to_dashboard())
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin_system_health")
+async def admin_system_health(callback: CallbackQuery):
+    if not is_admin_user(callback.from_user):
+        await callback.answer("⛔️ شما دسترسی ندارید.", show_alert=True)
+        return
+
+    report = _health.check()
+    await _safe_edit(callback, report.format_persian(), _back_to_dashboard())
     await callback.answer()

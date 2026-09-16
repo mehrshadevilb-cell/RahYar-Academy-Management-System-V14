@@ -9,6 +9,10 @@ def admin_main_menu():
                     text="📊 گزارش امروز",
                     callback_data="admin_dashboard",
                 ),
+                InlineKeyboardButton(
+                    text="🩺 وضعیت سیستم",
+                    callback_data="admin_system_health",
+                ),
             ],
             [
                 InlineKeyboardButton(text="📚 محصولات", callback_data="admin_products"),
