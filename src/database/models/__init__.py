@@ -10,6 +10,7 @@ from .installment import Installment, InstallmentStatus
 from .invite_link import TelegramInviteLink
 from .knowledge import KnowledgeItem, QuizQuestion
 from .license import License
+from .notification_preference import NotificationPreference
 from .online_course import OnlineCourse
 from .online_enrollment import EnrollmentStatus, OnlineEnrollment, PaymentModel
 from .online_time_slot import OnlineTimeSlot
@@ -28,9 +29,9 @@ __all__ = [
     "AdminLog", "AIModel", "AIProvider", "Assignment", "AssignmentSubmission",
     "SubmissionStatus", "Attendance", "AttendanceStatus", "Course", "ProductDeliveryType",
     "DiscountCode", "DiscountType", "Enrollment", "Installment", "InstallmentStatus",
-    "TelegramInviteLink", "KnowledgeItem", "QuizQuestion", "License", "OnlineCourse",
-    "EnrollmentStatus", "OnlineEnrollment", "PaymentModel", "OnlineTimeSlot", "Payment",
-    "PaymentCard", "Referral", "ReferralStatus", "Reservation", "ReservationStatus",
+    "TelegramInviteLink", "KnowledgeItem", "QuizQuestion", "License", "NotificationPreference",
+    "OnlineCourse", "EnrollmentStatus", "OnlineEnrollment", "PaymentModel", "OnlineTimeSlot",
+    "Payment", "PaymentCard", "Referral", "ReferralStatus", "Reservation", "ReservationStatus",
     "SpotPlayerCourse", "StudentProfile", "SupportRequest", "SupportStatus",
     "TelegramAccount", "TelegramChannel", "User", "UserRole",
 ]
