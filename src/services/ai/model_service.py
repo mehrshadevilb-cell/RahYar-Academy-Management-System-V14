@@ -102,6 +102,13 @@ class AIModelService:
 
         for model in existing.values():
             if model.model_id not in seen and model.is_active:
+                # Never take the last known route away just because a provider
+                # returned a temporarily incomplete catalog. The next health
+                # selection can replace this default as soon as a new model
+                # responds; until then the router can still use the old model
+                # and its normal fallback/cooldown logic remains available.
+                if model.is_default:
+                    continue
                 model.is_active = False
                 model.is_default = False
                 deactivated += 1
