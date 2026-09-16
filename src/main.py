@@ -6,6 +6,7 @@ from pathlib import Path
 
 from aiogram.exceptions import TelegramConflictError, TelegramUnauthorizedError
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 import uvicorn
 
@@ -19,6 +20,7 @@ from src.database.seed_online_courses import seed_default_online_courses
 from src.database.session import SessionLocal
 from src.services.ai.auto_configure import auto_configure_ai
 from src.services.reminder_scheduler import InstallmentReminderScheduler
+from src.web.api_v1 import router as api_v1_router
 from src.web.router import router as storefront_router
 
 settings = get_settings()
@@ -38,8 +40,26 @@ def _build_id() -> str:
     return "unknown"
 
 
-app = FastAPI(title="RahYar Academy Management System", description="Telegram bot + Web sharing one database")
+app = FastAPI(
+    title="RahYar Academy Management System",
+    description="Telegram bot + Web + JSON API sharing one database",
+)
+
+_cors_origins = [
+    o.strip()
+    for o in (os.getenv("CORS_ORIGINS") or "http://localhost:3000,http://127.0.0.1:3000").split(",")
+    if o.strip()
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins if _cors_origins != ["*"] else ["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.include_router(storefront_router)
+app.include_router(api_v1_router)
 
 
 @app.exception_handler(Exception)
@@ -62,13 +82,14 @@ async def head_root():
 async def api_status():
     return JSONResponse({
         "status": "running",
-        "service": "RahYar Bot + Web",
+        "service": "RahYar Bot + Web + API v1",
         "site": settings.SITE_NAME,
         "build": _build_id(),
         "chat_assistant": settings.CHAT_ASSISTANT_ENABLED,
         "knowledge": settings.KNOWLEDGE_ENABLED,
         "ai_agent_knowledge_runtime": True,
         "telegram_polling": True,
+        "api_v1": True,
     })
 
 
@@ -126,16 +147,13 @@ async def _auto_configure_ai_at_startup() -> None:
 
 
 async def _prepare_telegram_polling() -> None:
-    """Validate the token and clear webhook state before starting getUpdates."""
     me = await bot.get_me()
     logger.info("Telegram bot authenticated: @%s (id=%s)", me.username or "unknown", me.id)
-    # Do not discard updates during an ordinary restart or transient conflict.
     await bot.delete_webhook(drop_pending_updates=False)
     logger.info("Telegram webhook cleared; polling can start")
 
 
 async def _poll_telegram_forever() -> None:
-    """Keep polling alive through transient Telegram/network failures."""
     restart_delay = max(2, int(os.getenv("TELEGRAM_POLLING_RESTART_DELAY_SECONDS", "5")))
     max_delay = max(restart_delay, int(os.getenv("TELEGRAM_POLLING_MAX_RESTART_DELAY_SECONDS", "60")))
     consecutive_failures = 0
@@ -174,8 +192,6 @@ async def _poll_telegram_forever() -> None:
 
 async def start_bot():
     logger.info("Starting RahYar Bot... build=%s", _build_id())
-    # Last-resort heal for columns that production may still be missing when
-    # Alembic history is branched/stamped incorrectly (e.g. reminder_1h_sent).
     try:
         ensure_critical_schema()
         logger.info("schema_guard: critical columns verified")
