@@ -34,16 +34,26 @@ class AgentPlan:
 
 
 class AIAgentRuntime:
-    ALWAYS_SKILLS = ("security.md", "coding.md", "review.md")
+    ALWAYS_SKILLS = (
+        "security.md",
+        "coding.md",
+        "review.md",
+        "architecture.md",
+        "failover.md",
+    )
     KEYWORD_SKILLS = {
         "telegram_ui.md": ("telegram", "bot", "keyboard", "button", "ui", "ux", "پیام", "دکمه"),
         "ai_ui_design.md": ("ai developer", "dashboard", "agent ui", "agent", "پنل", "داشبورد"),
         "security.md": ("security", "auth", "permission", "secret", "token", "payment", "امنیت", "دسترسی"),
         "coding.md": ("code", "implement", "feature", "refactor", "کد", "قابلیت"),
         "review.md": ("review", "audit", "bug", "fix", "test", "بازبینی", "باگ", "تست"),
+        "payments.md": ("payment", "installment", "card", "receipt", "پرداخت", "قسط", "کارت", "فیش"),
+        "failover.md": ("model", "provider", "failover", "404", "latency", "speed", "مدل"),
+        "architecture.md": ("architecture", "service", "repository", "migration", "alembic", "معماری"),
+        "debug.md": ("debug", "error", "traceback", "exception", "خطا", "دیباگ"),
     }
-    MAX_SKILL_FILES = 6
-    MAX_SKILL_CHARS = 18_000
+    MAX_SKILL_FILES = 8
+    MAX_SKILL_CHARS = 24_000
     REDIS_LOCK_KEY = "rahyar:ai-agent:single-flight"
     REDIS_LOCK_TTL = 45 * 60
 
