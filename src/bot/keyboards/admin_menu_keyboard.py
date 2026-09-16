@@ -5,6 +5,12 @@ def admin_main_menu():
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
+                InlineKeyboardButton(
+                    text="📊 گزارش امروز",
+                    callback_data="admin_dashboard",
+                ),
+            ],
+            [
                 InlineKeyboardButton(text="📚 محصولات", callback_data="admin_products"),
                 InlineKeyboardButton(text="💳 پرداخت‌های در انتظار", callback_data="admin_pending"),
             ],

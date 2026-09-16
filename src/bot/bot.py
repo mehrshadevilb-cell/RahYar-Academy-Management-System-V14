@@ -11,7 +11,7 @@ from src.bot.telegram_errors import is_benign_telegram_error, should_notify_owne
 
 from src.bot.handlers import start, course, profile, my_courses, payment, admin
 from src.bot.handlers import online_class, admin_online_enrollment, admin_online, admin_installments
-from src.bot.handlers import admin_discount, admin_logs, admin_broadcast, admin_reports
+from src.bot.handlers import admin_discount, admin_logs, admin_broadcast, admin_reports, admin_dashboard
 from src.bot.handlers import admin_ai, admin_ai_self_check, referral, support, admin_support
 from src.bot.handlers import assignment, admin_assignments, progress
 from src.bot.handlers import music_generator, group_music_panel
@@ -102,11 +102,11 @@ async def global_error_handler(event: ErrorEvent):
         return True
 
     if is_benign_telegram_error(exc):
-        logger.info("Benign Telegram error: %s", exc)
+        logger.info("Benign Telegram error: %s", exp)
         return True
 
-    logger.exception("Unhandled error: %s", exc)
-    await send_error_report(event, exc)
+    logger.exception("Unhandled error: %s", exp)
+    await send_error_report(event, exp)
 
     chat_id = None
     if event.update.message:
@@ -135,7 +135,7 @@ def setup_handlers():
     for module in (
         start, course, profile, my_courses, payment, admin, online_class,
         admin_online_enrollment, admin_online, admin_installments, admin_discount, admin_logs,
-        admin_broadcast, admin_reports, admin_ai, admin_ai_self_check,
+        admin_broadcast, admin_reports, admin_dashboard, admin_ai, admin_ai_self_check,
         referral, support, admin_support, assignment, admin_assignments,
         progress, group_music_panel, music_generator, ai_agent_knowledge,
         chat_assistant,
