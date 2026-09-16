@@ -14,6 +14,7 @@ from src.bot.bot import bot, dp, setup_handlers, ai_agent_knowledge
 from src.core.config.settings import get_settings
 from src.core.logging.logger import get_logger
 from src.core.middleware.request_id import RequestIdMiddleware
+from src.core.diagnostics.startup import startup_step
 from src.database.schema_guard import ensure_critical_schema
 from src.database.seed_payment_card import seed_default_card
 from src.database.seed_products import seed_default_products
@@ -49,11 +50,7 @@ app = FastAPI(
 
 app.add_middleware(RequestIdMiddleware)
 
-_cors_origins = [
-    o.strip()
-    for o in (os.getenv("CORS_ORIGINS") or "http://localhost:3000,http://127.0.0.1:3000").split(",")
-    if o.strip()
-]
+_cors_origins = [o.strip() for o in (os.getenv("CORS_ORIGINS") or "http://localhost:3000,http://127.0.0.1:3000").split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins if _cors_origins != ["*"] else ["*"],
