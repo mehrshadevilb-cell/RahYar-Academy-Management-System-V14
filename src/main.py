@@ -18,6 +18,7 @@ from src.database.seed_products import seed_default_products
 from src.database.seed_online_courses import seed_default_online_courses
 from src.database.session import SessionLocal
 from src.services.ai.auto_configure import auto_configure_ai
+from src.services.ai.model_speed_monitor import model_speed_monitor
 from src.services.reminder_scheduler import InstallmentReminderScheduler
 from src.web.router import router as storefront_router
 
@@ -190,10 +191,19 @@ async def start_bot():
     installment_scheduler = InstallmentReminderScheduler(bot)
     installment_scheduler.start()
     ai_agent_knowledge.start()
+    try:
+        model_speed_monitor.start()
+        logger.info("ModelSpeedMonitor started")
+    except Exception:
+        logger.exception("ModelSpeedMonitor failed to start; continuing without continuous probe")
 
     try:
         await _poll_telegram_forever()
     finally:
+        try:
+            await model_speed_monitor.stop()
+        except Exception:
+            logger.exception("ModelSpeedMonitor stop failed")
         await ai_agent_knowledge.stop()
         if installment_scheduler._task:
             installment_scheduler._task.cancel()
