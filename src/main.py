@@ -21,6 +21,7 @@ from src.database.seed_products import seed_default_products
 from src.database.seed_online_courses import seed_default_online_courses
 from src.database.session import SessionLocal
 from src.services.ai.auto_configure import auto_configure_ai
+from src.services.ai.model_refresh_scheduler import AIModelRefreshScheduler
 from src.services.reminder_scheduler import InstallmentReminderScheduler
 from src.web.api_ai import router as api_ai_router
 from src.web.api_v1 import router as api_v1_router
@@ -209,12 +210,15 @@ async def start_bot():
 
     installment_scheduler = InstallmentReminderScheduler(bot)
     installment_scheduler.start()
+    ai_model_refresh_scheduler = AIModelRefreshScheduler()
+    ai_model_refresh_scheduler.start()
     ai_agent_knowledge.start()
 
     try:
         await _poll_telegram_forever()
     finally:
         await ai_agent_knowledge.stop()
+        ai_model_refresh_scheduler.stop()
         if installment_scheduler._task:
             installment_scheduler._task.cancel()
         await bot.session.close()
