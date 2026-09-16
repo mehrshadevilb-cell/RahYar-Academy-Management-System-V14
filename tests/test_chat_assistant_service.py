@@ -2,6 +2,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from src.ai.provider_router import AIProviderError
 from src.services.chat_assistant_service import (
     BOT_GUIDE_FA,
     SYSTEM_PROMPT_FA,
@@ -61,6 +62,22 @@ def test_rate_limit_is_per_user():
     service.settings.CHAT_ASSISTANT_MAX_MESSAGES_PER_HOUR = 1
     service._check_rate_limit("42")
     service._check_rate_limit("99")
+
+
+def test_request_model_reports_only_real_rate_limits_as_rate_limited():
+    service = ChatAssistantService()
+    service.router = MagicMock()
+    service.router.chat.side_effect = AIProviderError(
+        "provider unavailable", retryable=True, retry_after=30, provider="kiraai"
+    )
+    with pytest.raises(ChatAssistantError, match="provider_unavailable"):
+        service._request_model([])
+
+    service.router.chat.side_effect = AIProviderError(
+        "model rate limited", retryable=True, retry_after=30, provider="openrouter", rate_limited=True
+    )
+    with pytest.raises(ChatAssistantError, match="provider_rate_limited"):
+        service._request_model([])
 
 
 def test_catalog_context_handles_empty_catalog():

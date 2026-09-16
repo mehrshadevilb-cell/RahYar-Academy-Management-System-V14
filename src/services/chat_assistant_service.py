@@ -201,7 +201,7 @@ class ChatAssistantService:
             return str(data["choices"][0]["message"]["content"]).strip()
         except AIProviderError as exc:
             if exc.retryable:
-                raise ChatAssistantError("provider_rate_limited" if exc.retry_after else "provider_unavailable") from exc
+                raise ChatAssistantError("provider_rate_limited" if exc.rate_limited else "provider_unavailable") from exc
             raise ChatAssistantError("provider_unavailable") from exc
         except (KeyError, IndexError, TypeError) as exc:
             raise ChatAssistantError("provider_unavailable") from exc

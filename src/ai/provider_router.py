@@ -28,11 +28,12 @@ class AIProvider:
 
 
 class AIProviderError(RuntimeError):
-    def __init__(self, message: str, *, retryable: bool = False, retry_after: int = 0, provider: str = "") -> None:
+    def __init__(self, message: str, *, retryable: bool = False, retry_after: int = 0, provider: str = "", rate_limited: bool = False) -> None:
         super().__init__(message)
         self.retryable = retryable
         self.retry_after = max(0, retry_after)
         self.provider = provider
+        self.rate_limited = rate_limited
 
 
 class AIProviderRouter:
@@ -412,7 +413,7 @@ class AIProviderRouter:
                 if self._is_rate_limited(exc.code, body):
                     cooldown = min(retry_after or 300, 86400)
                     self._model_cooldown_until[model_key] = time.time() + cooldown
-                    last = AIProviderError(f"model rate limited: {provider.name}/{model}", retryable=True, retry_after=cooldown, provider=provider.name)
+                    last = AIProviderError(f"model rate limited: {provider.name}/{model}", retryable=True, retry_after=cooldown, provider=provider.name, rate_limited=True)
                     continue
                 if exc.code in {401, 403}:
                     self._model_cooldown_until[model_key] = time.time() + 120
