@@ -210,12 +210,25 @@ async def _handle_attendance(callback: CallbackQuery, bot: Bot, db, status: Atte
     if not reservation:
         await callback.answer("رزرو پیدا نشد", show_alert=True)
         return
-    attendance_service.mark(
-        db,
-        reservation_id=reservation.id,
-        enrollment_id=reservation.enrollment_id,
-        status=status,
-    )
+    enrollment = online_enrollment_service.get_by_id(db, reservation.enrollment_id)
+    if not enrollment:
+        await callback.answer("ثبت‌نام مرتبط پیدا نشد", show_alert=True)
+        return
+    try:
+        attendance_service.mark_attendance(
+            db,
+            enrollment=enrollment,
+            session_date=reservation.requested_date,
+            status=status,
+            reservation_id=reservation.id,
+        )
+    except ValueError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    except Exception:
+        logger.exception("mark_attendance failed")
+        await callback.answer("خطا در ثبت حضور", show_alert=True)
+        return
     labels = {
         AttendanceStatus.PRESENT: "حاضر",
         AttendanceStatus.ABSENT: "غایب",
@@ -223,9 +236,6 @@ async def _handle_attendance(callback: CallbackQuery, bot: Bot, db, status: Atte
     }
     label = labels.get(status, str(status))
     await callback.message.edit_text(f"✅ حضور: {label} (رزرو #{reservation.id})")
-    enrollment = online_enrollment_service.get_by_id(db, reservation.enrollment_id)
-    if enrollment and status == AttendanceStatus.PRESENT:
-        online_enrollment_service.adjust_remaining_sessions(db, enrollment, -1)
     await callback.answer(label)
 
 
