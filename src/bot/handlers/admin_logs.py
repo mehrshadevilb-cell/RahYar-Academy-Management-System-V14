@@ -6,20 +6,14 @@ from src.bot.states.admin_states import AdminState
 from src.bot.keyboards.admin_menu_keyboard import admin_back_button
 from src.bot.keyboards.admin_logs_keyboard import admin_logs_keyboard
 from src.services.admin_log_service import AdminLogService
-from src.core.config.settings import get_settings
+from src.core.admin_access import is_admin_user
 
 
 router = Router()
 
 admin_log_service = AdminLogService()
 
-settings = get_settings()
-
 RECENT_LOGS_LIMIT = 20
-
-
-def _is_owner(user_id: int) -> bool:
-    return user_id == settings.OWNER_ID
 
 
 def _format_logs(logs, empty_text: str) -> str:
@@ -38,7 +32,7 @@ def _format_logs(logs, empty_text: str) -> str:
 @router.callback_query(F.data == "admin_logs")
 async def admin_logs_view(callback: CallbackQuery, db):
 
-    if not _is_owner(callback.from_user.id):
+    if not is_admin_user(callback.from_user):
         await callback.answer("⛔️ شما دسترسی ندارید.", show_alert=True)
         return
 
@@ -59,7 +53,7 @@ async def admin_logs_view(callback: CallbackQuery, db):
 @router.callback_query(F.data == "admin_logs_search")
 async def admin_logs_search_start(callback: CallbackQuery, state: FSMContext):
 
-    if not _is_owner(callback.from_user.id):
+    if not is_admin_user(callback.from_user):
         await callback.answer("⛔️ شما دسترسی ندارید.", show_alert=True)
         return
 
@@ -76,7 +70,7 @@ async def admin_logs_search_start(callback: CallbackQuery, state: FSMContext):
 @router.message(AdminState.waiting_log_search_keyword)
 async def admin_logs_search_run(message: Message, state: FSMContext, db):
 
-    if not _is_owner(message.from_user.id):
+    if not is_admin_user(message.from_user):
         return
 
     keyword = (message.text or "").strip()

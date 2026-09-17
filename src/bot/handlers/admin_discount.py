@@ -15,19 +15,13 @@ from src.database.models.discount_code import DiscountType
 from src.services.discount_code_service import DiscountCodeService
 from src.services.admin_log_service import AdminLogService
 from src.core.constants import admin_actions
-from src.core.config.settings import get_settings
+from src.core.admin_access import is_admin_user
 
 
 router = Router()
 
 discount_code_service = DiscountCodeService()
 admin_log_service = AdminLogService()
-
-settings = get_settings()
-
-
-def _is_owner(user_id: int) -> bool:
-    return user_id == settings.OWNER_ID
 
 
 def _discount_detail_text(code) -> str:
@@ -58,7 +52,7 @@ def _discount_detail_text(code) -> str:
 @router.callback_query(F.data == "admin_discounts")
 async def admin_discounts_list(callback: CallbackQuery, db):
 
-    if not _is_owner(callback.from_user.id):
+    if not is_admin_user(callback.from_user):
         await callback.answer("⛔️ شما دسترسی ندارید.", show_alert=True)
         return
 
@@ -83,7 +77,7 @@ async def admin_discounts_list(callback: CallbackQuery, db):
 @router.callback_query(F.data.startswith("admin_discount_view_"))
 async def admin_discount_view(callback: CallbackQuery, db):
 
-    if not _is_owner(callback.from_user.id):
+    if not is_admin_user(callback.from_user):
         await callback.answer("⛔️ شما دسترسی ندارید.", show_alert=True)
         return
 
@@ -105,7 +99,7 @@ async def admin_discount_view(callback: CallbackQuery, db):
 @router.callback_query(F.data.startswith("admin_discount_toggle_"))
 async def admin_discount_toggle(callback: CallbackQuery, db):
 
-    if not _is_owner(callback.from_user.id):
+    if not is_admin_user(callback.from_user):
         await callback.answer("⛔️ شما دسترسی ندارید.", show_alert=True)
         return
 
@@ -135,7 +129,7 @@ async def admin_discount_toggle(callback: CallbackQuery, db):
 @router.callback_query(F.data == "admin_discount_add")
 async def admin_discount_add_start(callback: CallbackQuery, state: FSMContext):
 
-    if not _is_owner(callback.from_user.id):
+    if not is_admin_user(callback.from_user):
         await callback.answer("⛔️ شما دسترسی ندارید.", show_alert=True)
         return
 
@@ -151,7 +145,7 @@ async def admin_discount_add_start(callback: CallbackQuery, state: FSMContext):
 @router.message(AdminState.waiting_discount_code_text)
 async def admin_discount_add_text(message: Message, state: FSMContext, db):
 
-    if not _is_owner(message.from_user.id):
+    if not is_admin_user(message.from_user):
         return
 
     raw_code = (message.text or "").strip()
@@ -185,7 +179,7 @@ async def admin_discount_add_text(message: Message, state: FSMContext, db):
 )
 async def admin_discount_add_type(callback: CallbackQuery, state: FSMContext):
 
-    if not _is_owner(callback.from_user.id):
+    if not is_admin_user(callback.from_user):
         await callback.answer("⛔️ شما دسترسی ندارید.", show_alert=True)
         return
 
@@ -212,7 +206,7 @@ async def admin_discount_add_type(callback: CallbackQuery, state: FSMContext):
 @router.message(AdminState.waiting_discount_code_value)
 async def admin_discount_add_value(message: Message, state: FSMContext):
 
-    if not _is_owner(message.from_user.id):
+    if not is_admin_user(message.from_user):
         return
 
     data = await state.get_data()
@@ -253,7 +247,7 @@ async def admin_discount_add_value(message: Message, state: FSMContext):
 @router.message(AdminState.waiting_discount_code_max_uses)
 async def admin_discount_add_max_uses(message: Message, state: FSMContext):
 
-    if not _is_owner(message.from_user.id):
+    if not is_admin_user(message.from_user):
         return
 
     raw = (message.text or "").strip()
@@ -276,7 +270,7 @@ async def admin_discount_add_max_uses(message: Message, state: FSMContext):
 @router.message(AdminState.waiting_discount_code_expiry)
 async def admin_discount_add_expiry(message: Message, state: FSMContext, db):
 
-    if not _is_owner(message.from_user.id):
+    if not is_admin_user(message.from_user):
         return
 
     raw = (message.text or "").strip()

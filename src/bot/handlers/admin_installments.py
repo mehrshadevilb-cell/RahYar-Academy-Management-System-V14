@@ -11,7 +11,7 @@ from src.bot.keyboards.admin_installments_keyboard import installment_review_key
 from src.bot.keyboards.admin_menu_keyboard import admin_back_button
 from src.services.admin_log_service import AdminLogService
 from src.core.constants import admin_actions
-from src.core.config.settings import get_settings
+from src.core.admin_access import is_admin_user
 
 
 router = Router()
@@ -22,12 +22,6 @@ profile_service = ProfileService()
 online_course_service = OnlineCourseService()
 telegram_repository = TelegramRepository()
 admin_log_service = AdminLogService()
-
-settings = get_settings()
-
-
-def _is_owner(user_id: int) -> bool:
-    return user_id == settings.OWNER_ID
 
 
 def _installment_caption(db, installment, label: str) -> str:
@@ -52,7 +46,7 @@ def _installment_caption(db, installment, label: str) -> str:
 @router.callback_query(F.data == "admin_installments")
 async def admin_installments_menu(callback: CallbackQuery, db):
 
-    if not _is_owner(callback.from_user.id):
+    if not is_admin_user(callback.from_user):
         await callback.answer("⛔️ شما دسترسی ندارید.", show_alert=True)
         return
 
@@ -86,7 +80,7 @@ async def admin_installments_menu(callback: CallbackQuery, db):
 @router.callback_query(F.data.startswith("inst_paid_"))
 async def installment_mark_paid(callback: CallbackQuery, bot: Bot, db):
 
-    if not _is_owner(callback.from_user.id):
+    if not is_admin_user(callback.from_user):
         await callback.answer("⛔️ شما دسترسی ندارید.", show_alert=True)
         return
 
