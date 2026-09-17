@@ -26,12 +26,8 @@ def normalize_openai_compatible_base_url(url: str) -> str:
             raw = raw[: -len(suffix)].rstrip("/")
     host = (urlparse(raw).hostname or "").lower()
     gateway_hosts = (
-        "agentrouter.org",
-        "co.agentrouter.org",
-        "www.agentrouter.org",
-        "api.orcarouter.ai",
-        "orcarouter.ai",
-        "www.orcarouter.ai",
+        "agentrouter.org", "co.agentrouter.org", "www.agentrouter.org",
+        "api.orcarouter.ai", "orcarouter.ai", "www.orcarouter.ai",
     )
     if host in gateway_hosts and not raw.endswith("/v1"):
         raw += "/v1"
@@ -77,6 +73,10 @@ class Settings(BaseSettings):
     OPENROUTER_API_KEY: str | None = None
     AGENTROUTER_API_KEY: str | None = None
     GOOGLE_API_KEY: str | None = None
+    OPENCODE_API_KEY: str | None = None
+    OPENCODE_ZEN_BASE_URL: str = "https://opencode.ai/zen/v1"
+    OPENAI_API_KEY: str | None = None
+    OPENAI_BASE_URL: str = "https://api.openai.com/v1"
 
     MUSIC_AUDIO_API_KEY: str | None = None
     MUSIC_AUDIO_BASE_URL: str | None = None
@@ -119,38 +119,20 @@ class Settings(BaseSettings):
 
     @property
     def effective_ai_api_key(self) -> str | None:
-        # A dedicated AgentRouter key must win for the developer Agent. This
-        # makes changing AGENTROUTER_API_KEY/AI_MODEL sufficient without
-        # accidentally continuing to use a stale OpenAI/AI_AGENT key.
-        return (
-            self.AGENTROUTER_API_KEY
-            or self.AI_AGENT_API_KEY
-            or self.AI_API_KEY
-            or ""
-        ).strip() or None
+        return (self.AGENTROUTER_API_KEY or self.AI_AGENT_API_KEY or self.AI_API_KEY or "").strip() or None
 
     @property
     def effective_ai_base_url(self) -> str:
-        # AgentRouter has its own credential, so prefer its OpenAI-compatible
-        # endpoint unless an explicit AI_BASE_URL was supplied.
         if self.AGENTROUTER_API_KEY:
-            return normalize_openai_compatible_base_url(
-                self.AI_BASE_URL or "https://agentrouter.org/v1"
-            )
-        return normalize_openai_compatible_base_url(
-            self.AI_BASE_URL or self.AI_AGENT_BASE_URL or "https://api.openai.com/v1"
-        )
+            return normalize_openai_compatible_base_url(self.AI_BASE_URL or "https://agentrouter.org/v1")
+        return normalize_openai_compatible_base_url(self.AI_BASE_URL or self.AI_AGENT_BASE_URL or "https://api.openai.com/v1")
 
     @property
     def effective_ai_model(self) -> str:
         model = (self.AI_MODEL or self.AI_AGENT_MODEL or "gpt-4o-mini").strip()
         host = (urlparse(self.effective_ai_base_url).hostname or "").lower()
-        # AgentRouter's current OpenAI-compatible catalog does not expose the
-        # old mimo-v2.5-free identifier. Keep stale deployments from hard-
-        # failing every Agent request with HTTP 404.
         if host.endswith("agentrouter.org") and model.lower() in {"mimo-v2.5-free", "mimo-v2.5"}:
-            fallback = (self.AI_FALLBACK_MODEL or "gpt-5.5").strip()
-            return fallback or "gpt-5.5"
+            return (self.AI_FALLBACK_MODEL or "gpt-5.5").strip() or "gpt-5.5"
         return model
 
     @property
@@ -159,54 +141,9 @@ class Settings(BaseSettings):
 
     @property
     def effective_chat_base_url(self) -> str:
-        chat = (self.CHAT_ASSISTANT_BASE_URL or "").strip()
-        default_openai = {"https://api.openai.com/v1", "https://api.openai.com", ""}
-        if chat.rstrip("/") not in default_openai:
-            return normalize_openai_compatible_base_url(chat)
-        if self.AGENTROUTER_API_KEY or self.AI_BASE_URL or self.AI_AGENT_BASE_URL:
-            return self.effective_ai_base_url
-        return normalize_openai_compatible_base_url(chat or "https://api.openai.com/v1")
-
-    @property
-    def effective_chat_model(self) -> str:
-        chat_model = (self.CHAT_ASSISTANT_MODEL or "").strip()
-        if chat_model and chat_model != "gpt-4o-mini":
-            return chat_model
-        if self.effective_ai_api_key:
-            return self.effective_ai_model
-        return chat_model or "gpt-4o-mini"
-
-    @property
-    def github_write_ready(self) -> bool:
-        return bool(self.AI_AGENT_WRITE_ENABLED and (self.GITHUB_TOKEN or "").strip() and (self.GITHUB_REPO or "").strip())
-
-    @property
-    def knowledge_group_ids(self) -> set[int]:
-        result: set[int] = set()
-        for value in self.KNOWLEDGE_GROUP_IDS.split(","):
-            try:
-                if value.strip():
-                    result.add(int(value.strip()))
-            except ValueError:
-                continue
-        return result
-
-    @property
-    def admin_usernames(self) -> set[str]:
-        return {value.strip().lstrip("@").casefold() for value in self.ADMIN_USERNAMES.split(",") if value.strip()}
-
-    @property
-    def new_member_notification_chat_id(self) -> int:
-        return self.NEW_MEMBER_NOTIFICATION_CHAT_ID or self.OWNER_ID
-
-    @property
-    def bot_deep_link_base(self) -> str | None:
-        if not self.BOT_USERNAME:
-            return None
-        username = self.BOT_USERNAME.lstrip("@").strip()
-        return f"https://t.me/{username}" if username else None
+        return normalize_openai_compatible_base_url(self.CHAT_ASSISTANT_BASE_URL or self.effective_ai_base_url)
 
 
-@lru_cache
+@lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings()
