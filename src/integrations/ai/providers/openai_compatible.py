@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any, AsyncIterator
 
 import httpx
@@ -18,6 +19,19 @@ class OpenAICompatibleProvider(BaseAIProvider):
     def _timeout(self) -> float:
         return float(self.extra_config.get("timeout", 30.0))
 
+    @staticmethod
+    def _safe_error_body(response: httpx.Response, limit: int = 1200) -> str:
+        """Return a short upstream error body without leaking credentials."""
+        text = (response.text or "").strip()
+        if not text:
+            return "<empty response body>"
+        text = re.sub(
+            r'(?i)("?(?:api[_-]?key|authorization|access[_-]?token|refresh[_-]?token|token|secret|password)"?\s*[:=]\s*")([^"\n]+)(")',
+            r'\1[REDACTED]\3',
+            text,
+        )
+        return text[:limit]
+
     async def list_models(self) -> list[dict[str, Any]]:
         models_url = str(self.extra_config.get("models_url", "")).strip()
         if not models_url:
@@ -25,7 +39,12 @@ class OpenAICompatibleProvider(BaseAIProvider):
 
         async with httpx.AsyncClient(timeout=self._timeout()) as client:
             response = await client.get(models_url, headers=self._headers())
-            response.raise_for_status()
+            if response.is_error:
+                detail = self._safe_error_body(response)
+                raise RuntimeError(
+                    f"AI model discovery failed: HTTP {response.status_code} "
+                    f"from {models_url}: {detail}"
+                )
             payload = response.json()
 
         models_key = str(self.extra_config.get("models_key", "data"))
@@ -74,7 +93,12 @@ class OpenAICompatibleProvider(BaseAIProvider):
             response = await client.post(
                 f"{self.base_url}/chat/completions", headers=self._headers(), json=body
             )
-            response.raise_for_status()
+            if response.is_error:
+                detail = self._safe_error_body(response)
+                raise RuntimeError(
+                    f"AI chat request failed: HTTP {response.status_code} "
+                    f"from {self.base_url}/chat/completions: {detail}"
+                )
             return response.json()
 
     async def stream_chat_completion(
@@ -85,7 +109,12 @@ class OpenAICompatibleProvider(BaseAIProvider):
             async with client.stream(
                 "POST", f"{self.base_url}/chat/completions", headers=self._headers(), json=body
             ) as response:
-                response.raise_for_status()
+                if response.is_error:
+                    detail = self._safe_error_body(response)
+                    raise RuntimeError(
+                        f"AI streaming request failed: HTTP {response.status_code} "
+                        f"from {self.base_url}/chat/completions: {detail}"
+                    )
                 async for line in response.aiter_lines():
                     if not line.startswith("data:"):
                         continue
