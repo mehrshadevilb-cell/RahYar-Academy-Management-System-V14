@@ -1,5 +1,5 @@
 """
-Seeds the three real academy products (RahYar, Theory, ArtistYar).
+Seeds the four real academy products (RahYar, RahYar Pro, Theory, ArtistYar).
 
 Product/course/channel data here is structural configuration (not a
 secret like an API key or card number), so it is safe to seed directly.
@@ -29,37 +29,53 @@ def seed_default_products():
         )
 
     # ---- Product 1: RahYar ----
-    if not product_exists("راه‌یار"):
-
+    rahyar = db.query(Course).filter(Course.title == "راه‌یار").first()
+    if not rahyar:
         rahyar = Course(
             title="راه‌یار",
             description="بسته کامل آموزش تنظیم، میکس و مسترینگ راه‌یار",
-            price=15_000_000,
+            price=24_000_000,
             delivery_type=ProductDeliveryType.SPOTPLAYER,
             support_group_link="https://t.me/+TqZaRkAyD1JhNzJk",
             support_username="@hi_all",
             sort_order=1,
         )
-
         db.add(rahyar)
         db.flush()
+    else:
+        rahyar.price = 24_000_000
+        rahyar.description = "بسته کامل آموزش تنظیم، میکس و مسترینگ راه‌یار"
+        rahyar.sort_order = 1
 
-        db.add_all([
-            SpotPlayerCourse(
-                product_id=rahyar.id,
-                spotplayer_course_id="69752d413c6f2edac4b6ce71",
-                course_name="راه‌یار - بخش اول",
-                sort_order=1,
-            ),
-            SpotPlayerCourse(
-                product_id=rahyar.id,
-                spotplayer_course_id="697475017e50673ccf9bd7aa",
-                course_name="راه‌یار - بخش دوم",
-                sort_order=2,
-            ),
-        ])
+    rahyar_courses = db.query(SpotPlayerCourse).filter(SpotPlayerCourse.product_id == rahyar.id).all()
+    rahyar_main = next((item for item in rahyar_courses if item.spotplayer_course_id == "69752d413c6f2edac4b6ce71"), None)
+    if not rahyar_main:
+        db.add(SpotPlayerCourse(product_id=rahyar.id, spotplayer_course_id="69752d413c6f2edac4b6ce71", course_name="راه‌یار", sort_order=1))
 
-        print("Product added: راه‌یار")
+    # ---- Product 2: RahYar Pro ----
+    rahyar_pro = db.query(Course).filter(Course.title == "راه‌یار پرو").first()
+    if not rahyar_pro:
+        rahyar_pro = Course(
+            title="راه‌یار پرو",
+            description="نسخه حرفه‌ای آموزش تنظیم، میکس و مسترینگ راه‌یار",
+            price=3_000_000,
+            delivery_type=ProductDeliveryType.SPOTPLAYER,
+            sort_order=2,
+        )
+        db.add(rahyar_pro)
+        db.flush()
+    else:
+        rahyar_pro.price = 3_000_000
+        rahyar_pro.description = "نسخه حرفه‌ای آموزش تنظیم، میکس و مسترینگ راه‌یار"
+        rahyar_pro.sort_order = 2
+
+    pro_course = db.query(SpotPlayerCourse).filter(SpotPlayerCourse.spotplayer_course_id == "697475017e50673ccf9bd7aa").first()
+    if pro_course:
+        pro_course.product_id = rahyar_pro.id
+        pro_course.course_name = "راه‌یار پرو"
+        pro_course.sort_order = 1
+    else:
+        db.add(SpotPlayerCourse(product_id=rahyar_pro.id, spotplayer_course_id="697475017e50673ccf9bd7aa", course_name="راه‌یار پرو", sort_order=1))
 
     # ---- Product 2: Theory ----
     if not product_exists("تئوری موسیقی"):
@@ -69,7 +85,7 @@ def seed_default_products():
             description="آموزش تئوری موسیقی",
             price=380_000,
             delivery_type=ProductDeliveryType.SPOTPLAYER,
-            sort_order=2,
+            sort_order=3,
         )
 
         db.add(theory)
@@ -94,7 +110,7 @@ def seed_default_products():
             description="دسترسی به کانال‌های ضبط، میکس و فایل آرتیست‌یار",
             price=1_500_000,
             delivery_type=ProductDeliveryType.TELEGRAM,
-            sort_order=3,
+            sort_order=4,
         )
 
         db.add(artistyar)
