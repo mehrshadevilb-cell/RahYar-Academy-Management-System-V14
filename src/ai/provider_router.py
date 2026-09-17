@@ -73,7 +73,6 @@ class AIProviderRouter:
 
     @classmethod
     def _discoverable_provider_from_env(cls, name: str, key_var: str, url_var: str, model_var: str, priority: int) -> AIProvider | None:
-        """Create a provider even without MODEL; its catalog is discovered from /models."""
         key = (os.getenv(key_var) or "").strip()
         base_url = cls._normalize_base_url(os.getenv(url_var) or "")
         model = (os.getenv(model_var) or "").strip()
@@ -145,17 +144,12 @@ class AIProviderRouter:
         secondary = self._provider_from_env("secondary", "AI2_API_KEY", "AI2_BASE_URL", "AI2_MODEL", 20)
         if secondary:
             providers.append(secondary)
-
-        # These providers deliberately do NOT require MODEL. The router will
-        # discover every model exposed by the provider and include all models
-        # that can actually answer requests in normal failover routing.
         anthropic = self._discoverable_provider_from_env("anthropic", "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", 30)
         xkiro = self._discoverable_provider_from_env("xkiro", "XKIRO_API_KEY", "XKIRO_BASE_URL", "XKIRO_MODEL", 40)
         if anthropic:
             providers.append(anthropic)
         if xkiro:
             providers.append(xkiro)
-
         if not providers and self.settings.effective_ai_api_key:
             base_url = self._normalize_base_url(self.settings.effective_ai_base_url)
             model = self.settings.effective_ai_model
@@ -171,7 +165,6 @@ class AIProviderRouter:
         cached = self._env_model_cache.get(cache_key)
         if cached and cached[0] > now:
             return AIProvider(**{**provider.__dict__, "models": cached[1]})
-
         url = provider.base_url.rstrip("/") + "/models"
         headers = self._anthropic_headers(provider) if provider.provider_type == "anthropic" else self._headers(provider)
         request = urllib.request.Request(url, headers=headers, method="GET")
@@ -185,7 +178,6 @@ class AIProviderRouter:
                         model_id = str(item.get("id") or item.get("name") or "").strip()
                         if model_id and not self._is_stale_model_id(model_id):
                             models.append(model_id)
-                # Some providers return a plain list under models.
                 if not models:
                     for item in payload.get("models", []):
                         if isinstance(item, dict):
@@ -196,9 +188,6 @@ class AIProviderRouter:
                             models.append(model_id)
         except Exception:
             models = []
-
-        # If a model was explicitly supplied, preserve it as a fallback when
-        # discovery is temporarily unavailable.
         if not models and provider.models:
             models = list(provider.models)
         unique = tuple(dict.fromkeys(models))
@@ -244,9 +233,13 @@ class AIProviderRouter:
                 models = [m for m in models if not self._is_stale_model_id(m)]
                 if key and base_url and models:
                     configured.append(AIProvider(name=name, api_key=key, base_url=base_url, models=tuple(models), priority=int(row.get("priority", 100)), provider_type=str(row.get("provider_type", "") or self._infer_provider_type(name, base_url))))
-        candidates = configured + db_providers
-        if not configured:
-            candidates.extend(self._env_providers())
+
+        # Keep the existing DB/JSON providers, but always append dedicated ENV
+        # providers as an independent pool. Previously these were only added
+        # when AI_PROVIDERS_JSON was empty, which silently ignored Anthropic/XKIRO
+        # in production because the existing providers are already configured.
+        env_providers = self._env_providers()
+        candidates = configured + db_providers + env_providers
         if not candidates:
             raise AIProviderError("No AI provider is configured")
 
@@ -258,12 +251,7 @@ class AIProviderRouter:
 
     def test_models(self, *, timeout_seconds: int = 15) -> list[dict[str, Any]]:
         from src.services.provider_model_health_service import ProviderModelHealthService
-        return ProviderModelHealthService(self).test_all(
-            timeout_seconds=timeout_seconds,
-            discover_catalog=True,
-            sort_results=False,
-            test_paid=True,
-        )
+        return ProviderModelHealthService(self).test_all(timeout_seconds=timeout_seconds, discover_catalog=True, sort_results=False, test_paid=True)
 
     def reset_cooldowns(self) -> None:
         self._cooldown_until.clear()
