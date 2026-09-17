@@ -76,14 +76,21 @@ class Settings(BaseSettings):
     BYTEZ_API_KEY: str | None = None
     DAHL_API_KEY: str | None = None
 
-    # Dedicated provider environment variables. Model names are intentionally
-    # configurable so the router never guesses a provider-specific model id.
     ANTHROPIC_API_KEY: str | None = None
     ANTHROPIC_BASE_URL: str = "https://api.anthropic.com/v1"
     ANTHROPIC_MODEL: str | None = None
     XKIRO_API_KEY: str | None = None
     XKIRO_BASE_URL: str = "https://api.xkiro.com/v1"
     XKIRO_MODEL: str | None = None
+
+    # Cloudflare Workers AI (OpenAI-compatible /ai/v1)
+    # Create token: My Profile → API Tokens → Create Token
+    # Permissions: Account → Workers AI → Read
+    # Verify: curl https://api.cloudflare.com/client/v4/user/tokens/verify -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN"
+    CLOUDFLARE_API_TOKEN: str | None = None
+    CLOUDFLARE_ACCOUNT_ID: str | None = None
+    CLOUDFLARE_AI_MODEL: str = "@cf/meta/llama-3.1-8b-instruct"
+    CLOUDFLARE_AI_BASE_URL: str | None = None
 
     MUSIC_AUDIO_API_KEY: str | None = None
     MUSIC_AUDIO_BASE_URL: str | None = None
@@ -140,6 +147,16 @@ class Settings(BaseSettings):
             fallback = (self.AI_FALLBACK_MODEL or "gpt-5.5").strip()
             return fallback or "gpt-5.5"
         return model
+
+    @property
+    def cloudflare_ai_base_url(self) -> str:
+        explicit = (self.CLOUDFLARE_AI_BASE_URL or "").strip()
+        if explicit:
+            return normalize_openai_compatible_base_url(explicit)
+        account_id = (self.CLOUDFLARE_ACCOUNT_ID or "").strip()
+        if account_id:
+            return f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1"
+        return ""
 
     @property
     def effective_chat_api_key(self) -> str | None:
