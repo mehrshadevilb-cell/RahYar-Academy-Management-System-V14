@@ -37,6 +37,7 @@ from src.services.payment_service import PaymentReviewError, PaymentService
 from src.services.enrollment_service import EnrollmentService
 from src.services.reservation_service import ReservationService
 from src.web.deps import get_db
+from src.core.security.password import hash_password
 
 logger = get_logger("web.api_v1")
 settings = get_settings()
@@ -151,6 +152,12 @@ class StudentAdminUpdate(BaseModel):
     is_active: bool = True
 
 
+class StudentRegisterIn(BaseModel):
+    full_name: str = Field(min_length=2, max_length=100)
+    phone: str = Field(min_length=10, max_length=20)
+    password: str = Field(min_length=6, max_length=128)
+
+
 class ReservationReviewIn(BaseModel):
     action: str = Field(pattern="^(confirm|reject)$")
     notes: str | None = Field(default=None, max_length=500)
@@ -200,6 +207,40 @@ def require_web_admin(x_admin_key: str | None = Header(default=None, alias="X-Ad
         raise HTTPException(status_code=503, detail="web_admin_api_key_not_configured")
     if not x_admin_key or not secrets.compare_digest(x_admin_key, expected):
         raise HTTPException(status_code=403, detail="admin_access_denied")
+
+
+@router.post("/students/register", status_code=201)
+async def register_student(body: StudentRegisterIn, db: Session = Depends(get_db)):
+    try:
+        phone = order_service.normalize_phone(body.phone)
+    except WebOrderError as exc:
+        raise HTTPException(status_code=400, detail="invalid_phone") from exc
+
+    existing = db.query(User).filter(User.phone == phone).first()
+    if existing:
+        raise HTTPException(status_code=409, detail="phone_already_registered")
+
+    user = User(
+        full_name=body.full_name.strip(),
+        phone=phone,
+        password_hash=hash_password(body.password),
+        role=UserRole.STUDENT,
+        is_active=True,
+    )
+    db.add(user)
+    db.flush()
+    db.add(StudentProfile(user_id=user.id))
+    db.commit()
+    db.refresh(user)
+    return {
+        "ok": True,
+        "user": {
+            "id": str(user.id),
+            "fullName": user.full_name,
+            "phone": user.phone,
+            "role": "student",
+        },
+    }
 
 
 @router.post("/analytics/events", status_code=202)
