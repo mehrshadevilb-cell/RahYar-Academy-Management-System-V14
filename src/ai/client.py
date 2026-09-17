@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.ai.provider_router import AIProviderError, AIProviderRouter
+from src.ai.cloudflare_router import get_ai_router
+from src.ai.provider_router import AIProviderError
 
 
 class AIClient:
@@ -11,7 +12,7 @@ class AIClient:
     MAX_PROMPT_CHARS = 16_000
 
     def __init__(self) -> None:
-        self.router = AIProviderRouter()
+        self.router = get_ai_router()
 
     async def chat(self, prompt: str, **kwargs: Any) -> dict[str, Any]:
         prompt = (prompt or "").strip()
