@@ -3,60 +3,106 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark" />
+  <meta name="theme-color" content="#0f1419" />
   <title>{% block title %}{{ site_name }}{% endblock %}</title>
   <style>
     :root {
+      color-scheme: dark;
       --bg: #0f1419;
       --card: #1a2332;
+      --card-hover: #202c3d;
       --text: #f2f5f8;
       --muted: #9aa8b8;
       --accent: #3d9cf0;
+      --accent-hover: #63b2f5;
       --accent2: #5ecf9a;
       --border: #2a3648;
+      --input: #0d121a;
     }
-    * { box-sizing: border-box; }
+
+    html {
+      color-scheme: dark;
+      background: var(--bg);
+      min-height: 100%;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; }
+
     body {
       margin: 0;
       font-family: Tahoma, "Segoe UI", sans-serif;
       background: radial-gradient(ellipse at top, #1a2740 0%, var(--bg) 55%);
+      background-color: var(--bg);
       color: var(--text);
       min-height: 100vh;
       line-height: 1.7;
+      color-scheme: dark;
     }
+
     a { color: var(--accent); text-decoration: none; }
-    a:hover { text-decoration: underline; }
-    .wrap { max-width: 960px; margin: 0 auto; padding: 1.25rem; }
-    header {
-      display: flex; flex-wrap: wrap; gap: .75rem;
-      align-items: center; justify-content: space-between;
-      border-bottom: 1px solid var(--border); padding-bottom: 1rem; margin-bottom: 1.5rem;
+    a:hover { color: var(--accent-hover); text-decoration: underline; }
+
+    .wrap {
+      width: min(960px, 100%);
+      margin: 0 auto;
+      padding: 1.25rem;
     }
+
+    header {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .75rem;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 1rem;
+      margin-bottom: 1.5rem;
+    }
+
     .brand { font-weight: 700; font-size: 1.15rem; color: var(--text); }
-    nav { display: flex; flex-wrap: wrap; gap: .9rem; }
+    .brand:hover { color: var(--text); text-decoration: none; }
+
+    nav {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .9rem;
+    }
+
     nav a { color: var(--muted); }
     nav a:hover { color: var(--text); }
+
     .hero {
       background: linear-gradient(135deg, #1e3a5f, #152033);
       border: 1px solid var(--border);
-      border-radius: 16px; padding: 1.75rem; margin-bottom: 1.5rem;
+      border-radius: 16px;
+      padding: 1.75rem;
+      margin-bottom: 1.5rem;
     }
+
     .hero h1 { margin: 0 0 .5rem; font-size: 1.6rem; }
     .hero p { margin: 0; color: var(--muted); }
+
     .grid {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
       gap: 1rem;
     }
+
     .card {
       background: var(--card);
       border: 1px solid var(--border);
       border-radius: 14px;
       padding: 1.1rem;
-      display: flex; flex-direction: column; gap: .5rem;
+      display: flex;
+      flex-direction: column;
+      gap: .5rem;
     }
+
     .card h3 { margin: 0; font-size: 1.05rem; }
     .price { color: var(--accent2); font-weight: 700; }
     .muted { color: var(--muted); font-size: .92rem; }
+
     .btn {
       display: inline-block;
       background: var(--accent);
@@ -64,27 +110,95 @@
       font-weight: 700;
       padding: .55rem 1rem;
       border-radius: 10px;
-      border: none;
+      border: 1px solid transparent;
       cursor: pointer;
       text-decoration: none !important;
+      font: inherit;
+      line-height: 1.5;
     }
-    .btn.secondary { background: transparent; color: var(--text) !important; border: 1px solid var(--border); }
-    .btn-row { display: flex; flex-wrap: wrap; gap: .6rem; margin-top: .75rem; }
-    form label { display: block; margin: .6rem 0 .25rem; color: var(--muted); font-size: .9rem; }
-    form input, form textarea {
-      width: 100%; padding: .65rem .75rem;
-      border-radius: 10px; border: 1px solid var(--border);
-      background: #0d121a; color: var(--text);
+
+    .btn:hover { background: var(--accent-hover); color: #041018 !important; }
+    .btn.secondary { background: transparent; color: var(--text) !important; border-color: var(--border); }
+    .btn.secondary:hover { background: var(--card-hover); }
+
+    .btn-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .6rem;
+      margin-top: .75rem;
     }
+
+    form label {
+      display: block;
+      margin: .6rem 0 .25rem;
+      color: var(--muted);
+      font-size: .9rem;
+    }
+
+    form input,
+    form textarea {
+      display: block;
+      width: 100%;
+      padding: .65rem .75rem;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--input);
+      color: var(--text);
+      color-scheme: dark;
+      font: inherit;
+    }
+
+    form input::placeholder,
+    form textarea::placeholder { color: #6f7d8d; }
+
+    form input:focus,
+    form textarea:focus {
+      outline: 2px solid var(--accent);
+      outline-offset: 1px;
+      border-color: var(--accent);
+    }
+
     form textarea { min-height: 90px; resize: vertical; }
-    footer {
-      margin-top: 2.5rem; padding-top: 1rem;
-      border-top: 1px solid var(--border);
-      color: var(--muted); font-size: .9rem;
+
+    button { color-scheme: dark; }
+
+    :focus-visible {
+      outline: 2px solid var(--accent-hover);
+      outline-offset: 2px;
     }
+
+    footer {
+      margin-top: 2.5rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--border);
+      color: var(--muted);
+      font-size: .9rem;
+    }
+
     .notice {
-      background: #13261f; border: 1px solid #2a5a45;
-      border-radius: 12px; padding: 1rem; margin: 1rem 0;
+      background: #13261f;
+      border: 1px solid #2a5a45;
+      border-radius: 12px;
+      padding: 1rem;
+      margin: 1rem 0;
+    }
+
+    @media (max-width: 640px) {
+      .wrap { padding: 1rem; }
+      header { align-items: flex-start; }
+      nav { width: 100%; gap: .65rem .9rem; }
+      .hero { padding: 1.25rem; }
+      .hero h1 { font-size: 1.4rem; }
+      .grid { grid-template-columns: 1fr; }
+      .btn-row { flex-direction: column; }
+      .btn-row .btn { width: 100%; text-align: center; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        scroll-behavior: auto !important;
+        transition: none !important;
+      }
     }
   </style>
 </head>
