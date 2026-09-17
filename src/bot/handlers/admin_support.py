@@ -8,26 +8,21 @@ from src.bot.keyboards.support_keyboard import (
     support_ticket_keyboard,
 )
 from src.bot.states.support_states import AdminSupportState
-from src.core.config.settings import get_settings
+from src.core.admin_access import is_admin_user
 from src.core.constants import admin_actions
 from src.services.admin_log_service import AdminLogService
 from src.services.profile_service import ProfileService
 from src.services.support_service import SupportService, SupportServiceError
 
 router = Router()
-settings = get_settings()
 support_service = SupportService()
 admin_log_service = AdminLogService()
 profile_service = ProfileService()
 
 
-def _is_owner(user_id: int) -> bool:
-    return bool(settings.OWNER_ID) and user_id == settings.OWNER_ID
-
-
 @router.callback_query(F.data == "admin_support")
 async def admin_support_list(callback: CallbackQuery, db):
-    if not _is_owner(callback.from_user.id):
+    if not is_admin_user(callback.from_user):
         await callback.answer("⛔️ دسترسی ندارید.", show_alert=True)
         return
 
@@ -49,7 +44,7 @@ async def admin_support_list(callback: CallbackQuery, db):
 
 @router.callback_query(F.data.startswith("support_view_"))
 async def admin_support_view(callback: CallbackQuery, db):
-    if not _is_owner(callback.from_user.id):
+    if not is_admin_user(callback.from_user):
         await callback.answer("⛔️", show_alert=True)
         return
 
@@ -76,7 +71,7 @@ async def admin_support_view(callback: CallbackQuery, db):
 
 @router.callback_query(F.data.startswith("support_reply_"))
 async def admin_support_reply_start(callback: CallbackQuery, state: FSMContext):
-    if not _is_owner(callback.from_user.id):
+    if not is_admin_user(callback.from_user):
         await callback.answer("⛔️", show_alert=True)
         return
 
@@ -91,7 +86,7 @@ async def admin_support_reply_start(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AdminSupportState.waiting_reply)
 async def admin_support_reply_submit(message: Message, state: FSMContext, db):
-    if not _is_owner(message.from_user.id):
+    if not is_admin_user(message.from_user):
         return
 
     text = (message.text or "").strip()
@@ -144,7 +139,7 @@ async def admin_support_reply_submit(message: Message, state: FSMContext, db):
 
 @router.callback_query(F.data.startswith("support_close_"))
 async def admin_support_close(callback: CallbackQuery, db):
-    if not _is_owner(callback.from_user.id):
+    if not is_admin_user(callback.from_user):
         await callback.answer("⛔️", show_alert=True)
         return
 

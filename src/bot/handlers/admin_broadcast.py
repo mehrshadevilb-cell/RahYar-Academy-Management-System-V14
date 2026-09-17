@@ -10,7 +10,7 @@ from src.bot.keyboards.admin_broadcast_keyboard import broadcast_confirm_keyboar
 from src.services.broadcast_service import BroadcastService
 from src.services.admin_log_service import AdminLogService
 from src.core.constants import admin_actions
-from src.core.config.settings import get_settings
+from src.core.admin_access import is_admin_user
 
 
 router = Router()
@@ -18,17 +18,11 @@ router = Router()
 broadcast_service = BroadcastService()
 admin_log_service = AdminLogService()
 
-settings = get_settings()
-
-
-def _is_owner(user_id: int) -> bool:
-    return user_id == settings.OWNER_ID
-
 
 @router.callback_query(F.data == "admin_broadcast")
 async def admin_broadcast_start(callback: CallbackQuery, state: FSMContext):
 
-    if not _is_owner(callback.from_user.id):
+    if not is_admin_user(callback.from_user):
         await callback.answer("⛔️ شما دسترسی ندارید.", show_alert=True)
         return
 
@@ -46,7 +40,7 @@ async def admin_broadcast_start(callback: CallbackQuery, state: FSMContext):
 @router.message(AdminState.waiting_broadcast_content, F.text == "/cancel")
 async def admin_broadcast_cancel_input(message: Message, state: FSMContext):
 
-    if not _is_owner(message.from_user.id):
+    if not is_admin_user(message.from_user):
         return
 
     await state.clear()
@@ -57,7 +51,7 @@ async def admin_broadcast_cancel_input(message: Message, state: FSMContext):
 @router.message(AdminState.waiting_broadcast_content)
 async def admin_broadcast_receive_content(message: Message, state: FSMContext, db):
 
-    if not _is_owner(message.from_user.id):
+    if not is_admin_user(message.from_user):
         return
 
     audience = broadcast_service.get_audience(db)
@@ -91,7 +85,7 @@ async def admin_broadcast_receive_content(message: Message, state: FSMContext, d
 @router.callback_query(F.data == "admin_broadcast_cancel")
 async def admin_broadcast_cancel(callback: CallbackQuery, state: FSMContext):
 
-    if not _is_owner(callback.from_user.id):
+    if not is_admin_user(callback.from_user):
         await callback.answer("⛔️ شما دسترسی ندارید.", show_alert=True)
         return
 
@@ -104,7 +98,7 @@ async def admin_broadcast_cancel(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "admin_broadcast_confirm")
 async def admin_broadcast_confirm(callback: CallbackQuery, state: FSMContext, bot: Bot, db):
 
-    if not _is_owner(callback.from_user.id):
+    if not is_admin_user(callback.from_user):
         await callback.answer("⛔️ شما دسترسی ندارید.", show_alert=True)
         return
 

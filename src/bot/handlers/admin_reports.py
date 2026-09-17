@@ -6,18 +6,12 @@ from aiogram.types import CallbackQuery, BufferedInputFile
 from src.bot.keyboards.admin_reports_keyboard import admin_reports_keyboard
 from src.bot.keyboards.admin_menu_keyboard import admin_back_button
 from src.services.report_service import ReportService
-from src.core.config.settings import get_settings
+from src.core.admin_access import is_admin_user
 
 
 router = Router()
 
 report_service = ReportService()
-
-settings = get_settings()
-
-
-def _is_owner(user_id: int) -> bool:
-    return user_id == settings.OWNER_ID
 
 
 def _filename(prefix: str) -> str:
@@ -27,7 +21,7 @@ def _filename(prefix: str) -> str:
 @router.callback_query(F.data == "admin_reports")
 async def admin_reports_menu(callback: CallbackQuery):
 
-    if not _is_owner(callback.from_user.id):
+    if not is_admin_user(callback.from_user):
         await callback.answer("⛔️ شما دسترسی ندارید.", show_alert=True)
         return
 
@@ -42,7 +36,7 @@ async def admin_reports_menu(callback: CallbackQuery):
 @router.callback_query(F.data == "report_payments")
 async def admin_report_payments(callback: CallbackQuery, bot: Bot, db):
 
-    if not _is_owner(callback.from_user.id):
+    if not is_admin_user(callback.from_user):
         await callback.answer("⛔️ شما دسترسی ندارید.", show_alert=True)
         return
 
@@ -61,7 +55,7 @@ async def admin_report_payments(callback: CallbackQuery, bot: Bot, db):
 @router.callback_query(F.data == "report_students")
 async def admin_report_students(callback: CallbackQuery, bot: Bot, db):
 
-    if not _is_owner(callback.from_user.id):
+    if not is_admin_user(callback.from_user):
         await callback.answer("⛔️ شما دسترسی ندارید.", show_alert=True)
         return
 
@@ -80,7 +74,7 @@ async def admin_report_students(callback: CallbackQuery, bot: Bot, db):
 @router.callback_query(F.data == "report_online_enrollments")
 async def admin_report_online_enrollments(callback: CallbackQuery, bot: Bot, db):
 
-    if not _is_owner(callback.from_user.id):
+    if not is_admin_user(callback.from_user):
         await callback.answer("⛔️ شما دسترسی ندارید.", show_alert=True)
         return
 
@@ -99,7 +93,7 @@ async def admin_report_online_enrollments(callback: CallbackQuery, bot: Bot, db)
 @router.callback_query(F.data == "report_installments")
 async def admin_report_installments(callback: CallbackQuery, bot: Bot, db):
 
-    if not _is_owner(callback.from_user.id):
+    if not is_admin_user(callback.from_user):
         await callback.answer("⛔️ شما دسترسی ندارید.", show_alert=True)
         return
 
