@@ -4,6 +4,7 @@ import json
 import time
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 from urllib.parse import quote
 
@@ -11,12 +12,11 @@ from src.ai.provider_router import AIProvider, AIProviderRouter
 
 
 class ProviderModelHealthService:
-    """Discover live catalogs and independently test model availability.
+    """Discover and live-test the provider model pool used by the Agent."""
 
-    Availability and pricing are intentionally separate signals: a paid model
-    may be healthy, and a model with unknown pricing must never be treated as
-    free merely because it answers successfully.
-    """
+    # Testing is network-bound, so a bounded worker pool keeps the Telegram
+    # action practical without serially waiting on hundreds of models.
+    MAX_CONCURRENT_TESTS = 8
 
     def __init__(self, router: AIProviderRouter | None = None) -> None:
         self.router = router or AIProviderRouter()
@@ -29,12 +29,15 @@ class ProviderModelHealthService:
                 "x-api-key": provider.api_key,
                 "anthropic-version": "2023-06-01",
                 "Accept": "application/json",
-                "User-Agent": "RahYar-ProviderModelHealth/1.0",
+                "User-Agent": "RahYar-ProviderModelHealth/1.1",
             }
+        # Bytez accepts the API key as a raw Authorization value, not
+        # "Bearer <key>". Keep all other OpenAI-compatible providers Bearer.
+        authorization = provider.api_key if host.endswith("bytez.com") else f"Bearer {provider.api_key}"
         headers = {
-            "Authorization": f"Bearer {provider.api_key}",
+            "Authorization": authorization,
             "Accept": "application/json",
-            "User-Agent": "RahYar-ProviderModelHealth/1.0",
+            "User-Agent": "RahYar-ProviderModelHealth/1.1",
         }
         if host.endswith("agentrouter.org"):
             headers.update({"Originator": "codex_cli_rs", "Version": "0.101.0"})
@@ -138,13 +141,6 @@ class ProviderModelHealthService:
         return cls.pricing_status(model) == "known_free"
 
     def _sync_router_health(self, provider: AIProvider, model: str, ok: bool, retry_after: int = 0) -> None:
-        """Keep diagnostics and routing state consistent.
-
-        A successful manual/live health test must immediately make that exact
-        model eligible for the next Agent request. Without this, Audit/Debug
-        could keep seeing an old process-local cooldown even after the model
-        recovered.
-        """
         key = f"{provider.name}:{model}"
         if ok:
             self.router._model_cooldown_until.pop(key, None)
@@ -153,23 +149,84 @@ class ProviderModelHealthService:
         if retry_after:
             self.router._model_cooldown_until[key] = time.time() + min(max(int(retry_after), 1), 86400)
 
+    def _live_test_one(self, provider: AIProvider, model: str, timeout_seconds: int, item: dict[str, Any]) -> dict[str, Any]:
+        live_provider = AIProvider(
+            name=provider.name,
+            api_key=provider.api_key,
+            base_url=provider.base_url,
+            models=(model,),
+            priority=provider.priority,
+            enabled=provider.enabled,
+            provider_type=provider.provider_type,
+        )
+        started = time.perf_counter()
+        pricing = self.pricing_status(item)
+        row = {
+            "provider": provider.name,
+            "model": model,
+            "display_name": item.get("display_name") or model,
+            "free": pricing == "known_free",
+            "pricing_status": pricing,
+            "discovered": True,
+            "ok": False,
+            "latency_ms": 0,
+            "status": "unknown",
+            "response": "",
+        }
+        try:
+            status, latency, response = self.router._test_request(live_provider, model, timeout_seconds)
+            row.update(ok=True, status="ok", http_status=status, latency_ms=latency, response=response[:300])
+            self._sync_router_health(provider, model, True)
+        except urllib.error.HTTPError as exc:
+            body = ""
+            try:
+                raw_body = exc.read()
+                if raw_body:
+                    body = raw_body.decode("utf-8", errors="replace")[:300]
+            except Exception:
+                pass
+            retry_after = self.router._retry_after(exc.headers, body)
+            row.update(status=f"http_{exc.code}", http_status=exc.code, retry_after=retry_after, detail=body)
+            if self.router._is_rate_limited(exc.code, body) or exc.code >= 500:
+                self._sync_router_health(provider, model, False, retry_after or (60 if exc.code >= 500 else 30))
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            row.update(status=f"unavailable:{type(exc).__name__}")
+            self._sync_router_health(provider, model, False, 30)
+        except (json.JSONDecodeError, KeyError, IndexError, TypeError, ValueError) as exc:
+            row.update(status=f"invalid_response:{type(exc).__name__}")
+        finally:
+            row["latency_ms"] = row["latency_ms"] or round((time.perf_counter() - started) * 1000)
+        return row
+
     def test_all(
         self,
         *,
         timeout_seconds: int = 15,
         discover_catalog: bool = True,
         sort_results: bool = True,
+        test_paid: bool = True,
     ) -> list[dict[str, Any]]:
+        """Discover and live-test ALL configured models, including paid models.
+
+        Paid models are intentionally tested when this diagnostic action is
+        invoked. A successful response only means the model is reachable; it
+        does not change provider pricing or make a paid model free.
+        """
         providers = self.router.providers()
         results: list[dict[str, Any]] = []
+        jobs: list[tuple[AIProvider, str, dict[str, Any]]] = []
         seen: set[tuple[str, str, str]] = set()
+
         for provider in providers:
             discovered, discovery = (
                 self.discover(provider, timeout_seconds=min(timeout_seconds, 20))
                 if discover_catalog
                 else ([], None)
             )
-            catalog = discovered or [{"model_id": model, "display_name": model, "raw_metadata": {}} for model in provider.models]
+            catalog = discovered or [
+                {"model_id": model, "display_name": model, "raw_metadata": {}}
+                for model in provider.models
+            ]
             for item in catalog:
                 model = str(item.get("model_id") or "").strip()
                 if not model:
@@ -178,16 +235,6 @@ class ProviderModelHealthService:
                 if key in seen:
                     continue
                 seen.add(key)
-                live_provider = AIProvider(
-                    name=provider.name,
-                    api_key=provider.api_key,
-                    base_url=provider.base_url,
-                    models=(model,),
-                    priority=provider.priority,
-                    enabled=provider.enabled,
-                    provider_type=provider.provider_type,
-                )
-                started = time.perf_counter()
                 pricing = self.pricing_status(item)
                 row = {
                     "provider": provider.name,
@@ -198,34 +245,43 @@ class ProviderModelHealthService:
                     "discovered": bool(discovered),
                     "discovery": discovery,
                     "ok": False,
+                    "live_tested": True,
                     "latency_ms": 0,
-                    "status": "unknown",
+                    "status": "queued_live_test",
                     "response": "",
                 }
-                try:
-                    status, latency, response = self.router._test_request(live_provider, model, timeout_seconds)
-                    row.update(ok=True, status="ok", http_status=status, latency_ms=latency, response=response[:300])
-                    self._sync_router_health(provider, model, True)
-                except urllib.error.HTTPError as exc:
-                    body = ""
-                    try:
-                        raw_body = exc.read()
-                        if raw_body:
-                            body = raw_body.decode("utf-8", errors="replace")[:300]
-                    except Exception:
-                        pass
-                    retry_after = self.router._retry_after(exc.headers, body)
-                    row.update(status=f"http_{exc.code}", http_status=exc.code, retry_after=retry_after)
-                    if self.router._is_rate_limited(exc.code, body) or exc.code >= 500:
-                        self._sync_router_health(provider, model, False, retry_after or (60 if exc.code >= 500 else 30))
-                except (urllib.error.URLError, TimeoutError, OSError) as exc:
-                    row.update(status=f"unavailable:{type(exc).__name__}")
-                    self._sync_router_health(provider, model, False, 30)
-                except (json.JSONDecodeError, KeyError, IndexError, TypeError, ValueError) as exc:
-                    row.update(status=f"invalid_response:{type(exc).__name__}")
-                finally:
-                    row["latency_ms"] = row["latency_ms"] or round((time.perf_counter() - started) * 1000)
                 results.append(row)
+                # test_paid is kept as an explicit API switch for future UI
+                # controls; the current Test Models action passes True.
+                if test_paid or pricing == "known_free":
+                    jobs.append((provider, model, item))
+
+        row_map = {(row["provider"], row["model"]): row for row in results}
+        # ThreadPoolExecutor is appropriate here because model probes are I/O
+        # bound. See Python's concurrent.futures documentation. 
+        with ThreadPoolExecutor(max_workers=self.MAX_CONCURRENT_TESTS, thread_name_prefix="ra-health") as executor:
+            futures = {
+                executor.submit(self._live_test_one, provider, model, timeout_seconds, item): (provider.name, model)
+                for provider, model, item in jobs
+            }
+            for future in as_completed(futures):
+                key = futures[future]
+                try:
+                    tested = future.result()
+                except Exception as exc:
+                    tested = {"ok": False, "status": f"test_failed:{type(exc).__name__}"}
+                target = row_map.get(key)
+                if target is not None:
+                    target.update(tested, live_tested=True)
+
         if sort_results:
-            results.sort(key=lambda row: (row["pricing_status"] != "known_free", not row["ok"], row["latency_ms"], row["provider"], row["model"]))
+            results.sort(
+                key=lambda row: (
+                    row["pricing_status"] != "known_free",
+                    not row["ok"],
+                    row["latency_ms"],
+                    row["provider"],
+                    row["model"],
+                )
+            )
         return results
