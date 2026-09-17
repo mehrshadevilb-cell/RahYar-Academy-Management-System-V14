@@ -4,6 +4,7 @@ from aiogram.exceptions import TelegramConflictError, TelegramUnauthorizedError
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import ErrorEvent
 import traceback
+import re
 
 from src.core.config.settings import get_settings
 from src.core.logging.logger import get_logger
@@ -23,6 +24,15 @@ from src.services.ai_agent_knowledge_runtime import AIAgentKnowledgeRuntime
 settings = get_settings()
 logger = get_logger("bot.errors")
 
+_telegram_token = (settings.BOT_TOKEN or "").strip()
+bot_enabled = bool(re.fullmatch(r"\d{6,15}:[A-Za-z0-9_-]{20,}", _telegram_token))
+if not bot_enabled:
+    # Keep the FastAPI website/admin surface alive when the bot secret is
+    # missing or malformed. Polling is disabled below; Render can still serve
+    # the web API and expose a clear health/status signal.
+    logger.critical("Telegram BOT_TOKEN is missing or malformed; bot polling disabled")
+    _telegram_token = "000000:disabled_telegram_bot_token_000000"
+
 
 def build_fsm_storage():
     url = (settings.REDIS_URL or "").strip()
@@ -40,7 +50,7 @@ def build_fsm_storage():
 
 
 session = AiohttpSession(proxy=settings.PROXY_URL) if settings.PROXY_URL else None
-bot = Bot(token=settings.BOT_TOKEN, session=session)
+bot = Bot(token=_telegram_token, session=session)
 dp = Dispatcher(storage=build_fsm_storage())
 dp.message.middleware(DatabaseMiddleware())
 dp.callback_query.middleware(DatabaseMiddleware())

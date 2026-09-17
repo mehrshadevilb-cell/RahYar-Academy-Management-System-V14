@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 import uvicorn
 
-from src.bot.bot import bot, dp, setup_handlers, ai_agent_knowledge
+from src.bot.bot import bot, bot_enabled, dp, setup_handlers, ai_agent_knowledge
 from src.core.config.settings import get_settings
 from src.core.logging.logger import get_logger
 from src.core.middleware.request_id import RequestIdMiddleware
@@ -92,7 +92,7 @@ async def api_status():
         "chat_assistant": settings.CHAT_ASSISTANT_ENABLED,
         "knowledge": settings.KNOWLEDGE_ENABLED,
         "ai_agent_knowledge_runtime": True,
-        "telegram_polling": True,
+        "telegram_polling": bot_enabled,
         "api_v1": True,
         "ai_bridge": True,
     })
@@ -197,6 +197,9 @@ async def _poll_telegram_forever() -> None:
 
 async def start_bot():
     logger.info("Starting RahYar Bot... build=%s", _build_id())
+    if not bot_enabled:
+        logger.critical("Telegram polling disabled because BOT_TOKEN is invalid")
+        return
     try:
         ensure_critical_schema()
         logger.info("schema_guard: critical columns verified")
