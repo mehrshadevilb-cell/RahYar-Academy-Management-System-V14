@@ -16,6 +16,7 @@ from .online_enrollment import EnrollmentStatus, OnlineEnrollment, PaymentModel
 from .online_time_slot import OnlineTimeSlot
 from .payment import Payment
 from .payment_card import PaymentCard
+from .project_marketplace import ApplicationStatus, Project, ProjectApplication, ProjectStatus
 from .referral import Referral, ReferralStatus
 from .reservation import Reservation, ReservationStatus
 from .spotplayer_course import SpotPlayerCourse
@@ -31,7 +32,7 @@ __all__ = [
     "DiscountCode", "DiscountType", "Enrollment", "FreeLesson", "Installment", "InstallmentStatus",
     "TelegramInviteLink", "KnowledgeItem", "QuizQuestion", "License", "OnlineCourse",
     "EnrollmentStatus", "OnlineEnrollment", "PaymentModel", "OnlineTimeSlot", "Payment",
-    "PaymentCard", "Referral", "ReferralStatus", "Reservation", "ReservationStatus",
+    "PaymentCard", "Project", "ProjectApplication", "ProjectStatus", "ApplicationStatus", "Referral", "ReferralStatus", "Reservation", "ReservationStatus",
     "SpotPlayerCourse", "StudentProfile", "SupportRequest", "SupportStatus",
     "TelegramAccount", "TelegramChannel", "User", "UserRole",
 ]

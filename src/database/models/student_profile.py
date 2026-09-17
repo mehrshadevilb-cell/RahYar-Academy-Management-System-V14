@@ -30,6 +30,12 @@ class StudentProfile(Base):
         nullable=True,
     )
 
+    skills: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="",
+    )
+
     experience_years: Mapped[int] = mapped_column(
         default=0,
     )

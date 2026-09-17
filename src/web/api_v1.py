@@ -19,11 +19,14 @@ from src.core.logging.logger import get_logger
 from src.services.web_order_service import WebOrderError, WebOrderService
 from src.bot.keyboards.payment_review_keyboard import payment_review_keyboard
 from src.database.models.free_lesson import FreeLesson
+from src.database.models.project_marketplace import ProjectStatus
 from src.web.deps import get_db
+from src.services.project_marketplace_service import ProjectMarketplaceError, ProjectMarketplaceService
 
 logger = get_logger("web.api_v1")
 settings = get_settings()
 order_service = WebOrderService()
+project_service = ProjectMarketplaceService()
 
 router = APIRouter(prefix="/api/v1", tags=["artistyar-api"])
 
@@ -75,6 +78,45 @@ class LicenseOut(BaseModel):
     license_url: str | None = None
     payment_id: int | None = None
     created_at: str
+
+
+class ProjectIn(BaseModel):
+    employer_name: str = Field(min_length=2, max_length=120)
+    employer_contact: str = Field(min_length=3, max_length=180)
+    title: str = Field(min_length=4, max_length=180)
+    description: str = Field(min_length=20, max_length=8000)
+    category: str = Field(min_length=2, max_length=80)
+    skills: str = Field(default="", max_length=1000)
+    budget_min: int | None = Field(default=None, ge=0, le=10_000_000_000)
+    budget_max: int | None = Field(default=None, ge=0, le=10_000_000_000)
+    deadline: str | None = Field(default=None, max_length=80)
+    remote: bool = True
+
+
+class ProjectOut(BaseModel):
+    id: int
+    employer_name: str
+    title: str
+    description: str
+    category: str
+    skills: str
+    budget_min: int | None
+    budget_max: int | None
+    deadline: str | None
+    remote: bool
+    status: str
+    ai_summary: str | None = None
+    created_at: str
+
+
+def _project_out(project) -> ProjectOut:
+    return ProjectOut(
+        id=project.id, employer_name=project.employer_name, title=project.title,
+        description=project.description, category=project.category, skills=project.skills,
+        budget_min=project.budget_min, budget_max=project.budget_max, deadline=project.deadline,
+        remote=project.remote, status=project.status.value, ai_summary=project.ai_summary,
+        created_at=project.created_at.isoformat(),
+    )
 
 
 class ChapterIn(BaseModel):
@@ -132,6 +174,42 @@ async def api_v1_health():
         "service": "rahyar-api-v1",
         "site": settings.SITE_NAME,
     }
+
+
+@router.post("/projects", response_model=ProjectOut, status_code=201)
+async def submit_project(payload: ProjectIn, db: Session = Depends(get_db)):
+    try:
+        project = project_service.create_project(db, **payload.model_dump())
+    except ProjectMarketplaceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    return _project_out(project)
+
+
+@router.get("/projects", response_model=list[ProjectOut])
+async def list_public_projects(db: Session = Depends(get_db)):
+    return [_project_out(project) for project in project_service.list_published(db)]
+
+
+@router.get("/admin/projects", response_model=list[ProjectOut], dependencies=[Depends(require_web_admin)])
+async def list_pending_projects(db: Session = Depends(get_db)):
+    return [_project_out(project) for project in project_service.list_pending(db)]
+
+
+@router.post("/admin/projects/{project_id}/status", response_model=ProjectOut, dependencies=[Depends(require_web_admin)])
+async def moderate_project(project_id: int, status: ProjectStatus, db: Session = Depends(get_db)):
+    try:
+        return _project_out(project_service.set_status(db, project_id, status))
+    except ProjectMarketplaceError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+
+
+@router.get("/admin/projects/{project_id}/matches", dependencies=[Depends(require_web_admin)])
+async def project_matches(project_id: int, db: Session = Depends(get_db)):
+    from src.database.models.project_marketplace import Project
+    project = db.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="project_not_found")
+    return {"project_id": project_id, "matches": [match.__dict__ for match in project_service.rank_students(db, project)]}
 
 
 @router.get("/products", response_model=list[ProductOut])
