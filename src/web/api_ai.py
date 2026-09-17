@@ -19,6 +19,7 @@ from src.core.config.settings import get_settings
 from src.core.logging.logger import get_logger
 from src.services.ai_agent_runtime import runtime
 from src.services.chat_assistant_service import ChatAssistantError, ChatAssistantService
+from src.database.models.site_event import SiteEvent
 from src.web.deps import get_db
 
 logger = get_logger("web.api_ai")
@@ -107,12 +108,21 @@ async def assistant_chat(
         if code == "empty_message":
             raise HTTPException(status_code=400, detail="empty_message") from exc
         if code in {"provider_unavailable", "provider_rate_limited"}:
+            db.add(SiteEvent(event_type="ai_error", path="/assistant", event_metadata={"reason": code}))
+            db.commit()
             raise HTTPException(status_code=502, detail=code) from exc
+        db.add(SiteEvent(event_type="ai_error", path="/assistant", event_metadata={"reason": code}))
+        db.commit()
         raise HTTPException(status_code=429, detail=code) from exc
     except Exception:
         logger.exception("assistant_chat failed")
+        db.rollback()
+        db.add(SiteEvent(event_type="ai_error", path="/assistant", event_metadata={"reason": "assistant_failed"}))
+        db.commit()
         raise HTTPException(status_code=500, detail="assistant_failed") from None
 
+    db.add(SiteEvent(event_type="ai_chat", path="/assistant", event_metadata={"source": "website"}))
+    db.commit()
     return {
         "ok": True,
         "reply": reply,

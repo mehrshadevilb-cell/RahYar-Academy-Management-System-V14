@@ -221,11 +221,13 @@ async def admin_analytics_summary(db: Session = Depends(get_db), _admin: None = 
     visits_7 = db.query(func.count(SiteEvent.id)).filter(SiteEvent.event_type == "page_view", SiteEvent.created_at >= since_7).scalar() or 0
     top_paths = db.query(SiteEvent.path, func.count(SiteEvent.id).label("count")).filter(SiteEvent.event_type == "page_view", SiteEvent.created_at >= since_30).group_by(SiteEvent.path).order_by(desc("count")).limit(10).all()
     ai_events = db.query(func.count(AdminLog.id)).filter(AdminLog.created_at >= since_30, AdminLog.action.ilike("%ai%")).scalar() or 0
+    ai_chats = db.query(func.count(SiteEvent.id)).filter(SiteEvent.event_type == "ai_chat", SiteEvent.created_at >= since_30).scalar() or 0
+    ai_errors = db.query(func.count(SiteEvent.id)).filter(SiteEvent.event_type == "ai_error", SiteEvent.created_at >= since_30).scalar() or 0
     active_enrollments = db.query(func.count(OnlineEnrollment.id)).filter(OnlineEnrollment.status == EnrollmentStatus.ACTIVE).scalar() or 0
     total_enrollments = db.query(func.count(OnlineEnrollment.id)).scalar() or 0
     active_classes = db.query(func.count(OnlineCourse.id)).filter(OnlineCourse.is_active.is_(True)).scalar() or 0
     students = db.query(func.count(User.id)).filter(User.role == UserRole.STUDENT).scalar() or 0
-    return {"period_days": 30, "site": {"page_views_7d": int(visits_7), "page_views_30d": int(visits_30), "unique_visitors_30d": int(visitors_30), "top_paths": [{"path": path, "count": int(count)} for path, count in top_paths]}, "education": {"active_classes": int(active_classes), "active_enrollments": int(active_enrollments), "total_enrollments": int(total_enrollments), "students": int(students)}, "ai_agent": {"admin_ai_events_30d": int(ai_events), "source": "admin_logs"}}
+    return {"period_days": 30, "site": {"page_views_7d": int(visits_7), "page_views_30d": int(visits_30), "unique_visitors_30d": int(visitors_30), "top_paths": [{"path": path, "count": int(count)} for path, count in top_paths]}, "education": {"active_classes": int(active_classes), "active_enrollments": int(active_enrollments), "total_enrollments": int(total_enrollments), "students": int(students)}, "ai_agent": {"admin_ai_events_30d": int(ai_events), "website_chats_30d": int(ai_chats), "errors_30d": int(ai_errors), "source": "site_events+admin_logs"}}
 
 
 @router.get("/admin/students", response_model=list[StudentAdminOut])
