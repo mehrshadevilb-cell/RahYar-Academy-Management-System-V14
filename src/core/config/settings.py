@@ -76,6 +76,15 @@ class Settings(BaseSettings):
     BYTEZ_API_KEY: str | None = None
     DAHL_API_KEY: str | None = None
 
+    # Dedicated provider environment variables. Model names are intentionally
+    # configurable so the router never guesses a provider-specific model id.
+    ANTHROPIC_API_KEY: str | None = None
+    ANTHROPIC_BASE_URL: str = "https://api.anthropic.com/v1"
+    ANTHROPIC_MODEL: str | None = None
+    XKIRO_API_KEY: str | None = None
+    XKIRO_BASE_URL: str = "https://api.xkiro.com/v1"
+    XKIRO_MODEL: str | None = None
+
     MUSIC_AUDIO_API_KEY: str | None = None
     MUSIC_AUDIO_BASE_URL: str | None = None
     MUSIC_AUDIO_MODEL: str | None = None
