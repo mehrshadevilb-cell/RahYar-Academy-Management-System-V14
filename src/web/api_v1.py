@@ -20,6 +20,9 @@ from src.services.web_order_service import WebOrderError, WebOrderService
 from src.services.class_inquiry_service import ClassInquiryService
 from src.bot.keyboards.payment_review_keyboard import payment_review_keyboard
 from src.database.models.free_lesson import FreeLesson
+from src.database.models.student_profile import StudentProfile
+from src.database.models.telegram_account import TelegramAccount
+from src.database.models.user import User, UserRole
 from src.web.deps import get_db
 
 logger = get_logger("web.api_v1")
@@ -102,6 +105,43 @@ class FreeLessonOut(FreeLessonIn):
     updated_at: str
 
 
+class StudentAdminOut(BaseModel):
+    id: int
+    full_name: str
+    phone: str | None = None
+    email: str | None = None
+    bio: str | None = None
+    level: str | None = None
+    experience_years: int = 0
+    telegram_id: str | None = None
+    telegram_username: str | None = None
+    created_at: str
+
+
+class StudentAdminUpdate(BaseModel):
+    full_name: str = Field(min_length=2, max_length=100)
+    phone: str | None = Field(default=None, max_length=20)
+    email: str | None = Field(default=None, max_length=100)
+    bio: str | None = Field(default=None, max_length=4000)
+    level: str | None = Field(default=None, max_length=50)
+    experience_years: int = Field(default=0, ge=0, le=80)
+
+
+def _student_out(user: User, profile: StudentProfile | None, account: TelegramAccount | None) -> StudentAdminOut:
+    return StudentAdminOut(
+        id=user.id,
+        full_name=user.full_name,
+        phone=user.phone,
+        email=user.email,
+        bio=profile.bio if profile else None,
+        level=profile.level if profile else None,
+        experience_years=int(profile.experience_years if profile else 0),
+        telegram_id=account.telegram_id if account else None,
+        telegram_username=account.username if account else None,
+        created_at=user.created_at.isoformat() if user.created_at else "",
+    )
+
+
 def _lesson_out(lesson: FreeLesson) -> FreeLessonOut:
     return FreeLessonOut(
         id=lesson.id,
@@ -125,6 +165,58 @@ def require_web_admin(x_admin_key: str | None = Header(default=None, alias="X-Ad
         raise HTTPException(status_code=503, detail="web_admin_api_key_not_configured")
     if not x_admin_key or not secrets.compare_digest(x_admin_key, expected):
         raise HTTPException(status_code=403, detail="admin_access_denied")
+
+
+@router.get("/admin/students", response_model=list[StudentAdminOut])
+async def admin_list_students(
+    q: str | None = Query(default=None, max_length=100),
+    db: Session = Depends(get_db),
+    _admin: None = Depends(require_web_admin),
+):
+    query = db.query(User).filter(User.role == UserRole.STUDENT)
+    needle = (q or "").strip()
+    if needle:
+        like = f"%{needle}%"
+        query = query.filter((User.full_name.ilike(like)) | (User.phone.ilike(like)))
+    users = query.order_by(User.created_at.desc()).limit(200).all()
+    ids = [user.id for user in users]
+    profiles = {p.user_id: p for p in db.query(StudentProfile).filter(StudentProfile.user_id.in_(ids)).all()} if ids else {}
+    accounts = {a.user_id: a for a in db.query(TelegramAccount).filter(TelegramAccount.user_id.in_(ids)).all()} if ids else {}
+    return [_student_out(user, profiles.get(user.id), accounts.get(user.id)) for user in users]
+
+
+@router.put("/admin/students/{student_id}", response_model=StudentAdminOut)
+async def admin_update_student(
+    student_id: int,
+    body: StudentAdminUpdate,
+    db: Session = Depends(get_db),
+    _admin: None = Depends(require_web_admin),
+):
+    user = db.query(User).filter(User.id == student_id, User.role == UserRole.STUDENT).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="student_not_found")
+    phone = None
+    if body.phone:
+        try:
+            phone = order_service.normalize_phone(body.phone)
+        except WebOrderError as exc:
+            raise HTTPException(status_code=400, detail="invalid_phone") from exc
+        duplicate = db.query(User).filter(User.phone == phone, User.id != student_id).first()
+        if duplicate:
+            raise HTTPException(status_code=409, detail="phone_already_linked")
+    user.full_name = body.full_name.strip()
+    user.phone = phone
+    user.email = body.email.strip() if body.email else None
+    profile = user.student_profile
+    if not profile:
+        profile = StudentProfile(user_id=user.id)
+        db.add(profile)
+    profile.bio = body.bio.strip() if body.bio else None
+    profile.level = body.level.strip() if body.level else None
+    profile.experience_years = body.experience_years
+    db.commit()
+    db.refresh(user)
+    return _student_out(user, profile, user.telegram_account)
 
 
 @router.get("/health")
