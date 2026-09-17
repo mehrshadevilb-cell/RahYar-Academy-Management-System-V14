@@ -13,8 +13,7 @@ def test_provider_router_uses_env_key(monkeypatch):
     monkeypatch.setenv("ROUTER_TEST_KEY", "secret-value")
     monkeypatch.setenv("AI_PROVIDERS_JSON", json.dumps([{"name": "free-provider", "api_key_env": "ROUTER_TEST_KEY", "base_url": "https://example.com/v1", "model": "free-model", "priority": 10}, {"name": "backup-provider", "api_key": "backup-secret", "base_url": "https://example.org/v1", "model": "backup-model", "priority": 20}]))
     _clear_settings()
-    router = AIProviderRouter()
-    providers = router.providers()
+    providers = AIProviderRouter().providers()
     assert [p.name for p in providers] == ["free-provider", "backup-provider"]
     assert providers[0].api_key == "secret-value"
     assert providers[1].model == "backup-model"
@@ -24,8 +23,7 @@ def test_provider_router_uses_env_key(monkeypatch):
 def test_retry_after_from_provider_metadata(monkeypatch):
     monkeypatch.setenv("AI_PROVIDERS_JSON", "[]")
     _clear_settings()
-    value = AIProviderRouter._retry_after({}, '{"error":{"metadata":{"retry_after_seconds":42}}}')
-    assert value == 42
+    assert AIProviderRouter._retry_after({}, '{"error":{"metadata":{"retry_after_seconds":42}}}') == 42
     _clear_settings()
 
 
@@ -42,6 +40,49 @@ def test_free_model_is_detected_from_id():
     assert AIProviderRouter._is_free_model("provider/model:free") is True
     assert AIProviderRouter._is_free_model("provider/model-free") is True
     assert AIProviderRouter._is_free_model("provider/model") is False
+
+
+def test_openai_and_opencode_env_providers_are_discovered(monkeypatch):
+    monkeypatch.setenv("AI_PROVIDERS_JSON", "[]")
+    monkeypatch.setenv("OPENCODE_API_KEY", "zen-secret")
+    monkeypatch.setenv("OPENCODE_ZEN_BASE_URL", "https://opencode.ai/zen/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-secret")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+    _clear_settings()
+    router = AIProviderRouter()
+    router._discover_models = lambda provider, timeout=12: AIProvider(provider.name, provider.api_key, provider.base_url, ("catalog-model",), provider.priority, provider.enabled, provider.provider_type)
+    providers = router.providers()
+    assert any(p.name == "opencode-zen" and p.base_url == "https://opencode.ai/zen/v1" and p.model == "catalog-model" for p in providers)
+    assert any(p.name == "openai" and p.base_url == "https://api.openai.com/v1" and p.model == "catalog-model" for p in providers)
+    _clear_settings()
+
+
+def test_catalog_models_are_discovered_from_openai_models_endpoint(monkeypatch):
+    monkeypatch.setenv("AI_PROVIDERS_JSON", "[]")
+    monkeypatch.setenv("OPENAI_API_KEY", "secret")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+    _clear_settings()
+    router = AIProviderRouter()
+
+    class Response:
+        status = 200
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+        def read(self): return json.dumps({"data": [{"id": "model-a"}, {"id": "model-b"}]}).encode()
+
+    captured = {}
+    def fake_urlopen(request, timeout):
+        captured["url"] = request.full_url
+        captured["auth"] = request.headers.get("Authorization")
+        return Response()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    provider = AIProvider("openai", "secret", "https://api.openai.com/v1", (), priority=40)
+    discovered = router._discover_models(provider)
+    assert discovered.models == ("model-a", "model-b")
+    assert captured["url"].endswith("/models")
+    assert captured["auth"] == "Bearer secret"
+    _clear_settings()
 
 
 def test_legacy_env_routes_remain_available_with_db_routes(monkeypatch):
@@ -79,13 +120,10 @@ def test_router_fails_over_from_broken_free_model_to_next_route(monkeypatch):
     _clear_settings()
     router = AIProviderRouter()
     calls = []
-
     def fake_request(provider, model, messages, kwargs, timeout):
         calls.append((provider.name, model))
-        if model == "broken:free":
-            raise urllib.error.URLError("provider down")
+        if model == "broken:free": raise urllib.error.URLError("provider down")
         return {"choices": [{"message": {"content": "OK"}}]}
-
     monkeypatch.setattr(router, "_request", fake_request)
     data = router.chat([{"role": "user", "content": "ping"}], timeout_seconds=5)
     assert calls == [("free", "broken:free"), ("backup", "working-model")]
@@ -99,25 +137,17 @@ class _FakeResponse:
     def __init__(self, payload):
         self.payload = payload
         self.status = 200
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *args):
-        return False
-
-    def read(self):
-        return json.dumps(self.payload).encode()
+    def __enter__(self): return self
+    def __exit__(self, *args): return False
+    def read(self): return json.dumps(self.payload).encode()
 
 
 def test_google_chat_uses_generate_content(monkeypatch):
     captured = {}
-
     def fake_urlopen(request, timeout):
         captured["url"] = request.full_url
         captured["body"] = json.loads(request.data.decode())
         return _FakeResponse({"candidates": [{"content": {"parts": [{"text": "{\"ok\":true}"}]}}]})
-
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     router = AIProviderRouter()
     provider = AIProvider("google", "google-secret", "https://generativelanguage.googleapis.com/v1beta", ("gemini-test",), provider_type="google")
@@ -129,12 +159,10 @@ def test_google_chat_uses_generate_content(monkeypatch):
 
 def test_anthropic_chat_uses_messages_api(monkeypatch):
     captured = {}
-
     def fake_urlopen(request, timeout):
         captured["url"] = request.full_url
         captured["body"] = json.loads(request.data.decode())
         return _FakeResponse({"content": [{"type": "text", "text": "hello"}]})
-
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     router = AIProviderRouter()
     provider = AIProvider("anthropic", "anthropic-secret", "https://api.anthropic.com/v1", ("claude-test",), provider_type="anthropic")
