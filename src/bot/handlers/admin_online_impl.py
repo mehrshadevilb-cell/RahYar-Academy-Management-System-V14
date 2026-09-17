@@ -20,7 +20,7 @@ from src.bot.keyboards.admin_online_keyboard import (
 )
 from src.bot.keyboards.reservation_review_keyboard import reservation_review_keyboard
 from src.bot.states.admin_states import AdminState
-from src.core.config.settings import get_settings
+from src.core.admin_access import is_admin_user
 from src.core.constants import admin_actions
 from src.database.models.attendance import AttendanceStatus
 from src.database.models.reservation import ReservationStatus
@@ -44,19 +44,14 @@ online_course_service = OnlineCourseService()
 online_schedule_service = OnlineScheduleService()
 telegram_repository = TelegramRepository()
 admin_log_service = AdminLogService()
-settings = get_settings()
 
 SLOT_INPUT = re.compile(
-    r"^(شنبه|یکشنبه|دوشنبه|سه‌شنبه|سه شنبه|چهارشنبه|پنجشنبه|جمعه)\s+(\d{2}:\d{2})\s*-\s*(\d{2}:\d{2})$"
+    r"^(\u0634\u0646\u0628\u0647|\u06cc\u06a9\u0634\u0646\u0628\u0647|\u062f\u0648\u0634\u0646\u0628\u0647|\u0633\u0647\u200c\u0634\u0646\u0628\u0647|\u0633\u0647 \u0634\u0646\u0628\u0647|\u0686\u0647\u0627\u0631\u0634\u0646\u0628\u0647|\u067e\u0646\u062c\u0634\u0646\u0628\u0647|\u062c\u0645\u0639\u0647)\s+(\d{2}:\d{2})\s*-\s*(\d{2}:\d{2})$"
 )
 SLOT_DAYS = {
     "دوشنبه": 0, "سه‌شنبه": 1, "سه شنبه": 1, "چهارشنبه": 2,
     "پنجشنبه": 3, "جمعه": 4, "شنبه": 5, "یکشنبه": 6,
 }
-
-
-def _is_owner(user_id: int) -> bool:
-    return user_id == settings.OWNER_ID
 
 
 def _render_course_detail(course) -> str:
@@ -72,7 +67,7 @@ def _render_course_detail(course) -> str:
 
 @router.callback_query(F.data == "admin_online")
 async def admin_online_menu(callback: CallbackQuery, db):
-    if not _is_owner(callback.from_user.id):
+    if not is_admin_user(callback.from_user):
         await callback.answer("⛔️", show_alert=True)
         return
     courses = online_course_service.get_all_courses(db)
@@ -85,7 +80,7 @@ async def admin_online_menu(callback: CallbackQuery, db):
 
 @router.callback_query(F.data == "admin_reservations")
 async def admin_reservations(callback: CallbackQuery, db):
-    if not _is_owner(callback.from_user.id):
+    if not is_admin_user(callback.from_user):
         await callback.answer("⛔️", show_alert=True)
         return
     pending = reservation_service.get_pending(db)
@@ -127,7 +122,7 @@ async def admin_reservations(callback: CallbackQuery, db):
 
 @router.callback_query(F.data.startswith("res_confirm_") | F.data.startswith("res_payment_confirm_"))
 async def confirm_reservation(callback: CallbackQuery, bot: Bot, db):
-    if not _is_owner(callback.from_user.id):
+    if not is_admin_user(callback.from_user):
         await callback.answer("⛔️", show_alert=True)
         return
     reservation_id = int(callback.data.rsplit("_", 1)[-1])
@@ -170,7 +165,7 @@ async def confirm_reservation(callback: CallbackQuery, bot: Bot, db):
 
 @router.callback_query(F.data.startswith("res_reject_") | F.data.startswith("res_payment_reject_"))
 async def reject_reservation(callback: CallbackQuery, bot: Bot, db):
-    if not _is_owner(callback.from_user.id):
+    if not is_admin_user(callback.from_user):
         await callback.answer("⛔️", show_alert=True)
         return
     reservation_id = int(callback.data.rsplit("_", 1)[-1])
@@ -202,7 +197,7 @@ async def reject_reservation(callback: CallbackQuery, bot: Bot, db):
 
 
 async def _handle_attendance(callback: CallbackQuery, bot: Bot, db, status: AttendanceStatus):
-    if not _is_owner(callback.from_user.id):
+    if not is_admin_user(callback.from_user):
         await callback.answer("⛔️", show_alert=True)
         return
     reservation_id = int(callback.data.rsplit("_", 1)[-1])
@@ -256,7 +251,7 @@ async def attendance_cancelled(callback: CallbackQuery, bot: Bot, db):
 
 @router.callback_query(F.data.startswith("admin_oc_slot_"))
 async def admin_online_slot_start(callback: CallbackQuery, state: FSMContext):
-    if not _is_owner(callback.from_user.id):
+    if not is_admin_user(callback.from_user):
         await callback.answer("⛔️", show_alert=True)
         return
     course_id = int(callback.data.replace("admin_oc_slot_", ""))
@@ -272,7 +267,7 @@ async def admin_online_slot_start(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AdminState.waiting_online_slot)
 async def admin_online_slot_add(message: Message, state: FSMContext, db):
-    if not _is_owner(message.from_user.id):
+    if not is_admin_user(message.from_user):
         return
     text = (message.text or "").strip()
     if text == "/done":
@@ -310,7 +305,7 @@ async def admin_online_slot_add(message: Message, state: FSMContext, db):
 
 @router.callback_query(F.data == "admin_online_manage")
 async def admin_online_manage(callback: CallbackQuery, db):
-    if not _is_owner(callback.from_user.id):
+    if not is_admin_user(callback.from_user):
         await callback.answer("⛔️", show_alert=True)
         return
     courses = online_course_service.get_all_courses(db)
@@ -323,7 +318,7 @@ async def admin_online_manage(callback: CallbackQuery, db):
 
 @router.callback_query(F.data.startswith("admin_oc_view_"))
 async def admin_online_course_view(callback: CallbackQuery, db):
-    if not _is_owner(callback.from_user.id):
+    if not is_admin_user(callback.from_user):
         await callback.answer("⛔️", show_alert=True)
         return
     course_id = int(callback.data.replace("admin_oc_view_", ""))
@@ -340,7 +335,7 @@ async def admin_online_course_view(callback: CallbackQuery, db):
 
 @router.callback_query(F.data == "admin_oc_new")
 async def admin_online_course_new(callback: CallbackQuery, state: FSMContext):
-    if not _is_owner(callback.from_user.id):
+    if not is_admin_user(callback.from_user):
         await callback.answer("⛔️", show_alert=True)
         return
     await state.set_state(AdminState.waiting_online_course_name)
@@ -350,7 +345,7 @@ async def admin_online_course_new(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AdminState.waiting_online_course_name)
 async def admin_oc_name(message: Message, state: FSMContext):
-    if not _is_owner(message.from_user.id):
+    if not is_admin_user(message.from_user):
         return
     await state.update_data(name=(message.text or "").strip()[:120])
     await state.set_state(AdminState.waiting_online_course_teacher)
@@ -359,7 +354,7 @@ async def admin_oc_name(message: Message, state: FSMContext):
 
 @router.message(AdminState.waiting_online_course_teacher)
 async def admin_oc_teacher(message: Message, state: FSMContext):
-    if not _is_owner(message.from_user.id):
+    if not is_admin_user(message.from_user):
         return
     raw = (message.text or "").strip()
     await state.update_data(teacher=None if raw in {"-", "—", ""} else raw[:120])
@@ -369,7 +364,7 @@ async def admin_oc_teacher(message: Message, state: FSMContext):
 
 @router.message(AdminState.waiting_online_course_duration)
 async def admin_oc_duration(message: Message, state: FSMContext):
-    if not _is_owner(message.from_user.id):
+    if not is_admin_user(message.from_user):
         return
     raw = (message.text or "").strip()
     if not raw.isdigit() or int(raw) <= 0:
@@ -382,7 +377,7 @@ async def admin_oc_duration(message: Message, state: FSMContext):
 
 @router.message(AdminState.waiting_online_course_monthly_price)
 async def admin_oc_monthly_price(message: Message, state: FSMContext):
-    if not _is_owner(message.from_user.id):
+    if not is_admin_user(message.from_user):
         return
     raw = (message.text or "").strip().replace(",", "")
     if not raw.isdigit():
@@ -395,7 +390,7 @@ async def admin_oc_monthly_price(message: Message, state: FSMContext):
 
 @router.message(AdminState.waiting_online_course_term_price)
 async def admin_oc_term_price(message: Message, state: FSMContext):
-    if not _is_owner(message.from_user.id):
+    if not is_admin_user(message.from_user):
         return
     raw = (message.text or "").strip().replace(",", "")
     if not raw.isdigit():
@@ -408,7 +403,7 @@ async def admin_oc_term_price(message: Message, state: FSMContext):
 
 @router.message(AdminState.waiting_online_course_monthly_sessions)
 async def admin_oc_monthly_sessions(message: Message, state: FSMContext):
-    if not _is_owner(message.from_user.id):
+    if not is_admin_user(message.from_user):
         return
     raw = (message.text or "").strip()
     if not raw.isdigit():
@@ -421,7 +416,7 @@ async def admin_oc_monthly_sessions(message: Message, state: FSMContext):
 
 @router.message(AdminState.waiting_online_course_term_sessions)
 async def admin_oc_term_sessions(message: Message, state: FSMContext, db):
-    if not _is_owner(message.from_user.id):
+    if not is_admin_user(message.from_user):
         return
     raw = (message.text or "").strip()
     if not raw.isdigit():
@@ -454,7 +449,7 @@ async def admin_oc_term_sessions(message: Message, state: FSMContext, db):
 
 @router.callback_query(F.data.startswith("admin_oc_toggle_"))
 async def admin_oc_toggle(callback: CallbackQuery, db):
-    if not _is_owner(callback.from_user.id):
+    if not is_admin_user(callback.from_user):
         await callback.answer("⛔️", show_alert=True)
         return
     course_id = int(callback.data.replace("admin_oc_toggle_", ""))

@@ -9,7 +9,7 @@ from src.bot.keyboards.assignment_keyboard import (
     admin_submission_actions_keyboard,
 )
 from src.bot.states.assignment_states import AdminAssignmentState
-from src.core.config.settings import get_settings
+from src.core.admin_access import is_admin_user
 from src.core.constants import admin_actions
 from src.database.repositories.telegram_repository import TelegramRepository
 from src.services.admin_log_service import AdminLogService
@@ -18,7 +18,6 @@ from src.services.online_course_service import OnlineCourseService
 from src.services.profile_service import ProfileService
 
 router = Router()
-settings = get_settings()
 assignment_service = AssignmentService()
 online_course_service = OnlineCourseService()
 admin_log_service = AdminLogService()
@@ -26,13 +25,9 @@ profile_service = ProfileService()
 telegram_repository = TelegramRepository()
 
 
-def _is_owner(user_id: int) -> bool:
-    return bool(settings.OWNER_ID) and user_id == settings.OWNER_ID
-
-
 @router.callback_query(F.data == "admin_assignments")
 async def admin_assignments_home(callback: CallbackQuery):
-    if not _is_owner(callback.from_user.id):
+    if not is_admin_user(callback.from_user):
         await callback.answer("⛔️", show_alert=True)
         return
     await callback.message.edit_text(
@@ -44,7 +39,7 @@ async def admin_assignments_home(callback: CallbackQuery):
 
 @router.callback_query(F.data == "admin_asg_pending")
 async def admin_pending_list(callback: CallbackQuery, db):
-    if not _is_owner(callback.from_user.id):
+    if not is_admin_user(callback.from_user):
         await callback.answer("⛔️", show_alert=True)
         return
 
@@ -66,7 +61,7 @@ async def admin_pending_list(callback: CallbackQuery, db):
 
 @router.callback_query(F.data.startswith("asg_admin_view_"))
 async def admin_view_submission(callback: CallbackQuery, db):
-    if not _is_owner(callback.from_user.id):
+    if not is_admin_user(callback.from_user):
         await callback.answer("⛔️", show_alert=True)
         return
 
@@ -94,7 +89,7 @@ async def admin_view_submission(callback: CallbackQuery, db):
 
 @router.callback_query(F.data.startswith("asg_review_"))
 async def admin_review_start(callback: CallbackQuery, state: FSMContext):
-    if not _is_owner(callback.from_user.id):
+    if not is_admin_user(callback.from_user):
         await callback.answer("⛔️", show_alert=True)
         return
     submission_id = int(callback.data.replace("asg_review_", ""))
@@ -108,7 +103,7 @@ async def admin_review_start(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("asg_return_"))
 async def admin_return_start(callback: CallbackQuery, state: FSMContext):
-    if not _is_owner(callback.from_user.id):
+    if not is_admin_user(callback.from_user):
         await callback.answer("⛔️", show_alert=True)
         return
     submission_id = int(callback.data.replace("asg_return_", ""))
@@ -120,7 +115,7 @@ async def admin_return_start(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AdminAssignmentState.waiting_review_feedback)
 async def admin_review_submit(message: Message, state: FSMContext, db):
-    if not _is_owner(message.from_user.id):
+    if not is_admin_user(message.from_user):
         return
 
     text = (message.text or "").strip()
@@ -191,7 +186,7 @@ async def admin_review_submit(message: Message, state: FSMContext, db):
 
 @router.callback_query(F.data == "admin_asg_create")
 async def admin_create_start(callback: CallbackQuery, state: FSMContext, db):
-    if not _is_owner(callback.from_user.id):
+    if not is_admin_user(callback.from_user):
         await callback.answer("⛔️", show_alert=True)
         return
 
@@ -212,7 +207,7 @@ async def admin_create_start(callback: CallbackQuery, state: FSMContext, db):
 
 @router.message(AdminAssignmentState.waiting_course_id)
 async def admin_create_course_id(message: Message, state: FSMContext, db):
-    if not _is_owner(message.from_user.id):
+    if not is_admin_user(message.from_user):
         return
     raw = (message.text or "").strip()
     if not raw.isdigit():
@@ -232,7 +227,7 @@ async def admin_create_course_id(message: Message, state: FSMContext, db):
 
 @router.message(AdminAssignmentState.waiting_title)
 async def admin_create_title(message: Message, state: FSMContext):
-    if not _is_owner(message.from_user.id):
+    if not is_admin_user(message.from_user):
         return
     title = (message.text or "").strip()
     if not title:
@@ -245,7 +240,7 @@ async def admin_create_title(message: Message, state: FSMContext):
 
 @router.message(AdminAssignmentState.waiting_description)
 async def admin_create_description(message: Message, state: FSMContext, db):
-    if not _is_owner(message.from_user.id):
+    if not is_admin_user(message.from_user):
         return
 
     description = (message.text or "").strip()
