@@ -6,144 +6,75 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 def normalize_database_url(url: str) -> str:
-    if not url:
-        return url
-    if url.startswith("postgres://"):
-        return "postgresql+psycopg://" + url.removeprefix("postgres://")
-    if url.startswith("postgresql+psycopg://"):
-        return url
-    if url.startswith("postgresql://"):
-        return "postgresql+psycopg://" + url.removeprefix("postgresql://")
+    if not url: return url
+    if url.startswith("postgres://"): return "postgresql+psycopg://" + url.removeprefix("postgres://")
+    if url.startswith("postgresql+psycopg://"): return url
+    if url.startswith("postgresql://"): return "postgresql+psycopg://" + url.removeprefix("postgresql://")
     return url
 
-
 def normalize_openai_compatible_base_url(url: str) -> str:
-    raw = (url or "").strip().rstrip("/")
-    if not raw:
-        return "https://api.openai.com/v1"
-    for suffix in ("/chat/completions", "/v1/chat/completions", "/completions"):
-        if raw.lower().endswith(suffix):
-            raw = raw[: -len(suffix)].rstrip("/")
-    host = (urlparse(raw).hostname or "").lower()
-    gateway_hosts = (
-        "agentrouter.org", "co.agentrouter.org", "www.agentrouter.org",
-        "api.orcarouter.ai", "orcarouter.ai", "www.orcarouter.ai",
-    )
-    if host in gateway_hosts and not raw.endswith("/v1"):
-        raw += "/v1"
+    raw=(url or "").strip().rstrip("/")
+    if not raw: return "https://api.openai.com/v1"
+    for suffix in ("/chat/completions","/v1/chat/completions","/completions"):
+        if raw.lower().endswith(suffix): raw=raw[:-len(suffix)].rstrip("/")
+    host=(urlparse(raw).hostname or "").lower()
+    if host in {"agentrouter.org","co.agentrouter.org","www.agentrouter.org","api.orcarouter.ai","orcarouter.ai","www.orcarouter.ai"} and not raw.endswith("/v1"): raw += "/v1"
     return raw
 
-
 class Settings(BaseSettings):
-    APP_NAME: str = "RahYar Academy Management System"
-    DEBUG: bool = False
-    DATABASE_URL: str = "sqlite:///./rahyar.db"
-    BOT_TOKEN: str = ""
-    SECRET_KEY: str = ""
-    OWNER_ID: int = 0
-    ADMIN_USERNAMES: str = "Hi_all"
-    NEW_MEMBER_NOTIFICATION_CHAT_ID: int = 0
-    PROXY_URL: str | None = None
-    REDIS_URL: str | None = None
-    DEFAULT_CARD_NUMBER: str | None = None
-    DEFAULT_CARD_HOLDER: str | None = None
-    SPOTPLAYER_API_KEY: str | None = None
-    BOT_USERNAME: str | None = "Mb_tutorialbot"
-    SITE_NAME: str = "آکادمی راه‌یار"
-    SITE_TAGLINE: str = "آموزش حرفه‌ای موسیقی — دوره‌های دیجیتال و کلاس آنلاین"
-
-    AI_AGENT_ENABLED: bool = True
-    AI_AGENT_REPO_PATH: str = "."
-    AI_AGENT_API_KEY: str | None = None
-    AI_AGENT_BASE_URL: str = "https://api.openai.com/v1"
-    AI_AGENT_MODEL: str = "gpt-4o-mini"
-    AI_AGENT_MAX_RETRIES: int = 2
-    AI_AGENT_TIMEOUT_SECONDS: int = 180
-    AI_API_KEY: str | None = None
-    AI_BASE_URL: str | None = None
-    AI_MODEL: str | None = None
-    AI2_API_KEY: str | None = None
-    AI2_BASE_URL: str | None = None
-    AI2_MODEL: str | None = None
-    AI_FALLBACK_MODEL: str = "gpt-5.5"
-    AI_PROVIDERS_JSON: str = ""
-
-    ORCAROUTER_API_KEY: str | None = None
-    KIRAAI_API_KEY: str | None = None
-    OPENROUTER_API_KEY: str | None = None
-    AGENTROUTER_API_KEY: str | None = None
-    GOOGLE_API_KEY: str | None = None
-    OPENCODE_API_KEY: str | None = None
-    OPENCODE_ZEN_BASE_URL: str = "https://opencode.ai/zen/v1"
-    OPENAI_API_KEY: str | None = None
-    OPENAI_BASE_URL: str = "https://api.openai.com/v1"
-
-    MUSIC_AUDIO_API_KEY: str | None = None
-    MUSIC_AUDIO_BASE_URL: str | None = None
-    MUSIC_AUDIO_MODEL: str | None = None
-    MUSIC_AUDIO_PATH: str = "/audio/generations"
-    MUSIC_AUDIO_MAX_SECONDS: int = 90
-    MUSIC_AUDIO_FORMAT: str = "wav"
-    MUSIC_AUDIO_TIMEOUT_SECONDS: int = 240
-    MUSIC_GENERATION_RAHYAR_DAILY_LIMIT: int = 15
-    MUSIC_GENERATION_PUBLIC_DAILY_LIMIT: int = 8
-
-    AI_AGENT_WRITE_ENABLED: bool = False
-    AI_AGENT_WORK_DIR: str = "/tmp/rahyar-agent-repo"
-    GITHUB_TOKEN: str | None = None
-    GITHUB_REPO: str = "mehrshadevilb-cell/RahYar-Academy-Management-System-V14"
-
-    CHAT_ASSISTANT_ENABLED: bool = True
-    CHAT_ASSISTANT_API_KEY: str | None = None
-    CHAT_ASSISTANT_BASE_URL: str = "https://api.openai.com/v1"
-    CHAT_ASSISTANT_MODEL: str = "gpt-4o-mini"
-    CHAT_ASSISTANT_TIMEOUT_SECONDS: int = 45
-    CHAT_ASSISTANT_MAX_MESSAGES_PER_HOUR: int = 20
-    CHAT_ASSISTANT_WEB_RESEARCH_ENABLED: bool = True
-    CHAT_ASSISTANT_WEB_RESEARCH_RESULTS: int = 4
-    CHAT_ASSISTANT_WEB_RESEARCH_MAX_CHARS: int = 22000
-
-    KNOWLEDGE_ENABLED: bool = True
-    KNOWLEDGE_GROUP_IDS: str = ""
-    KNOWLEDGE_GROUP_TOPIC_ID: int = 21308
-    KNOWLEDGE_FETCH_INTERVAL_HOURS: int = 24
-    KNOWLEDGE_AUTO_QUIZ: bool = True
-    KNOWLEDGE_QUIZ_INTERVAL_HOURS: int = 24
-
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
-
-    @field_validator("DATABASE_URL", mode="before")
+    APP_NAME: str = "RahYar Academy Management System"; DEBUG: bool = False; DATABASE_URL: str = "sqlite:///./rahyar.db"; BOT_TOKEN: str = ""; SECRET_KEY: str = ""; OWNER_ID: int = 0; ADMIN_USERNAMES: str = "Hi_all"; NEW_MEMBER_NOTIFICATION_CHAT_ID: int = 0; PROXY_URL: str | None = None; REDIS_URL: str | None = None; DEFAULT_CARD_NUMBER: str | None = None; DEFAULT_CARD_HOLDER: str | None = None; SPOTPLAYER_API_KEY: str | None = None; BOT_USERNAME: str | None = "Mb_tutorialbot"; SITE_NAME: str = "آکادمی راه‌یار"; SITE_TAGLINE: str = "آموزش حرفه‌ای موسیقی — دوره‌های دیجیتال و کلاس آنلاین"
+    AI_AGENT_ENABLED: bool = True; AI_AGENT_REPO_PATH: str = "."; AI_AGENT_API_KEY: str | None = None; AI_AGENT_BASE_URL: str = "https://api.openai.com/v1"; AI_AGENT_MODEL: str = "gpt-4o-mini"; AI_AGENT_MAX_RETRIES: int = 2; AI_AGENT_TIMEOUT_SECONDS: int = 180; AI_API_KEY: str | None = None; AI_BASE_URL: str | None = None; AI_MODEL: str | None = None; AI2_API_KEY: str | None = None; AI2_BASE_URL: str | None = None; AI2_MODEL: str | None = None; AI_FALLBACK_MODEL: str = "gpt-5.5"; AI_PROVIDERS_JSON: str = ""
+    ORCAROUTER_API_KEY: str | None = None; KIRAAI_API_KEY: str | None = None; OPENROUTER_API_KEY: str | None = None; AGENTROUTER_API_KEY: str | None = None; GOOGLE_API_KEY: str | None = None
+    OPENCODE_API_KEY: str | None = None; OPENCODE_ZEN_API_KEY: str | None = None; OPENCODE_BASE_URL: str | None = None; OPENCODE_ZEN_BASE_URL: str = "https://opencode.ai/zen/v1"; OPENAI_API_KEY: str | None = None; OPENAI_BASE_URL: str = "https://api.openai.com/v1"
+    MUSIC_AUDIO_API_KEY: str | None = None; MUSIC_AUDIO_BASE_URL: str | None = None; MUSIC_AUDIO_MODEL: str | None = None; MUSIC_AUDIO_PATH: str = "/audio/generations"; MUSIC_AUDIO_MAX_SECONDS: int = 90; MUSIC_AUDIO_FORMAT: str = "wav"; MUSIC_AUDIO_TIMEOUT_SECONDS: int = 240; MUSIC_GENERATION_RAHYAR_DAILY_LIMIT: int = 15; MUSIC_GENERATION_PUBLIC_DAILY_LIMIT: int = 8
+    AI_AGENT_WRITE_ENABLED: bool = False; AI_AGENT_WORK_DIR: str = "/tmp/rahyar-agent-repo"; GITHUB_TOKEN: str | None = None; GITHUB_REPO: str = "mehrshadevilb-cell/RahYar-Academy-Management-System-V14"
+    CHAT_ASSISTANT_ENABLED: bool = True; CHAT_ASSISTANT_API_KEY: str | None = None; CHAT_ASSISTANT_BASE_URL: str = "https://api.openai.com/v1"; CHAT_ASSISTANT_MODEL: str = "gpt-4o-mini"; CHAT_ASSISTANT_TIMEOUT_SECONDS: int = 45; CHAT_ASSISTANT_MAX_MESSAGES_PER_HOUR: int = 20; CHAT_ASSISTANT_WEB_RESEARCH_ENABLED: bool = True; CHAT_ASSISTANT_WEB_RESEARCH_RESULTS: int = 4; CHAT_ASSISTANT_WEB_RESEARCH_MAX_CHARS: int = 22000
+    KNOWLEDGE_ENABLED: bool = True; KNOWLEDGE_GROUP_IDS: str = ""; KNOWLEDGE_GROUP_TOPIC_ID: int = 21308; KNOWLEDGE_FETCH_INTERVAL_HOURS: int = 24; KNOWLEDGE_AUTO_QUIZ: bool = True; KNOWLEDGE_QUIZ_INTERVAL_HOURS: int = 24
+    model_config=SettingsConfigDict(env_file=".env",env_file_encoding="utf-8",extra="ignore")
+    @field_validator("DATABASE_URL",mode="before")
     @classmethod
-    def _normalize_database_url(cls, value: object) -> object:
-        return normalize_database_url(value) if isinstance(value, str) else value
-
+    def _normalize_database_url(cls,value: object)->object: return normalize_database_url(value) if isinstance(value,str) else value
     @property
-    def effective_ai_api_key(self) -> str | None:
-        return (self.AGENTROUTER_API_KEY or self.AI_AGENT_API_KEY or self.AI_API_KEY or "").strip() or None
-
+    def effective_ai_api_key(self): return (self.AGENTROUTER_API_KEY or self.AI_AGENT_API_KEY or self.AI_API_KEY or "").strip() or None
     @property
-    def effective_ai_base_url(self) -> str:
-        if self.AGENTROUTER_API_KEY:
-            return normalize_openai_compatible_base_url(self.AI_BASE_URL or "https://agentrouter.org/v1")
-        return normalize_openai_compatible_base_url(self.AI_BASE_URL or self.AI_AGENT_BASE_URL or "https://api.openai.com/v1")
-
+    def effective_ai_base_url(self):
+        return normalize_openai_compatible_base_url(self.AI_BASE_URL or "https://agentrouter.org/v1") if self.AGENTROUTER_API_KEY else normalize_openai_compatible_base_url(self.AI_BASE_URL or self.AI_AGENT_BASE_URL or "https://api.openai.com/v1")
     @property
-    def effective_ai_model(self) -> str:
-        model = (self.AI_MODEL or self.AI_AGENT_MODEL or "gpt-4o-mini").strip()
-        host = (urlparse(self.effective_ai_base_url).hostname or "").lower()
-        if host.endswith("agentrouter.org") and model.lower() in {"mimo-v2.5-free", "mimo-v2.5"}:
-            return (self.AI_FALLBACK_MODEL or "gpt-5.5").strip() or "gpt-5.5"
+    def effective_ai_model(self):
+        model=(self.AI_MODEL or self.AI_AGENT_MODEL or "gpt-4o-mini").strip(); host=(urlparse(self.effective_ai_base_url).hostname or "").lower()
+        if host.endswith("agentrouter.org") and model.lower() in {"mimo-v2.5-free","mimo-v2.5"}: return (self.AI_FALLBACK_MODEL or "gpt-5.5").strip() or "gpt-5.5"
         return model
-
     @property
-    def effective_chat_api_key(self) -> str | None:
-        return (self.CHAT_ASSISTANT_API_KEY or self.effective_ai_api_key or "").strip() or None
-
+    def effective_chat_api_key(self): return (self.CHAT_ASSISTANT_API_KEY or self.effective_ai_api_key or "").strip() or None
     @property
-    def effective_chat_base_url(self) -> str:
-        return normalize_openai_compatible_base_url(self.CHAT_ASSISTANT_BASE_URL or self.effective_ai_base_url)
+    def effective_chat_base_url(self):
+        chat=(self.CHAT_ASSISTANT_BASE_URL or "").strip(); defaults={"https://api.openai.com/v1","https://api.openai.com",""}
+        if chat.rstrip("/") not in defaults: return normalize_openai_compatible_base_url(chat)
+        if self.AGENTROUTER_API_KEY or self.AI_BASE_URL or self.AI_AGENT_BASE_URL: return self.effective_ai_base_url
+        return normalize_openai_compatible_base_url(chat or "https://api.openai.com/v1")
+    @property
+    def effective_chat_model(self):
+        model=(self.CHAT_ASSISTANT_MODEL or "").strip()
+        if model and model!="gpt-4o-mini": return model
+        return self.effective_ai_model if self.effective_ai_api_key else model or "gpt-4o-mini"
+    @property
+    def github_write_ready(self): return bool(self.AI_AGENT_WRITE_ENABLED and (self.GITHUB_TOKEN or "").strip() and (self.GITHUB_REPO or "").strip())
+    @property
+    def knowledge_group_ids(self):
+        result=set()
+        for value in self.KNOWLEDGE_GROUP_IDS.split(","):
+            try:
+                if value.strip(): result.add(int(value.strip()))
+            except ValueError: pass
+        return result
+    @property
+    def admin_usernames(self): return {v.strip().lstrip("@").casefold() for v in self.ADMIN_USERNAMES.split(",") if v.strip()}
+    @property
+    def new_member_notification_chat_id(self): return self.NEW_MEMBER_NOTIFICATION_CHAT_ID or self.OWNER_ID
+    @property
+    def bot_deep_link_base(self):
+        if not self.BOT_USERNAME: return None
+        username=self.BOT_USERNAME.lstrip("@").strip(); return f"https://t.me/{username}" if username else None
 
-
-@lru_cache(maxsize=1)
-def get_settings() -> Settings:
-    return Settings()
+@lru_cache
+def get_settings()->Settings: return Settings()
