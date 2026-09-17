@@ -19,6 +19,7 @@ from src.core.logging.logger import get_logger
 from src.services.web_order_service import WebOrderError, WebOrderService
 from src.bot.keyboards.payment_review_keyboard import payment_review_keyboard
 from src.database.models.free_lesson import FreeLesson
+from src.web.catalog_schema import ClassOut, class_out
 from src.web.deps import get_db
 
 logger = get_logger("web.api_v1")
@@ -36,13 +37,6 @@ class ProductOut(BaseModel):
     is_active: bool = True
     delivery_type: str = "spotplayer"
     thumbnail: str | None = None
-
-
-class ClassOut(BaseModel):
-    id: int
-    name: str
-    description: str | None = None
-    is_active: bool = True
 
 
 class OrderIn(BaseModel):
@@ -250,15 +244,7 @@ async def list_classes(db: Session = Depends(get_db)):
     except Exception:
         logger.exception("api_v1 list_classes failed")
         raise HTTPException(status_code=503, detail="classes_unavailable") from None
-    return [
-        ClassOut(
-            id=c.id,
-            name=c.name,
-            description=getattr(c, "description", None),
-            is_active=bool(c.is_active),
-        )
-        for c in classes
-    ]
+    return [class_out(course) for course in classes]
 
 
 @router.post("/orders")

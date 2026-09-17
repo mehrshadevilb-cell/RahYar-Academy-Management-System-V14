@@ -251,7 +251,12 @@ class AIProviderRouter:
 
     def test_models(self, *, timeout_seconds: int = 15) -> list[dict[str, Any]]:
         from src.services.provider_model_health_service import ProviderModelHealthService
-        return ProviderModelHealthService(self).test_all(timeout_seconds=timeout_seconds, discover_catalog=True, sort_results=False, test_paid=True)
+        return ProviderModelHealthService(self).test_all(
+            timeout_seconds=timeout_seconds,
+            discover_catalog=False,
+            sort_results=False,
+            test_paid=True,
+        )
 
     def reset_cooldowns(self) -> None:
         self._cooldown_until.clear()
@@ -435,49 +440,57 @@ class AIProviderRouter:
                 skipped_until.append(blocked_until)
                 continue
             attempted += 1
-            request_kwargs = dict(kwargs)
-            try:
-                data = self._request(provider, model, messages, request_kwargs, timeout_seconds)
-                self._model_cooldown_until.pop(model_key, None)
-                data["_rahyar_provider"] = provider.name
-                data["_rahyar_model"] = model
-                data["_rahyar_is_free"] = self._is_free_model(model)
-                return data
-            except urllib.error.HTTPError as exc:
-                body = ""
+            while True:
+                request_kwargs = dict(kwargs)
                 try:
-                    body = exc.read().decode("utf-8", errors="replace")[:1000]
-                except Exception:
-                    pass
-                retry_after = self._retry_after(exc.headers, body)
-                lowered = body.lower()
-                if self._is_rate_limited(exc.code, body):
-                    cooldown = min(retry_after or 300, 86400)
-                    self._model_cooldown_until[model_key] = time.time() + cooldown
-                    last = AIProviderError(f"model rate limited: {provider.name}/{model}", retryable=True, retry_after=cooldown, provider=provider.name, rate_limited=True)
-                    continue
-                if exc.code in {401, 403}:
-                    self._model_cooldown_until[model_key] = time.time() + 120
-                    last = AIProviderError(f"provider authentication failed: {provider.name}/{model}", retryable=True, retry_after=120, provider=provider.name)
-                    continue
-                if exc.code in {404, 400} or "model_not_found" in lowered or "not found" in lowered or "does not exist" in lowered:
-                    self._model_cooldown_until[model_key] = time.time() + 3600
-                    last = AIProviderError(f"model unavailable (HTTP {exc.code}): {provider.name}/{model}", retryable=True, provider=provider.name)
-                    continue
-                last = AIProviderError(f"provider HTTP {exc.code}: {provider.name}/{model}", retryable=exc.code >= 500, provider=provider.name)
-                if exc.code >= 500:
-                    self._model_cooldown_until[model_key] = time.time() + 60
-                    continue
-                raise last
-            except (urllib.error.URLError, TimeoutError, OSError) as exc:
-                last = AIProviderError(f"provider unavailable: {provider.name}/{model}: {type(exc).__name__}", retryable=True, retry_after=30, provider=provider.name)
-                self._model_cooldown_until[model_key] = time.time() + 30
-                continue
-            except AIProviderError as exc:
-                last = exc
-                self._model_cooldown_until[model_key] = time.time() + max(exc.retry_after, 30)
-                continue
+                    data = self._request(provider, model, messages, request_kwargs, timeout_seconds)
+                    self._model_cooldown_until.pop(model_key, None)
+                    data["_rahyar_provider"] = provider.name
+                    data["_rahyar_model"] = model
+                    data["_rahyar_is_free"] = self._is_free_model(model)
+                    return data
+                except urllib.error.HTTPError as exc:
+                    body = ""
+                    try:
+                        body = exc.read().decode("utf-8", errors="replace")[:1000]
+                    except Exception:
+                        pass
+                    retry_after = self._retry_after(exc.headers, body)
+                    lowered = body.lower()
+                    if self._is_rate_limited(exc.code, body):
+                        cooldown = min(retry_after or 300, 86400)
+                        self._model_cooldown_until[model_key] = time.time() + cooldown
+                        last = AIProviderError(f"model rate limited: {provider.name}/{model}", retryable=True, retry_after=cooldown, provider=provider.name, rate_limited=True)
+                        break
+                    if exc.code in {401, 403}:
+                        self._model_cooldown_until[model_key] = time.time() + 120
+                        last = AIProviderError(f"provider authentication failed: {provider.name}/{model}", retryable=True, retry_after=120, provider=provider.name)
+                        break
+                    if exc.code in {404, 400} or "model_not_found" in lowered or "not found" in lowered or "does not exist" in lowered:
+                        self._model_cooldown_until[model_key] = time.time() + 3600
+                        last = AIProviderError(f"model unavailable (HTTP {exc.code}): {provider.name}/{model}", retryable=True, provider=provider.name)
+                        break
+                    last = AIProviderError(f"provider HTTP {exc.code}: {provider.name}/{model}", retryable=exc.code >= 500, provider=provider.name)
+                    if exc.code >= 500:
+                        attempts = transient_attempts.get(model_key, 0)
+                        if attempts < transient_retries:
+                            transient_attempts[model_key] = attempts + 1
+                            continue
+                        self._model_cooldown_until[model_key] = time.time() + 60
+                        break
+                    raise last
+                except (urllib.error.URLError, TimeoutError, OSError) as exc:
+                    last = AIProviderError(f"provider unavailable: {provider.name}/{model}: {type(exc).__name__}", retryable=True, retry_after=30, provider=provider.name)
+                    self._model_cooldown_until[model_key] = time.time() + 30
+                    break
+                except AIProviderError as exc:
+                    last = exc
+                    self._model_cooldown_until[model_key] = time.time() + max(exc.retry_after, 30)
+                    break
 
+        if skipped_until and attempted == 0:
+            retry_after = max(1, int(min(skipped_until) - time.time()))
+            raise AIProviderError("All AI models are cooling down", retryable=True, retry_after=retry_after)
         if last:
             raise last
         raise AIProviderError("No usable AI model is currently available", retryable=True, retry_after=60)
