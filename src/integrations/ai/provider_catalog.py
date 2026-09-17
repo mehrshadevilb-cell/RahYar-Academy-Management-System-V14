@@ -67,6 +67,9 @@ PROVIDER_PRESETS: tuple[ProviderPreset, ...] = (
             "models_url": "https://api.bytez.com/models/v2/list/models?task=chat",
             "models_key": "output",
             "model_id_key": "modelId",
+            # Separate auth-only endpoint lets us distinguish an invalid key
+            # from a broken/degraded model-catalog endpoint.
+            "discovery_health_url": "https://api.bytez.com/models/v2/list/tasks",
         },
     ),
     ProviderPreset(
