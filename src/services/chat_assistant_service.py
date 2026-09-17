@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import time
 from collections import defaultdict, deque
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from sqlalchemy.orm import Session
 
@@ -74,6 +75,42 @@ ANSWER_CONTRACT_PROMPT_FA = """
 - اگر پاسخ قطعی نیست، صادقانه بگو چه چیزی لازم است؛ پاسخ ساختگی یا کلی‌گویی ممنوع است.
 """.strip()
 
+MULTI_AGENT_HINTS = (
+    "seo", "سئو", "طراحی سایت", "دیزاین", "design", "ui", "ux", "landing",
+    "لندینگ", "متا تگ", "متاتگ", "schema", "json-ld", "گوگل", "google",
+    "سرچ کنسول", "تجربه کاربری", "نرخ تبدیل", "conversion", "صفحه اصلی",
+)
+
+SPECIALIST_PROMPTS_FA = {
+    "seo": """
+تو متخصص SEO فنی و محتوایی برای وب‌سایت فارسی ArtistYar هستی.
+وظیفه‌ات: برای سؤال کاربر یک پیشنهاد اجرایی بده که شامل intent جست‌وجو، کلمات کلیدی طبیعی فارسی، ساختار title و meta description، headingها، internal linking، schema/JSON-LD مناسب و معیار سنجش باشد.
+از وعده رتبه قطعی، عدد ساختگی یا ادعای بررسی سایت بدون دسترسی خودداری کن. اگر چیزی نیاز به بررسی واقعی دارد، با برچسب «نیازمند بررسی» مشخص کن.
+پاسخ کوتاه و قابل تحویل به تیم وب باشد.
+""".strip(),
+    "design": """
+تو متخصص UX/UI و طراحی محصول برای آکادمی موسیقی ArtistYar هستی.
+وظیفه‌ات: برای سؤال کاربر یک طرح اجرایی RTL و mobile-first بده؛ اولویت را به وضوح مسیر یادگیری، CTA، خوانایی، دسترسی‌پذیری، حالت‌های loading/empty/error و اعتمادسازی بده.
+پیشنهادها باید با هویت حرفه‌ای و تیره/طلایی ArtistYar سازگار باشند و به کامپوننت یا بخش صفحه قابل تبدیل باشند.
+اگر ادعایی نیازمند دیدن صفحه یا داده واقعی است، با برچسب «نیازمند بررسی» مشخص کن.
+""".strip(),
+    "content": """
+تو استراتژیست محتوا و رشد برای آموزش تولید موسیقی هستی.
+وظیفه‌ات: سؤال کاربر را به پیام روشن، ساختار صفحه و CTA قابل اندازه‌گیری تبدیل کن. برای مخاطب فارسی، لحن طبیعی و غیرکلیشه‌ای بنویس و تفاوت مخاطب مبتدی و حرفه‌ای را در نظر بگیر.
+هیچ testimonial، قیمت، نتیجه یا ادعای واقعی اختراع نکن؛ موارد فرضی را صریحاً نمونه پیشنهادی اعلام کن.
+""".strip(),
+}
+
+MULTI_AGENT_SYNTHESIS_FA = """
+تو رهبر تیم چندمتخصصی ArtistYar هستی. سه گزارش متخصص SEO، UX/UI و محتوا را با سؤال کاربر ترکیب کن.
+پاسخ فارسی، سریع‌خوان و اجرایی باشد و با این ترتیب نوشته شود:
+1) نتیجه مستقیم در یک یا دو جمله
+2) «پیشنهادهای فوری» با حداکثر 5 مورد اولویت‌دار
+3) «نمونه آماده» فقط در صورت مفید بودن؛ مانند title، meta description، heading یا متن CTA
+4) «نیازمند بررسی» برای مواردی که بدون URL، Analytics، Search Console یا دیدن طرح نمی‌توان قطعی گفت
+از تکرار گزارش‌ها، کلی‌گویی و وعده رتبه خودداری کن. اطلاعات خصوصی و پرداختی را افشا نکن.
+""".strip()
+
 
 def _question_guidance(question: str) -> str:
     """Add small deterministic hints so the model chooses the right answer shape."""
@@ -85,6 +122,12 @@ def _question_guidance(question: str) -> str:
     if any(token in normalized for token in ("مقایسه", "بهتر", "پیشنهاد", "انتخاب")):
         return "راهنمای سؤال: گزینه‌ها را بر اساس نیاز کاربر مقایسه کن و در پایان یک پیشنهاد مشروط بده."
     return "راهنمای سؤال: پاسخ را متناسب با سطح سؤال کوتاه و اجرایی نگه دار."
+
+
+def is_multi_agent_request(question: str) -> bool:
+    """Route only design/growth questions to the slower parallel team."""
+    normalized = (question or "").casefold()
+    return any(hint in normalized for hint in MULTI_AGENT_HINTS)
 
 WEB_DECISION_PROMPT = """
 به عنوان fact-checker عمل کن. با توجه به سوال و دانش داخلی، اگر می‌توانی پاسخ دقیق و قابل اتکا بدهی
@@ -220,6 +263,42 @@ class ChatAssistantService:
         ).upper()
         return "NEEDS_WEB_SEARCH" in decision and "EXACT" not in decision
 
+    def _multi_agent_answer(self, base_context: list[dict[str, str]], text: str) -> str | None:
+        """Run independent SEO/design/content specialists concurrently, then synthesize."""
+        reports: list[tuple[str, str]] = []
+
+        def run_specialist(item: tuple[str, str]) -> tuple[str, str]:
+            name, prompt = item
+            reply = self._request_model(
+                base_context + [
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": text},
+                ],
+                max_tokens=380,
+            )
+            return name, reply[:1800]
+
+        with ThreadPoolExecutor(max_workers=3, thread_name_prefix="rahyar-agent") as pool:
+            futures = [pool.submit(run_specialist, item) for item in SPECIALIST_PROMPTS_FA.items()]
+            for future in as_completed(futures):
+                try:
+                    reports.append(future.result())
+                except (ChatAssistantError, AIProviderError, OSError, TimeoutError, ValueError, TypeError):
+                    continue
+
+        if not reports:
+            return None
+        reports.sort(key=lambda item: item[0])
+        dossier = "\n\n".join(f"گزارش {name}:\n{report}" for name, report in reports)
+        return self._request_model(
+            base_context + [
+                {"role": "system", "content": MULTI_AGENT_SYNTHESIS_FA},
+                {"role": "system", "content": "گزارش‌های موازی متخصصان:\n" + dossier},
+                {"role": "user", "content": text},
+            ],
+            max_tokens=850,
+        )[:MAX_REPLY_CHARS]
+
     def _research_query(self, question: str) -> str:
         return self.music_packs.research_query(question)
 
@@ -245,6 +324,11 @@ class ChatAssistantService:
             {"role": "system", "content": "دانش جمع‌آوری و پالایش‌شده داخلی:\n" + (knowledge or "هنوز مطلب آموزشی ثبت نشده است.")},
             {"role": "system", "content": _question_guidance(text)},
         ]
+
+        if is_multi_agent_request(text):
+            multi_agent_reply = self._multi_agent_answer(base_context, text)
+            if multi_agent_reply:
+                return multi_agent_reply
 
         if self._needs_web_research(text, knowledge):
             research = self.web_research.research(
