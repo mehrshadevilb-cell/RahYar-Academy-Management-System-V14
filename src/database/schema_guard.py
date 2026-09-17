@@ -11,9 +11,10 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import text
+from sqlalchemy import inspect, text
 
 from src.database.connection import engine
+from src.database.models.free_lesson import FreeLesson
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,11 @@ def ensure_critical_schema() -> None:
     """Ensure critical columns exist. Safe to call on every process start."""
     dialect = engine.dialect.name
     with engine.begin() as conn:
+        # Some early production databases were stamped after migration 0017
+        # without the actual table.  `checkfirst` repairs only that incomplete
+        # deployment and remains a no-op for correctly migrated databases.
+        FreeLesson.__table__.create(bind=conn, checkfirst=True)
+        logger.info("schema_guard: ensured free_lessons table")
         for table, column, ddl in _CRITICAL_COLUMNS:
             if dialect == "postgresql":
                 # PostgreSQL 9.1+ supports IF NOT EXISTS on ADD COLUMN.
@@ -48,23 +54,10 @@ def ensure_critical_schema() -> None:
                 conn.execute(text(sql))
                 logger.info("schema_guard: ensured %s.%s", table, column)
             else:
-                # SQLite / other: inspect then add if missing.
-                rows = conn.execute(
-                    text(
-                        "SELECT 1 FROM information_schema.columns "
-                        "WHERE table_name = :table AND column_name = :column"
-                    ),
-                    {"table": table, "column": column},
-                ).fetchone()
-                if rows is None:
-                    # information_schema may not exist on pure SQLite; try PRAGMA.
-                    try:
-                        existing = {
-                            r[1]
-                            for r in conn.execute(text(f"PRAGMA table_info({table})")).fetchall()
-                        }
-                    except Exception:
-                        existing = set()
-                    if column not in existing:
-                        conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
-                        logger.info("schema_guard: added %s.%s", table, column)
+                existing = {
+                    row["name"]
+                    for row in inspect(conn).get_columns(table)
+                }
+                if column not in existing:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
+                    logger.info("schema_guard: added %s.%s", table, column)

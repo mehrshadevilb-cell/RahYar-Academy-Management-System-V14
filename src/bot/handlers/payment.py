@@ -21,6 +21,7 @@ from src.services.enrollment_service import EnrollmentService
 from src.services.profile_service import ProfileService
 from src.services.license_service import LicenseService
 from src.services.artistyar_service import ArtistYarService
+from src.services.payment_delivery_service import PaymentDeliveryService
 from src.services.admin_log_service import AdminLogService
 from src.services.legacy_import_service import LegacyImportService
 from src.core.constants import admin_actions
@@ -42,6 +43,14 @@ profile_service = ProfileService()
 license_service = LicenseService()
 artistyar_service = ArtistYarService()
 telegram_repository = TelegramRepository()
+payment_delivery_service = PaymentDeliveryService(
+    payment_service=payment_service,
+    enrollment_service=enrollment_service,
+    license_service=license_service,
+    artistyar_service=artistyar_service,
+    referral_service=referral_service,
+    telegram_repository=telegram_repository,
+)
 license_repository = LicenseRepository()
 admin_log_service = AdminLogService()
 legacy_import_service = LegacyImportService()
@@ -604,13 +613,18 @@ async def approve_payment(
         await callback.answer("این پرداخت قبلاً بررسی شده است.", show_alert=True)
         return
 
-    payment = payment_service.approve(
+    delivery = await payment_delivery_service.approve_and_deliver(
         db=db,
         payment_id=payment_id,
         admin_telegram_id=callback.from_user.id,
+        bot=bot,
+        notify_student=True,
     )
-
-    course_for_log = course_service.get_course_by_id(db, payment.course_id)
+    if not delivery:
+        await callback.answer("پرداخت پیدا نشد", show_alert=True)
+        return
+    payment = delivery.payment
+    course_for_log = delivery.course
 
     admin_log_service.log(
         db, callback.from_user.id, admin_actions.PAYMENT_APPROVE,
@@ -618,13 +632,7 @@ async def approve_payment(
         f"به مبلغ {payment.amount:,} تومان تایید شد",
     )
 
-    enrollment_service.create_enrollment(
-        db=db,
-        user_id=payment.user_id,
-        course_id=payment.course_id,
-    )
-
-    rewarded_referral = referral_service.reward_referrer_if_pending(db, payment.user_id)
+    rewarded_referral = delivery.referral_rewarded
 
     if rewarded_referral:
 
@@ -653,68 +661,28 @@ async def approve_payment(
                 ),
             )
 
-    course = course_service.get_course_by_id(db, payment.course_id)
+    if delivery.license and delivery.license.status != "active":
+        await bot.send_message(
+            chat_id=settings.OWNER_ID,
+            text=(
+                f"⚠️ صدور لایسنس برای «{delivery.course.title}» ناموفق بود.\n"
+                f"پرداخت #{payment.id} — کاربر {delivery.user.phone or delivery.user.id}\n"
+                "از گزینه تلاش مجدد لایسنس استفاده کنید."
+            ),
+            reply_markup=license_retry_keyboard(delivery.license.id),
+        )
 
-    user = profile_service.get_profile_by_id(db, payment.user_id)
-
-    telegram_account = telegram_repository.get_by_user_id(db, payment.user_id)
-
-    if course and user:
-
-        if course.delivery_type == ProductDeliveryType.SPOTPLAYER:
-
-            await callback.answer("در حال صدور لایسنس... ⏳")
-
-            if telegram_account:
-                await _deliver_spotplayer(
-                    bot=bot,
-                    db=db,
-                    user=user,
-                    telegram_id=telegram_account.telegram_id,
-                    course=course,
-                    payment_id=payment.id,
-                )
-            else:
-                license_ = await license_service.issue_license(
-                    db=db,
-                    user_id=user.id,
-                    user_full_name=user.full_name,
-                    user_phone=user.phone,
-                    product=course,
-                    payment_id=payment.id,
-                )
-                if license_.status != "active":
-                    await bot.send_message(
-                        chat_id=settings.OWNER_ID,
-                        text=(
-                            f"⚠️ صدور لایسنس وب برای «{course.title}» ناموفق بود.\n"
-                            f"پرداخت #{payment.id} — کاربر {user.phone or user.id}\n"
-                            "از گزینه تلاش مجدد لایسنس استفاده کنید."
-                        ),
-                        reply_markup=license_retry_keyboard(license_.id),
-                    )
-
-        elif course.delivery_type == ProductDeliveryType.TELEGRAM and telegram_account:
-
-            await callback.answer("در حال ساخت لینک‌های دعوت... ⏳")
-
-            await _deliver_artistyar(
-                bot=bot,
-                db=db,
-                user_id=user.id,
-                telegram_id=telegram_account.telegram_id,
-                course=course,
-            )
-
-        else:
-
-            await bot.send_message(
-                chat_id=telegram_account.telegram_id,
-                text=(
-                    "✅ پرداخت شما تایید شد.\n"
-                    "دوره به لیست «دوره‌های من» شما اضافه شد."
-                ),
-            )
+    failed_channels = [item for item in delivery.channel_deliveries if not item.invite_link]
+    if failed_channels:
+        failed_names = "، ".join(item.channel_name for item in failed_channels)
+        await bot.send_message(
+            chat_id=settings.OWNER_ID,
+            text=(
+                f"⚠️ ساخت لینک دعوت برای «{failed_names}» "
+                f"(محصول: {delivery.course.title}) ناموفق بود."
+            ),
+            reply_markup=artistyar_retry_keyboard(delivery.user.id, delivery.course.id),
+        )
 
     await callback.message.edit_caption(
         caption=callback.message.caption + "\n\n✅ تایید شد."
@@ -751,9 +719,9 @@ async def retry_license(
 
     course = course_service.get_course_by_id(db, failed_license.product_id)
     user = profile_service.get_profile_by_id(db, failed_license.user_id)
-    telegram_account = telegram_repository.get_by_user_id(db, failed_license.user_id)
+    payment = payment_service.get_by_id(db, failed_license.payment_id) if failed_license.payment_id else None
 
-    if not course or not user or not telegram_account:
+    if not course or not user or not payment or payment.status != "approved":
         await callback.answer("اطلاعات لازم برای تلاش مجدد پیدا نشد.", show_alert=True)
         return
 
@@ -764,17 +732,20 @@ async def retry_license(
 
     await callback.answer("در حال تلاش مجدد... ⏳")
 
-    await _deliver_spotplayer(
+    delivery = await payment_delivery_service.deliver_approved_payment(
         bot=bot,
         db=db,
-        user=user,
-        telegram_id=telegram_account.telegram_id,
-        course=course,
-        payment_id=failed_license.payment_id,
+        payment=payment,
+        notify_student=True,
+        reward_referral=False,
     )
 
     await callback.message.edit_text(
-        callback.message.text + "\n\n🔁 تلاش مجدد انجام شد."
+        callback.message.text + (
+            "\n\n✅ لایسنس با موفقیت صادر شد."
+            if delivery.license and delivery.license.status == "active"
+            else "\n\n⚠️ تلاش مجدد انجام شد، اما صدور لایسنس هنوز ناموفق است."
+        )
     )
 
 
@@ -797,9 +768,18 @@ async def retry_artistyar(
     user_id, product_id = int(parts[0]), int(parts[1])
 
     course = course_service.get_course_by_id(db, product_id)
-    telegram_account = telegram_repository.get_by_user_id(db, user_id)
+    payment = (
+        db.query(Payment)
+        .filter(
+            Payment.user_id == user_id,
+            Payment.course_id == product_id,
+            Payment.status == "approved",
+        )
+        .order_by(Payment.id.desc())
+        .first()
+    )
 
-    if not course or not telegram_account:
+    if not course or not payment:
         await callback.answer("اطلاعات لازم برای تلاش مجدد پیدا نشد.", show_alert=True)
         return
 
@@ -810,16 +790,21 @@ async def retry_artistyar(
 
     await callback.answer("در حال تلاش مجدد... ⏳")
 
-    await _deliver_artistyar(
+    delivery = await payment_delivery_service.deliver_approved_payment(
         bot=bot,
         db=db,
-        user_id=user_id,
-        telegram_id=telegram_account.telegram_id,
-        course=course,
+        payment=payment,
+        notify_student=True,
+        reward_referral=False,
     )
+    failed_channels = [item for item in delivery.channel_deliveries if not item.invite_link]
 
     await callback.message.edit_text(
-        callback.message.text + "\n\n🔁 تلاش مجدد انجام شد."
+        callback.message.text + (
+            "\n\n✅ لینک‌های باقی‌مانده ساخته شد."
+            if not failed_channels
+            else "\n\n⚠️ تلاش مجدد انجام شد، اما بعضی لینک‌ها هنوز ساخته نشدند."
+        )
     )
 
 

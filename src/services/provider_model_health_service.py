@@ -151,6 +151,11 @@ class ProviderModelHealthService:
                     return "unknown"
         return "unknown"
 
+    @classmethod
+    def _free(cls, model: dict[str, Any]) -> bool:
+        """Return true only when provider metadata explicitly proves zero cost."""
+        return cls.pricing_status(model) == "known_free"
+
     def _sync_router_health(self, provider: AIProvider, model: str, ok: bool, retry_after: int = 0) -> None:
         key = f"{provider.name}:{model}"
         if ok:
@@ -279,6 +284,9 @@ class ProviderModelHealthService:
                     tested = {"ok": False, "status": f"test_failed:{type(exc).__name__}"}
                 target = row_map.get(identity)
                 if target is not None:
+                    # The worker cannot know whether this row came from a live
+                    # catalog or the configured fallback list; preserve source.
+                    tested["discovered"] = target["discovered"]
                     target.update(tested, live_tested=True)
 
         if sort_results:

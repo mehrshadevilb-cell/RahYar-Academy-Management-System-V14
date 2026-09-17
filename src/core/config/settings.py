@@ -49,6 +49,7 @@ class Settings(BaseSettings):
     DEFAULT_CARD_HOLDER: str | None = None
     SPOTPLAYER_API_KEY: str | None = None
     BOT_USERNAME: str | None = "Mb_tutorialbot"
+    TELEGRAM_WEB_APP_URL: str | None = None
     SITE_NAME: str = "آکادمی راه‌یار"
     SITE_TAGLINE: str = "آموزش حرفه‌ای موسیقی — دوره‌های دیجیتال و کلاس آنلاین"
     WEB_ADMIN_API_KEY: str = ""
@@ -195,6 +196,13 @@ class Settings(BaseSettings):
             return None
         username = self.BOT_USERNAME.lstrip("@").strip()
         return f"https://t.me/{username}" if username else None
+
+    @property
+    def telegram_web_app_url(self) -> str | None:
+        """Return a safe HTTPS Mini App URL or disable the button."""
+        value = (self.TELEGRAM_WEB_APP_URL or "").strip()
+        parsed = urlparse(value)
+        return value.rstrip("/") if parsed.scheme == "https" and parsed.netloc else None
 
 
 @lru_cache

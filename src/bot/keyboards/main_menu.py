@@ -1,5 +1,6 @@
-from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
+from aiogram.types import KeyboardButton, ReplyKeyboardMarkup, WebAppInfo
 
+from src.core.config.settings import get_settings
 from src.database.models.user import UserRole
 
 
@@ -16,6 +17,9 @@ def get_main_menu(role: UserRole | None = None):
         [KeyboardButton(text="🎁 دعوت از دوستان")],
         [KeyboardButton(text="🤖 دستیار هوشمند"), KeyboardButton(text="🆘 پشتیبانی")],
     ]
+    web_app_url = get_settings().telegram_web_app_url
+    if web_app_url:
+        keyboard.insert(0, [KeyboardButton(text="🌐 ورود به سایت آکادمی", web_app=WebAppInfo(url=web_app_url))])
     if role == UserRole.ADMIN:
         keyboard.append([KeyboardButton(text="🛠 پنل مدیریت")])
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)

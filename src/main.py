@@ -5,6 +5,7 @@ import traceback
 from pathlib import Path
 
 from aiogram.exceptions import TelegramConflictError, TelegramUnauthorizedError
+from aiogram.types import MenuButtonWebApp, WebAppInfo
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
@@ -154,6 +155,20 @@ async def _auto_configure_ai_at_startup() -> None:
 async def _prepare_telegram_polling() -> None:
     me = await bot.get_me()
     logger.info("Telegram bot authenticated: @%s (id=%s)", me.username or "unknown", me.id)
+    web_app_url = settings.telegram_web_app_url
+    if web_app_url:
+        try:
+            await bot.set_chat_menu_button(
+                menu_button=MenuButtonWebApp(
+                    text="سایت آکادمی",
+                    web_app=WebAppInfo(url=web_app_url),
+                )
+            )
+            logger.info("Telegram Mini App menu button configured")
+        except Exception:
+            # Polling must remain available if Telegram rejects a URL before
+            # the owner completes BotFather domain configuration.
+            logger.exception("Telegram Mini App menu setup failed")
     await bot.delete_webhook(drop_pending_updates=False)
     logger.info("Telegram webhook cleared; polling can start")
 
@@ -229,6 +244,10 @@ async def start_bot():
 
 def run_web():
     port = int(os.getenv("PORT", "8000"))
+    try:
+        ensure_critical_schema()
+    except Exception:
+        logger.exception("schema_guard failed before web startup")
     uvicorn.run(app, host="0.0.0.0", port=port)
 
 

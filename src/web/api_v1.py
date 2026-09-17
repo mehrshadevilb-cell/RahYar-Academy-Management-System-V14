@@ -34,10 +34,12 @@ from src.database.models.reservation import Reservation, ReservationStatus
 from src.database.models.payment import Payment
 from src.database.models.course import Course
 from src.services.payment_service import PaymentReviewError, PaymentService
+from src.services.payment_delivery_service import PaymentDeliveryService
 from src.services.enrollment_service import EnrollmentService
 from src.services.reservation_service import ReservationService
+from src.services.web_registration_service import WebRegistrationError, WebRegistrationService
 from src.web.deps import get_db
-from src.core.security.password import hash_password
+from src.core.security.password import verify_password
 
 logger = get_logger("web.api_v1")
 settings = get_settings()
@@ -46,6 +48,8 @@ class_inquiry_service = ClassInquiryService()
 reservation_service = ReservationService()
 payment_service = PaymentService()
 enrollment_service = EnrollmentService()
+payment_delivery_service = PaymentDeliveryService(payment_service=payment_service)
+registration_service = WebRegistrationService(order_service=order_service)
 
 router = APIRouter(prefix="/api/v1", tags=["artistyar-api"])
 
@@ -158,6 +162,11 @@ class StudentRegisterIn(BaseModel):
     password: str = Field(min_length=6, max_length=128)
 
 
+class StudentLoginIn(BaseModel):
+    phone: str = Field(min_length=10, max_length=20)
+    password: str = Field(min_length=1, max_length=128)
+
+
 class ReservationReviewIn(BaseModel):
     action: str = Field(pattern="^(confirm|reject)$")
     notes: str | None = Field(default=None, max_length=500)
@@ -212,33 +221,51 @@ def require_web_admin(x_admin_key: str | None = Header(default=None, alias="X-Ad
 @router.post("/students/register", status_code=201)
 async def register_student(body: StudentRegisterIn, db: Session = Depends(get_db)):
     try:
-        phone = order_service.normalize_phone(body.phone)
-    except WebOrderError as exc:
-        raise HTTPException(status_code=400, detail="invalid_phone") from exc
-
-    existing = db.query(User).filter(User.phone == phone).first()
-    if existing:
-        raise HTTPException(status_code=409, detail="phone_already_registered")
-
-    user = User(
-        full_name=body.full_name.strip(),
-        phone=phone,
-        password_hash=hash_password(body.password),
-        role=UserRole.STUDENT,
-        is_active=True,
-    )
-    db.add(user)
-    db.flush()
-    db.add(StudentProfile(user_id=user.id))
-    db.commit()
-    db.refresh(user)
+        registration = registration_service.register(
+            db,
+            full_name=body.full_name,
+            phone=body.phone,
+            password=body.password,
+        )
+    except WebRegistrationError as exc:
+        detail = str(exc)
+        status_code = 409 if detail == "phone_already_registered" else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+    user = registration.user
     return {
         "ok": True,
+        "claimed_existing_record": registration.claimed_existing_record,
         "user": {
             "id": str(user.id),
             "fullName": user.full_name,
             "phone": user.phone,
             "role": "student",
+        },
+    }
+
+
+@router.post("/students/login")
+async def login_student(body: StudentLoginIn, db: Session = Depends(get_db)):
+    """Authenticate a web student against the shared canonical user row."""
+    try:
+        phone = order_service.normalize_phone(body.phone)
+    except WebOrderError as exc:
+        raise HTTPException(status_code=400, detail="invalid_phone") from exc
+    user = db.query(User).filter(User.phone == phone, User.role == UserRole.STUDENT).first()
+    if not user or not user.password_hash or not user.is_active:
+        raise HTTPException(status_code=401, detail="invalid_student_credentials")
+    if not verify_password(body.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="invalid_student_credentials")
+    account = user.telegram_account
+    return {
+        "ok": True,
+        "user": {
+            "id": str(user.id),
+            "username": user.phone,
+            "fullName": user.full_name,
+            "role": "student",
+            "telegramLinked": bool(account),
+            "telegramId": account.telegram_id if account else None,
         },
     }
 
@@ -355,16 +382,30 @@ async def review_admin_payment(
         raise HTTPException(status_code=503, detail="owner_id_not_configured")
     try:
         if body.action == "approve":
-            payment = payment_service.approve(db, payment_id, settings.OWNER_ID)
-            if payment:
-                enrollment_service.create_enrollment(db=db, user_id=payment.user_id, course_id=payment.course_id)
+            delivery = await payment_delivery_service.approve_and_deliver(
+                db,
+                payment_id=payment_id,
+                admin_telegram_id=settings.OWNER_ID,
+                bot=bot,
+                notify_student=True,
+            )
+            payment = delivery.payment if delivery else None
         else:
             payment = payment_service.reject(db, payment_id, settings.OWNER_ID, body.notes)
     except PaymentReviewError as exc:
         raise HTTPException(status_code=409, detail="payment_already_reviewed") from exc
+    except ValueError as exc:
+        logger.exception("Payment delivery failed for payment %s", payment_id)
+        raise HTTPException(status_code=500, detail="payment_delivery_failed") from exc
     if not payment:
         raise HTTPException(status_code=404, detail="payment_not_found")
-    return {"ok": True, "id": payment.id, "status": payment.status, "message": "پرداخت تأیید شد و ثبت‌نام ایجاد شد." if body.action == "approve" else "پرداخت رد شد."}
+    return {
+        "ok": True,
+        "id": payment.id,
+        "status": payment.status,
+        "delivery": delivery.public_summary() if body.action == "approve" else None,
+        "message": "پرداخت تأیید شد، ثبت‌نام ایجاد و تحویل دسترسی انجام شد." if body.action == "approve" else "پرداخت رد شد.",
+    }
 
 
 @router.post("/admin/reservations/{reservation_id}/review")
@@ -477,12 +518,19 @@ async def list_products(db: Session = Depends(get_db)):
 
 @router.get("/free-lessons", response_model=list[FreeLessonOut])
 async def list_free_lessons(db: Session = Depends(get_db)):
-    lessons = (
-        db.query(FreeLesson)
-        .filter(FreeLesson.is_active.is_(True))
-        .order_by(FreeLesson.sort_order.asc(), FreeLesson.id.asc())
-        .all()
-    )
+    try:
+        lessons = (
+            db.query(FreeLesson)
+            .filter(FreeLesson.is_active.is_(True))
+            .order_by(FreeLesson.sort_order.asc(), FreeLesson.id.asc())
+            .all()
+        )
+    except Exception:
+        # A rolling deployment can start the HTTP process before the migration
+        # is visible on a replica. Return an empty library rather than a 500;
+        # the website safely shows its built-in informational fallback.
+        logger.exception("Free lessons query unavailable; check Alembic revision 0017+")
+        return []
     return [_lesson_out(lesson) for lesson in lessons]
 
 

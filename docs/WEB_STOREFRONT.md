@@ -31,9 +31,15 @@ Set `BOT_USERNAME` (without `@`).
 
 ```env
 BOT_USERNAME=YourBotUsername
+TELEGRAM_WEB_APP_URL=https://artistyaar.ir
 SITE_NAME=آکادمی راه‌یار
 SITE_TAGLINE=...
 ```
+
+When `TELEGRAM_WEB_APP_URL` is an HTTPS URL, the bot adds a **سایت آکادمی**
+Mini App button to its reply keyboard and the private-chat menu. Register the
+same URL in BotFather under **Bot Settings → Web Login → Allowed URLs** before
+enabling the production variable.
 
 ## Deploy
 
