@@ -4,6 +4,7 @@ from .ai_provider import AIProvider
 from .assignment import Assignment, AssignmentSubmission, SubmissionStatus
 from .attendance import Attendance, AttendanceStatus
 from .course import Course, ProductDeliveryType
+from .free_lesson import FreeLesson
 from .discount_code import DiscountCode, DiscountType
 from .enrollment import Enrollment
 from .installment import Installment, InstallmentStatus
@@ -27,7 +28,7 @@ from .user import User, UserRole
 __all__ = [
     "AdminLog", "AIModel", "AIProvider", "Assignment", "AssignmentSubmission",
     "SubmissionStatus", "Attendance", "AttendanceStatus", "Course", "ProductDeliveryType",
-    "DiscountCode", "DiscountType", "Enrollment", "Installment", "InstallmentStatus",
+    "DiscountCode", "DiscountType", "Enrollment", "FreeLesson", "Installment", "InstallmentStatus",
     "TelegramInviteLink", "KnowledgeItem", "QuizQuestion", "License", "OnlineCourse",
     "EnrollmentStatus", "OnlineEnrollment", "PaymentModel", "OnlineTimeSlot", "Payment",
     "PaymentCard", "Referral", "ReferralStatus", "Reservation", "ReservationStatus",

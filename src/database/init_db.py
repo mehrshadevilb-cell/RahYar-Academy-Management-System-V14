@@ -7,6 +7,7 @@ from src.database.session import engine
 from src.database.models.user import User  # noqa: F401
 from src.database.models.telegram_account import TelegramAccount  # noqa: F401
 from src.database.models.course import Course  # noqa: F401
+from src.database.models.free_lesson import FreeLesson  # noqa: F401
 from src.database.models.student_profile import StudentProfile  # noqa: F401
 from src.database.models.enrollment import Enrollment  # noqa: F401
 from src.database.models.payment import Payment  # noqa: F401

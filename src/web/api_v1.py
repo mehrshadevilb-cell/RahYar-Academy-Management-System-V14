@@ -6,8 +6,10 @@ the owner approves in Telegram.
 """
 from __future__ import annotations
 
+import secrets
+
 from aiogram.types import BufferedInputFile
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -16,6 +18,7 @@ from src.core.config.settings import get_settings
 from src.core.logging.logger import get_logger
 from src.services.web_order_service import WebOrderError, WebOrderService
 from src.bot.keyboards.payment_review_keyboard import payment_review_keyboard
+from src.database.models.free_lesson import FreeLesson
 from src.web.deps import get_db
 
 logger = get_logger("web.api_v1")
@@ -74,6 +77,54 @@ class LicenseOut(BaseModel):
     created_at: str
 
 
+class ChapterIn(BaseModel):
+    title: str = Field(min_length=1, max_length=160)
+    time: int = Field(ge=0)
+
+
+class FreeLessonIn(BaseModel):
+    slug: str = Field(min_length=2, max_length=120, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+    title: str = Field(min_length=2, max_length=180)
+    description: str | None = Field(default=None, max_length=2000)
+    duration_label: str = Field(default="", max_length=40)
+    video_url: str | None = Field(default=None, max_length=500)
+    thumbnail_url: str | None = Field(default=None, max_length=500)
+    chapters: list[ChapterIn] = Field(default_factory=list, max_length=30)
+    sort_order: int = Field(default=0, ge=0, le=10000)
+    is_active: bool = True
+
+
+class FreeLessonOut(FreeLessonIn):
+    id: int
+    created_at: str
+    updated_at: str
+
+
+def _lesson_out(lesson: FreeLesson) -> FreeLessonOut:
+    return FreeLessonOut(
+        id=lesson.id,
+        slug=lesson.slug,
+        title=lesson.title,
+        description=lesson.description,
+        duration_label=lesson.duration_label or "",
+        video_url=lesson.video_url,
+        thumbnail_url=lesson.thumbnail_url,
+        chapters=lesson.chapters or [],
+        sort_order=lesson.sort_order,
+        is_active=lesson.is_active,
+        created_at=lesson.created_at.isoformat() if lesson.created_at else "",
+        updated_at=lesson.updated_at.isoformat() if lesson.updated_at else "",
+    )
+
+
+def require_web_admin(x_admin_key: str | None = Header(default=None, alias="X-Admin-Key")):
+    expected = (settings.WEB_ADMIN_API_KEY or "").strip()
+    if not expected:
+        raise HTTPException(status_code=503, detail="web_admin_api_key_not_configured")
+    if not x_admin_key or not secrets.compare_digest(x_admin_key, expected):
+        raise HTTPException(status_code=403, detail="admin_access_denied")
+
+
 @router.get("/health")
 async def api_v1_health():
     return {
@@ -102,6 +153,78 @@ async def list_products(db: Session = Depends(get_db)):
         )
         for p in products
     ]
+
+
+@router.get("/free-lessons", response_model=list[FreeLessonOut])
+async def list_free_lessons(db: Session = Depends(get_db)):
+    lessons = (
+        db.query(FreeLesson)
+        .filter(FreeLesson.is_active.is_(True))
+        .order_by(FreeLesson.sort_order.asc(), FreeLesson.id.asc())
+        .all()
+    )
+    return [_lesson_out(lesson) for lesson in lessons]
+
+
+@router.get("/admin/free-lessons", response_model=list[FreeLessonOut])
+async def admin_list_free_lessons(
+    db: Session = Depends(get_db),
+    _admin: None = Depends(require_web_admin),
+):
+    lessons = db.query(FreeLesson).order_by(FreeLesson.sort_order.asc(), FreeLesson.id.asc()).all()
+    return [_lesson_out(lesson) for lesson in lessons]
+
+
+@router.post("/admin/free-lessons", response_model=FreeLessonOut, status_code=201)
+async def admin_create_free_lesson(
+    body: FreeLessonIn,
+    db: Session = Depends(get_db),
+    _admin: None = Depends(require_web_admin),
+):
+    if db.query(FreeLesson).filter(FreeLesson.slug == body.slug).first():
+        raise HTTPException(status_code=409, detail="lesson_slug_exists")
+    lesson = FreeLesson(
+        **body.model_dump(exclude={"chapters"}),
+        chapters=[chapter.model_dump() for chapter in body.chapters],
+    )
+    db.add(lesson)
+    db.commit()
+    db.refresh(lesson)
+    return _lesson_out(lesson)
+
+
+@router.put("/admin/free-lessons/{lesson_id}", response_model=FreeLessonOut)
+async def admin_update_free_lesson(
+    lesson_id: int,
+    body: FreeLessonIn,
+    db: Session = Depends(get_db),
+    _admin: None = Depends(require_web_admin),
+):
+    lesson = db.query(FreeLesson).filter(FreeLesson.id == lesson_id).first()
+    if not lesson:
+        raise HTTPException(status_code=404, detail="lesson_not_found")
+    duplicate = db.query(FreeLesson).filter(FreeLesson.slug == body.slug, FreeLesson.id != lesson_id).first()
+    if duplicate:
+        raise HTTPException(status_code=409, detail="lesson_slug_exists")
+    for key, value in body.model_dump(exclude={"chapters"}).items():
+        setattr(lesson, key, value)
+    lesson.chapters = [chapter.model_dump() for chapter in body.chapters]
+    db.commit()
+    db.refresh(lesson)
+    return _lesson_out(lesson)
+
+
+@router.delete("/admin/free-lessons/{lesson_id}", status_code=204)
+async def admin_delete_free_lesson(
+    lesson_id: int,
+    db: Session = Depends(get_db),
+    _admin: None = Depends(require_web_admin),
+):
+    lesson = db.query(FreeLesson).filter(FreeLesson.id == lesson_id).first()
+    if not lesson:
+        raise HTTPException(status_code=404, detail="lesson_not_found")
+    db.delete(lesson)
+    db.commit()
 
 
 @router.get("/products/{product_id}", response_model=ProductOut)
