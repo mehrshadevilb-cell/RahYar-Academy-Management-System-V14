@@ -1,0 +1,21 @@
+{
+  "providers": [
+    {
+      "name": "opencode-zen",
+      "api_key_env": "OPENCODE_API_KEY",
+      "base_url": "https://opencode.ai/zen/v1",
+      "models_endpoint": "/models",
+      "priority": 30,
+      "provider_type": "openai_compatible"
+    },
+    {
+      "name": "openai",
+      "api_key_env": "OPENAI_API_KEY",
+      "base_url": "https://api.openai.com/v1",
+      "models_endpoint": "/models",
+      "priority": 40,
+      "provider_type": "openai_compatible"
+    }
+  ],
+  "notes": "API keys stay in environment variables. The router discovers available models from each provider's OpenAI-compatible /models endpoint and merges them with the other configured providers."
+}
