@@ -63,7 +63,14 @@ def run_migrations_online() -> None:
                 context.run_migrations()
         finally:
             if is_postgres and lock_acquired:
-                connection.execute(text("SELECT pg_advisory_unlock(:lock_id)"), {"lock_id": POSTGRES_MIGRATION_LOCK_ID})
+                # A failed migration leaves the transaction aborted. Roll it
+                # back before cleanup, otherwise pg_advisory_unlock masks the
+                # actual migration error with InFailedSqlTransaction.
+                connection.rollback()
+                connection.execute(
+                    text("SELECT pg_advisory_unlock(:lock_id)"),
+                    {"lock_id": POSTGRES_MIGRATION_LOCK_ID},
+                )
 
 
 if context.is_offline_mode():
