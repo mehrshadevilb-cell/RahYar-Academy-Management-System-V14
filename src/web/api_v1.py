@@ -293,7 +293,8 @@ async def admin_list_students(
     if needle:
         like = f"%{needle}%"
         query = query.filter((User.full_name.ilike(like)) | (User.phone.ilike(like)))
-    users = query.order_by(User.created_at.desc()).limit(200).all()
+    # The admin roster should include every student, not only the previous 200-row window.
+    users = query.order_by(User.created_at.desc()).limit(5000).all()
     ids = [user.id for user in users]
     profiles = {p.user_id: p for p in db.query(StudentProfile).filter(StudentProfile.user_id.in_(ids)).all()} if ids else {}
     accounts = {a.user_id: a for a in db.query(TelegramAccount).filter(TelegramAccount.user_id.in_(ids)).all()} if ids else {}
