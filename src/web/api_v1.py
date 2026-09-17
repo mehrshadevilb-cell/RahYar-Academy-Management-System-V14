@@ -31,6 +31,10 @@ from src.database.models.online_course import OnlineCourse
 from src.database.models.online_enrollment import EnrollmentStatus, OnlineEnrollment
 from src.database.models.site_event import SiteEvent
 from src.database.models.reservation import Reservation, ReservationStatus
+from src.database.models.payment import Payment
+from src.database.models.course import Course
+from src.services.payment_service import PaymentReviewError, PaymentService
+from src.services.enrollment_service import EnrollmentService
 from src.services.reservation_service import ReservationService
 from src.web.deps import get_db
 
@@ -39,6 +43,8 @@ settings = get_settings()
 order_service = WebOrderService()
 class_inquiry_service = ClassInquiryService()
 reservation_service = ReservationService()
+payment_service = PaymentService()
+enrollment_service = EnrollmentService()
 
 router = APIRouter(prefix="/api/v1", tags=["artistyar-api"])
 
@@ -132,6 +138,7 @@ class StudentAdminOut(BaseModel):
     telegram_id: str | None = None
     telegram_username: str | None = None
     created_at: str
+    is_active: bool = True
 
 
 class StudentAdminUpdate(BaseModel):
@@ -141,10 +148,16 @@ class StudentAdminUpdate(BaseModel):
     bio: str | None = Field(default=None, max_length=4000)
     level: str | None = Field(default=None, max_length=50)
     experience_years: int = Field(default=0, ge=0, le=80)
+    is_active: bool = True
 
 
 class ReservationReviewIn(BaseModel):
     action: str = Field(pattern="^(confirm|reject)$")
+    notes: str | None = Field(default=None, max_length=500)
+
+
+class PaymentReviewIn(BaseModel):
+    action: str = Field(pattern="^(approve|reject)$")
     notes: str | None = Field(default=None, max_length=500)
 
 
@@ -160,6 +173,7 @@ def _student_out(user: User, profile: StudentProfile | None, account: TelegramAc
         telegram_id=account.telegram_id if account else None,
         telegram_username=account.username if account else None,
         created_at=user.created_at.isoformat() if user.created_at else "",
+        is_active=bool(user.is_active),
     )
 
 
@@ -263,6 +277,55 @@ async def admin_reservations(db: Session = Depends(get_db), _admin: None = Depen
     } for row, user_id, student_name, course_name in rows]
 
 
+@router.get("/admin/payments")
+async def admin_payments(db: Session = Depends(get_db), _admin: None = Depends(require_web_admin)):
+    rows = (
+        db.query(Payment, User.full_name, User.phone, Course.title)
+        .join(User, User.id == Payment.user_id)
+        .join(Course, Course.id == Payment.course_id)
+        .filter(Payment.status == "pending")
+        .order_by(Payment.created_at.desc(), Payment.id.desc())
+        .all()
+    )
+    return [{
+        "id": payment.id,
+        "student_id": payment.user_id,
+        "student_name": student_name,
+        "phone": phone,
+        "course_title": course_title,
+        "amount": int(payment.amount or 0),
+        "status": payment.status,
+        "receipt_file_id": payment.receipt_file_id,
+        "transaction_id": payment.transaction_id,
+        "discount_amount": int(payment.discount_amount or 0),
+        "admin_notes": payment.admin_notes,
+        "created_at": payment.created_at.isoformat() if payment.created_at else "",
+    } for payment, student_name, phone, course_title in rows]
+
+
+@router.post("/admin/payments/{payment_id}/review")
+async def review_admin_payment(
+    payment_id: int,
+    body: PaymentReviewIn,
+    db: Session = Depends(get_db),
+    _admin: None = Depends(require_web_admin),
+):
+    if not settings.OWNER_ID:
+        raise HTTPException(status_code=503, detail="owner_id_not_configured")
+    try:
+        if body.action == "approve":
+            payment = payment_service.approve(db, payment_id, settings.OWNER_ID)
+            if payment:
+                enrollment_service.create_enrollment(db=db, user_id=payment.user_id, course_id=payment.course_id)
+        else:
+            payment = payment_service.reject(db, payment_id, settings.OWNER_ID, body.notes)
+    except PaymentReviewError as exc:
+        raise HTTPException(status_code=409, detail="payment_already_reviewed") from exc
+    if not payment:
+        raise HTTPException(status_code=404, detail="payment_not_found")
+    return {"ok": True, "id": payment.id, "status": payment.status, "message": "پرداخت تأیید شد و ثبت‌نام ایجاد شد." if body.action == "approve" else "پرداخت رد شد."}
+
+
 @router.post("/admin/reservations/{reservation_id}/review")
 async def review_admin_reservation(
     reservation_id: int,
@@ -321,6 +384,7 @@ async def admin_update_student(
         if duplicate:
             raise HTTPException(status_code=409, detail="phone_already_linked")
     user.full_name = body.full_name.strip()
+    user.is_active = body.is_active
     user.phone = phone
     email = body.email.strip().lower() if body.email else None
     if email:
