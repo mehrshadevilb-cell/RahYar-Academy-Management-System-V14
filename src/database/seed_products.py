@@ -15,6 +15,12 @@ from src.database.models.course import Course, ProductDeliveryType
 from src.database.models.spotplayer_course import SpotPlayerCourse
 from src.database.models.telegram_channel import TelegramChannel
 
+SUPABASE_COVER_BASE = "https://ejfgbiyfqjlqddbxvqhk.supabase.co/storage/v1/object/public/artistyar-media"
+RAHYAR_COVER = f"{SUPABASE_COVER_BASE}/RahYar%20Package.JPEG"
+RAHYAR_PRO_COVER = f"{SUPABASE_COVER_BASE}/RahYarPro%20Package.PNG"
+THEORY_COVER = f"{SUPABASE_COVER_BASE}/Theory%20Package.PNG"
+ARTISTYAR_COVER = f"{SUPABASE_COVER_BASE}/ArtistYar%20Package.JPG"
+
 
 def seed_default_products():
 
@@ -35,6 +41,7 @@ def seed_default_products():
             title="راه‌یار",
             description="بسته کامل آموزش تنظیم، میکس و مسترینگ راه‌یار",
             price=24_000_000,
+            thumbnail=RAHYAR_COVER,
             delivery_type=ProductDeliveryType.SPOTPLAYER,
             support_group_link="https://t.me/+TqZaRkAyD1JhNzJk",
             support_username="@hi_all",
@@ -45,6 +52,7 @@ def seed_default_products():
     else:
         rahyar.price = 24_000_000
         rahyar.description = "بسته کامل آموزش تنظیم، میکس و مسترینگ راه‌یار"
+        rahyar.thumbnail = RAHYAR_COVER
         rahyar.sort_order = 1
 
     rahyar_courses = db.query(SpotPlayerCourse).filter(SpotPlayerCourse.product_id == rahyar.id).all()
@@ -59,6 +67,7 @@ def seed_default_products():
             title="راه‌یار پرو",
             description="نسخه حرفه‌ای آموزش تنظیم، میکس و مسترینگ راه‌یار",
             price=3_000_000,
+            thumbnail=RAHYAR_PRO_COVER,
             delivery_type=ProductDeliveryType.SPOTPLAYER,
             sort_order=2,
         )
@@ -67,6 +76,7 @@ def seed_default_products():
     else:
         rahyar_pro.price = 3_000_000
         rahyar_pro.description = "نسخه حرفه‌ای آموزش تنظیم، میکس و مسترینگ راه‌یار"
+        rahyar_pro.thumbnail = RAHYAR_PRO_COVER
         rahyar_pro.sort_order = 2
 
     pro_course = db.query(SpotPlayerCourse).filter(SpotPlayerCourse.spotplayer_course_id == "697475017e50673ccf9bd7aa").first()
@@ -84,6 +94,7 @@ def seed_default_products():
             title="تئوری موسیقی",
             description="آموزش تئوری موسیقی",
             price=380_000,
+            thumbnail=THEORY_COVER,
             delivery_type=ProductDeliveryType.SPOTPLAYER,
             sort_order=3,
         )
@@ -101,6 +112,9 @@ def seed_default_products():
         )
 
         print("Product added: تئوری موسیقی")
+    else:
+        theory = db.query(Course).filter(Course.title == "تئوری موسیقی").first()
+        theory.thumbnail = THEORY_COVER
 
     # ---- Product 3: ArtistYar ----
     if not product_exists("آرتیست‌یار"):
@@ -109,6 +123,7 @@ def seed_default_products():
             title="آرتیست‌یار",
             description="دسترسی به کانال‌های ضبط، میکس و فایل آرتیست‌یار",
             price=1_500_000,
+            thumbnail=ARTISTYAR_COVER,
             delivery_type=ProductDeliveryType.TELEGRAM,
             sort_order=4,
         )
@@ -138,6 +153,9 @@ def seed_default_products():
         ])
 
         print("Product added: آرتیست‌یار")
+    else:
+        artistyar = db.query(Course).filter(Course.title == "آرتیست‌یار").first()
+        artistyar.thumbnail = ARTISTYAR_COVER
 
     db.commit()
     db.close()
