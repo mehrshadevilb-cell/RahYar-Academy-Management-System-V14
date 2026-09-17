@@ -151,6 +151,11 @@ class ProviderModelHealthService:
                     return "unknown"
         return "unknown"
 
+    @staticmethod
+    def _free(model: dict[str, Any]) -> bool:
+        """Compatibility predicate: only explicitly free models are free."""
+        return ProviderModelHealthService.pricing_status(model) == "known_free"
+
     def _sync_router_health(self, provider: AIProvider, model: str, ok: bool, retry_after: int = 0) -> None:
         key = f"{provider.name}:{model}"
         if ok:
@@ -180,7 +185,6 @@ class ProviderModelHealthService:
             "display_name": item.get("display_name") or model,
             "free": pricing == "known_free",
             "pricing_status": pricing,
-            "discovered": True,
             "ok": False,
             "latency_ms": 0,
             "status": "unknown",
