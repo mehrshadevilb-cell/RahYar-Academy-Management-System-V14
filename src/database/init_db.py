@@ -27,6 +27,7 @@ from src.database.models.admin_log import AdminLog  # noqa: F401
 from src.database.models.referral import Referral  # noqa: F401
 from src.database.models.support_request import SupportRequest  # noqa: F401
 from src.database.models.assignment import Assignment, AssignmentSubmission  # noqa: F401
+from src.database.models.class_inquiry import ClassInquiry  # noqa: F401
 from src.database.models.knowledge import KnowledgeItem, QuizQuestion  # noqa: F401
 from src.database.models.ai_provider import AIProvider  # noqa: F401
 from src.database.models.ai_model import AIModel  # noqa: F401

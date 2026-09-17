@@ -17,6 +17,7 @@ from src.bot.bot import bot
 from src.core.config.settings import get_settings
 from src.core.logging.logger import get_logger
 from src.services.web_order_service import WebOrderError, WebOrderService
+from src.services.class_inquiry_service import ClassInquiryService
 from src.bot.keyboards.payment_review_keyboard import payment_review_keyboard
 from src.database.models.free_lesson import FreeLesson
 from src.web.deps import get_db
@@ -24,6 +25,7 @@ from src.web.deps import get_db
 logger = get_logger("web.api_v1")
 settings = get_settings()
 order_service = WebOrderService()
+class_inquiry_service = ClassInquiryService()
 
 router = APIRouter(prefix="/api/v1", tags=["artistyar-api"])
 
@@ -434,7 +436,14 @@ async def class_inquiry(body: InquiryIn, db: Session = Depends(get_db)):
     if not course:
         raise HTTPException(status_code=404, detail="class_not_found")
     try:
-        user = order_service.ensure_user(db, full_name=body.full_name, phone=body.phone)
+        user, inquiry = class_inquiry_service.create_or_reuse(
+            db,
+            course=course,
+            full_name=body.full_name,
+            phone=body.phone,
+            message=body.message,
+            source="website-api",
+        )
     except WebOrderError as exc:
         mapping = {
             "invalid_phone": "شماره موبایل معتبر نیست.",
@@ -454,6 +463,7 @@ async def class_inquiry(body: InquiryIn, db: Session = Depends(get_db)):
                     f"کلاس: {course.name}\n"
                     f"هنرجو: {user.full_name}\n"
                     f"موبایل: {user.phone}\n"
+                    f"درخواست #{inquiry.id}\n"
                     f"پیام: {(body.message or '—')[:500]}"
                 ),
             )
@@ -462,6 +472,8 @@ async def class_inquiry(body: InquiryIn, db: Session = Depends(get_db)):
 
     return {
         "ok": True,
+        "inquiry_id": inquiry.id,
+        "status": inquiry.status.value,
         "course_name": course.name,
         "message": "درخواست ثبت شد. ادمین از پنل تلگرام پیگیری می‌کند.",
     }

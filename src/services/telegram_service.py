@@ -1,21 +1,13 @@
 from sqlalchemy.orm import Session
 
-from src.database.models.telegram_account import TelegramAccount
 from src.database.repositories.telegram_repository import TelegramRepository
-from src.services.user_service import UserService
-
+from src.services.canonical_identity_service import CanonicalIdentityService
 
 
 class TelegramService:
-
-
     def __init__(self):
-
         self.repository = TelegramRepository()
-
-        self.user_service = UserService()
-
-
+        self.identity_service = CanonicalIdentityService()
 
     def get_or_create_user(
         self,
@@ -24,37 +16,16 @@ class TelegramService:
         full_name: str,
         username: str | None,
     ):
-
-
-        account = self.repository.get_by_telegram_id(
-            db,
-            telegram_id,
-        )
-
-
+        account = self.repository.get_by_telegram_id(db, telegram_id)
         if account:
-
+            account.username = username
+            db.commit()
             return account.user, False
 
-
-
-        user = self.user_service.create_student(
+        user = self.identity_service.link_telegram_account(
             db,
-            full_name,
-        )
-
-
-        account = TelegramAccount(
-            user_id=user.id,
             telegram_id=telegram_id,
+            full_name=full_name,
             username=username,
         )
-
-
-        self.repository.create(
-            db,
-            account,
-        )
-
-
         return user, True

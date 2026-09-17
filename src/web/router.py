@@ -11,11 +11,13 @@ from src.bot.bot import bot
 from src.core.config.settings import get_settings
 from src.core.logging.logger import get_logger
 from src.services.web_order_service import WebOrderError, WebOrderService
+from src.services.class_inquiry_service import ClassInquiryService
 from src.web.deps import get_db
 
 logger = get_logger("web.storefront")
 settings = get_settings()
 order_service = WebOrderService()
+class_inquiry_service = ClassInquiryService()
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
@@ -254,7 +256,14 @@ async def class_inquiry(
         )
 
     try:
-        user = order_service.ensure_user(db, full_name=full_name, phone=phone)
+        user, inquiry = class_inquiry_service.create_or_reuse(
+            db,
+            course=course,
+            full_name=full_name,
+            phone=phone,
+            message=message,
+            source="website-html",
+        )
     except WebOrderError as exc:
         mapping = {
             "invalid_phone": "شماره موبایل معتبر نیست (مثال: 09121234567).",
@@ -276,6 +285,7 @@ async def class_inquiry(
                     f"کلاس: {course.name}\n"
                     f"هنرجو: {user.full_name}\n"
                     f"موبایل: {user.phone}\n"
+                    f"درخواست #{inquiry.id}\n"
                     f"پیام: {(message or '—')[:500]}\n\n"
                     "ثبت‌نام نهایی از پنل مدیریت کلاس آنلاین انجام شود."
                 ),
