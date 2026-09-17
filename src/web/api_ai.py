@@ -1,9 +1,9 @@
 """Bridge RahYar AI services to the ArtistYar website.
 
-Public web may use the *student* chat assistant (read-only, rate-limited).
-The *developer agent* (code write / PR) stays Telegram-owner-only; the web
-only receives diagnostics so the two surfaces stay in sync without opening
-a write attack surface.
+The public website uses the same read-only ChatAssistantService as the
+Telegram assistant. Provider discovery, failover, knowledge context and
+pricing/catalog context therefore stay centralized in the bot instead of
+being duplicated in the Next.js application.
 """
 from __future__ import annotations
 
@@ -28,11 +28,21 @@ assistant = ChatAssistantService()
 
 
 def _require_api_key(x_rahyar_key: str | None = Header(default=None)) -> None:
+    """Protect diagnostics when WEB_API_SECRET is configured."""
     secret = (os.getenv("WEB_API_SECRET") or "").strip()
     if not secret:
         return
     if not x_rahyar_key or x_rahyar_key != secret:
         raise HTTPException(status_code=401, detail="invalid_api_key")
+
+
+def _require_ai_bridge_key(x_rahyar_ai_key: str | None = Header(default=None)) -> None:
+    """Require a dedicated server-to-server secret for ArtistYar AI traffic."""
+    secret = (os.getenv("RAHYAR_AI_BRIDGE_SECRET") or "").strip()
+    if not secret:
+        raise HTTPException(status_code=503, detail="ai_bridge_not_configured")
+    if not x_rahyar_ai_key or x_rahyar_ai_key != secret:
+        raise HTTPException(status_code=401, detail="invalid_ai_bridge_key")
 
 
 class AssistantIn(BaseModel):
@@ -44,9 +54,7 @@ class AssistantIn(BaseModel):
 async def ai_status(_: None = Depends(_require_api_key)):
     """Diagnostics shared with the website admin panel."""
     self_check = await asyncio.to_thread(runtime.self_check)
-    # Strip HTML tags for JSON consumers.
-    plain = re.sub(r"<[^>]+>", "", self_check)
-    plain = plain.replace("&nbsp;", " ")
+    plain = re.sub(r"<[^>]+>", "", self_check).replace("&nbsp;", " ")
     agent_status = "unavailable"
     try:
         agent_status = await asyncio.to_thread(runtime.agent.status)
@@ -77,15 +85,15 @@ async def assistant_chat(
     body: AssistantIn,
     request: Request,
     db: Session = Depends(get_db),
+    _: None = Depends(_require_ai_bridge_key),
 ):
-    """Student-facing assistant — same service as the Telegram chat assistant."""
+    """ArtistYar website chat using the exact Telegram read-only assistant stack."""
     if not settings.CHAT_ASSISTANT_ENABLED:
         raise HTTPException(status_code=503, detail="assistant_disabled")
 
     client = (body.client_id or "").strip() or (
         request.client.host if request.client else "web-anonymous"
     )
-    # Prefix so rate-limit keys never collide with telegram numeric ids.
     rate_key = f"web:{client[:64]}"
 
     try:
@@ -100,7 +108,6 @@ async def assistant_chat(
             raise HTTPException(status_code=400, detail="empty_message") from exc
         if code in {"provider_unavailable", "provider_rate_limited"}:
             raise HTTPException(status_code=502, detail=code) from exc
-        # Human-readable rate limit / other messages from the service
         raise HTTPException(status_code=429, detail=code) from exc
     except Exception:
         logger.exception("assistant_chat failed")
@@ -110,4 +117,5 @@ async def assistant_chat(
         "ok": True,
         "reply": reply,
         "source": "rahyar-chat-assistant",
+        "sync": "centralized-provider-router",
     }
