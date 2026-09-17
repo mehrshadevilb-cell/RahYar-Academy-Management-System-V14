@@ -15,7 +15,7 @@
 {% if products %}
 <div class="grid">
   {% for p in products %}
-  <article class="card">
+  <article class="card interactive">
     <h3>{{ p.title }}</h3>
     <div class="price">{% if p.price is not none %}{{ "{:,}".format(p.price) }} تومان{% else %}—{% endif %}</div>
     <p class="muted">{{ (p.description or "")[:140] }}{% if p.description and (p.description|length) > 140 %}…{% endif %}</p>
@@ -24,22 +24,22 @@
   {% endfor %}
 </div>
 {% else %}
-<p class="muted">فعلاً دوره فعالی ثبت نشده است.</p>
+<p class="muted empty">فعلاً دوره فعالی ثبت نشده است.</p>
 {% endif %}
 
-<h2 style="margin-top:2rem">کلاس آنلاین</h2>
+<h2>کلاس آنلاین</h2>
 {% if classes %}
 <div class="grid">
   {% for c in classes %}
-  <article class="card">
+  <article class="card interactive">
     <h3>{{ c.name }}</h3>
-    <p class="muted">مدرس: {{ c.teacher or "—" }} · {{ c.duration_minutes }} دقیقه</p>
+    <p class="meta">مدرس: {{ c.teacher or "—" }} · {{ c.duration_minutes }} دقیقه</p>
     {% if c.monthly_price %}<div class="price">ماهانه از {{ "{:,}".format(c.monthly_price) }} تومان</div>{% endif %}
     <a class="btn" href="/classes/{{ c.id }}">درخواست ثبت‌نام</a>
   </article>
   {% endfor %}
 </div>
 {% else %}
-<p class="muted">کلاس آنلاینی فعال نیست.</p>
+<p class="muted empty">کلاس آنلاینی فعال نیست.</p>
 {% endif %}
 {% endblock %}
