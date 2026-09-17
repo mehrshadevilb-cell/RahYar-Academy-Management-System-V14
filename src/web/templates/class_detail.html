@@ -1,20 +1,20 @@
 {% extends "base.html" %}
 {% block title %}{{ course.name }} | {{ site_name }}{% endblock %}
 {% block content %}
-<article class="card" style="max-width:640px">
-  <h1 style="margin:0">{{ course.name }}</h1>
-  <p class="muted">مدرس: {{ course.teacher or "—" }} · {{ course.duration_minutes }} دقیقه</p>
+<article class="card detail-card">
+  <h1>{{ course.name }}</h1>
+  <p class="meta">مدرس: {{ course.teacher or "—" }} · {{ course.duration_minutes }} دقیقه</p>
   {% if course.monthly_price %}<div>شهریه ماهانه: <span class="price">{{ "{:,}".format(course.monthly_price) }} تومان</span> ({{ course.monthly_sessions }} جلسه)</div>{% endif %}
   {% if course.term_price %}<div>شهریه ترمی: <span class="price">{{ "{:,}".format(course.term_price) }} تومان</span> ({{ course.term_sessions }} جلسه)</div>{% endif %}
 
   <h2>درخواست ثبت‌نام</h2>
   <form method="post" action="/classes/{{ course.id }}/inquiry">
-    <label>نام و نام خانوادگی</label>
-    <input name="full_name" required maxlength="100" />
-    <label>موبایل</label>
-    <input name="phone" required maxlength="15" placeholder="09121234567" />
-    <label>پیام برای آکادمی</label>
-    <textarea name="message" maxlength="500"></textarea>
+    <label for="full_name">نام و نام خانوادگی</label>
+    <input id="full_name" name="full_name" required maxlength="100" autocomplete="name" />
+    <label for="phone">موبایل</label>
+    <input id="phone" name="phone" type="tel" inputmode="tel" required maxlength="15" autocomplete="tel" placeholder="09121234567" />
+    <label for="message">پیام برای آکادمی</label>
+    <textarea id="message" name="message" maxlength="500"></textarea>
     <div class="btn-row">
       <button class="btn" type="submit">ارسال درخواست</button>
       {% if bot_class_link %}
