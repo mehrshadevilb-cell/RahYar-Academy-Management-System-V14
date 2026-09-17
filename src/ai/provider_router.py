@@ -39,16 +39,14 @@ class AIProviderError(RuntimeError):
 class AIProviderRouter:
     """AI provider pool with DB discovery, global free-first routing and model failover."""
 
-    # Known-dead model ids that commonly return HTTP 404 on gateways.
-    _STALE_MODEL_IDS = {
-        "mimo-v2.5-free",
-        "mimo-v2.5",
-    }
+    _STALE_MODEL_IDS = {"mimo-v2.5-free", "mimo-v2.5"}
+    _ENV_DISCOVERY_TTL_SECONDS = 300
 
     def __init__(self) -> None:
         self.settings = get_settings()
         self._cooldown_until: dict[str, float] = {}
         self._model_cooldown_until: dict[str, float] = {}
+        self._env_model_cache: dict[tuple[str, str], tuple[float, tuple[str, ...]]] = {}
 
     @staticmethod
     def _normalize_base_url(value: str) -> str:
@@ -72,6 +70,17 @@ class AIProviderRouter:
         if not (key and base_url and model):
             return None
         return AIProvider(name=name, api_key=key, base_url=base_url, models=(model,), priority=priority, provider_type=cls._infer_provider_type(name, base_url))
+
+    @classmethod
+    def _discoverable_provider_from_env(cls, name: str, key_var: str, url_var: str, model_var: str, priority: int) -> AIProvider | None:
+        """Create a provider even without MODEL; its catalog is discovered from /models."""
+        key = (os.getenv(key_var) or "").strip()
+        base_url = cls._normalize_base_url(os.getenv(url_var) or "")
+        model = (os.getenv(model_var) or "").strip()
+        if not (key and base_url):
+            return None
+        models = (model,) if model else ()
+        return AIProvider(name=name, api_key=key, base_url=base_url, models=models, priority=priority, provider_type=cls._infer_provider_type(name, base_url))
 
     @staticmethod
     def _is_free_model(model: Any) -> bool:
@@ -98,8 +107,7 @@ class AIProviderRouter:
 
     @classmethod
     def _is_stale_model_id(cls, model: str) -> bool:
-        mid = (model or "").strip().lower()
-        return mid in cls._STALE_MODEL_IDS
+        return (model or "").strip().lower() in cls._STALE_MODEL_IDS
 
     def _from_database(self) -> list[AIProvider]:
         try:
@@ -137,12 +145,65 @@ class AIProviderRouter:
         secondary = self._provider_from_env("secondary", "AI2_API_KEY", "AI2_BASE_URL", "AI2_MODEL", 20)
         if secondary:
             providers.append(secondary)
+
+        # These providers deliberately do NOT require MODEL. The router will
+        # discover every model exposed by the provider and include all models
+        # that can actually answer requests in normal failover routing.
+        anthropic = self._discoverable_provider_from_env("anthropic", "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", 30)
+        xkiro = self._discoverable_provider_from_env("xkiro", "XKIRO_API_KEY", "XKIRO_BASE_URL", "XKIRO_MODEL", 40)
+        if anthropic:
+            providers.append(anthropic)
+        if xkiro:
+            providers.append(xkiro)
+
         if not providers and self.settings.effective_ai_api_key:
             base_url = self._normalize_base_url(self.settings.effective_ai_base_url)
             model = self.settings.effective_ai_model
             if not self._is_stale_model_id(model):
                 providers.append(AIProvider(name="primary", api_key=self.settings.effective_ai_api_key, base_url=base_url, models=(model,), priority=100, provider_type=self._infer_provider_type("primary", base_url)))
         return providers
+
+    def _discover_env_provider_models(self, provider: AIProvider, timeout_seconds: int = 10) -> AIProvider:
+        if provider.models:
+            return provider
+        cache_key = (provider.name.lower(), provider.base_url.rstrip("/"))
+        now = time.time()
+        cached = self._env_model_cache.get(cache_key)
+        if cached and cached[0] > now:
+            return AIProvider(**{**provider.__dict__, "models": cached[1]})
+
+        url = provider.base_url.rstrip("/") + "/models"
+        headers = self._anthropic_headers(provider) if provider.provider_type == "anthropic" else self._headers(provider)
+        request = urllib.request.Request(url, headers=headers, method="GET")
+        models: list[str] = []
+        try:
+            with urllib.request.urlopen(request, timeout=max(5, min(int(timeout_seconds), 20))) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            if isinstance(payload, dict):
+                for item in payload.get("data", []):
+                    if isinstance(item, dict):
+                        model_id = str(item.get("id") or item.get("name") or "").strip()
+                        if model_id and not self._is_stale_model_id(model_id):
+                            models.append(model_id)
+                # Some providers return a plain list under models.
+                if not models:
+                    for item in payload.get("models", []):
+                        if isinstance(item, dict):
+                            model_id = str(item.get("id") or item.get("name") or "").strip()
+                        else:
+                            model_id = str(item).strip()
+                        if model_id and not self._is_stale_model_id(model_id):
+                            models.append(model_id)
+        except Exception:
+            models = []
+
+        # If a model was explicitly supplied, preserve it as a fallback when
+        # discovery is temporarily unavailable.
+        if not models and provider.models:
+            models = list(provider.models)
+        unique = tuple(dict.fromkeys(models))
+        self._env_model_cache[cache_key] = (now + self._ENV_DISCOVERY_TTL_SECONDS, unique)
+        return AIProvider(name=provider.name, api_key=provider.api_key, base_url=provider.base_url, models=unique, priority=provider.priority, enabled=provider.enabled, provider_type=provider.provider_type)
 
     @staticmethod
     def _merge_providers(providers: list[AIProvider]) -> list[AIProvider]:
@@ -188,31 +249,30 @@ class AIProviderRouter:
             candidates.extend(self._env_providers())
         if not candidates:
             raise AIProviderError("No AI provider is configured")
-        return self._merge_providers(candidates)
+
+        discovered_candidates = [self._discover_env_provider_models(provider) for provider in candidates]
+        return self._merge_providers(discovered_candidates)
 
     def providers(self) -> list[AIProvider]:
         return self._parse()
 
     def test_models(self, *, timeout_seconds: int = 15) -> list[dict[str, Any]]:
-        """Run the detailed model audit using this router's configured pool."""
         from src.services.provider_model_health_service import ProviderModelHealthService
         return ProviderModelHealthService(self).test_all(
             timeout_seconds=timeout_seconds,
-            discover_catalog=False,
+            discover_catalog=True,
             sort_results=False,
+            test_paid=True,
         )
 
     def reset_cooldowns(self) -> None:
         self._cooldown_until.clear()
         self._model_cooldown_until.clear()
+        self._env_model_cache.clear()
 
     def cooldown_snapshot(self) -> dict[str, int]:
         now = time.time()
-        return {
-            key: max(0, int(round(until - now)))
-            for key, until in self._model_cooldown_until.items()
-            if until > now
-        }
+        return {key: max(0, int(round(until - now))) for key, until in self._model_cooldown_until.items() if until > now}
 
     def _headers(self, provider: AIProvider) -> dict[str, str]:
         headers = {"Authorization": f"Bearer {provider.api_key}", "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "RahYar-AIProviderRouter/1.6"}
@@ -248,7 +308,6 @@ class AIProviderRouter:
         return code in {402, 403} and any(x in lowered for x in ("rate", "capacity", "quota", "limit"))
 
     def _ordered_candidates(self, providers: list[AIProvider]) -> list[tuple[AIProvider, str]]:
-        """Free-first; skip stale ids and cooling-down models so the active route wins."""
         now = time.time()
         candidates: list[tuple[AIProvider, str]] = []
         for provider in providers:
@@ -260,12 +319,7 @@ class AIProviderRouter:
                     continue
                 candidates.append((provider, model))
         if not candidates:
-            candidates = [
-                (provider, model)
-                for provider in providers
-                for model in provider.models
-                if not self._is_stale_model_id(model)
-            ]
+            candidates = [(provider, model) for provider in providers for model in provider.models if not self._is_stale_model_id(model)]
         candidates.sort(key=lambda item: (not self._is_free_model(item[1]), item[0].priority, item[1]))
         return candidates
 
@@ -371,7 +425,6 @@ class AIProviderRouter:
         if timeout_seconds is None:
             timeout_seconds = self.settings.AI_AGENT_TIMEOUT_SECONDS
         try:
-            # Speed: prefer shorter timeouts for normal chat; agent can still pass higher.
             timeout_seconds = max(5, min(int(timeout_seconds), 120))
         except (TypeError, ValueError):
             timeout_seconds = min(max(self.settings.AI_AGENT_TIMEOUT_SECONDS, 5), 120)
@@ -421,42 +474,22 @@ class AIProviderRouter:
                     continue
                 if exc.code in {404, 400} or "model_not_found" in lowered or "not found" in lowered or "does not exist" in lowered:
                     self._model_cooldown_until[model_key] = time.time() + 3600
-                    last = AIProviderError(
-                        f"model unavailable (HTTP {exc.code}): {provider.name}/{model}",
-                        retryable=True,
-                        retry_after=0,
-                        provider=provider.name,
-                    )
+                    last = AIProviderError(f"model unavailable (HTTP {exc.code}): {provider.name}/{model}", retryable=True, provider=provider.name)
                     continue
-                last = AIProviderError(
-                    f"provider request failed: {provider.name}/{model} (HTTP {exc.code})",
-                    retryable=exc.code >= 500,
-                    retry_after=60 if exc.code >= 500 else 0,
-                    provider=provider.name,
-                )
+                last = AIProviderError(f"provider HTTP {exc.code}: {provider.name}/{model}", retryable=exc.code >= 500, provider=provider.name)
                 if exc.code >= 500:
-                    used = transient_attempts.get(model_key, 0)
-                    if used < transient_retries:
-                        transient_attempts[model_key] = used + 1
-                        candidates.append((provider, model))
-                    else:
-                        self._model_cooldown_until[model_key] = time.time() + 60
-                continue
-            except (urllib.error.URLError, TimeoutError, OSError):
-                last = AIProviderError(f"provider unavailable: {provider.name}/{model}", retryable=True, retry_after=30, provider=provider.name)
+                    self._model_cooldown_until[model_key] = time.time() + 60
+                    continue
+                raise last
+            except (urllib.error.URLError, TimeoutError, OSError) as exc:
+                last = AIProviderError(f"provider unavailable: {provider.name}/{model}: {type(exc).__name__}", retryable=True, retry_after=30, provider=provider.name)
                 self._model_cooldown_until[model_key] = time.time() + 30
                 continue
             except AIProviderError as exc:
                 last = exc
-                self._model_cooldown_until[model_key] = time.time() + (exc.retry_after or 30)
+                self._model_cooldown_until[model_key] = time.time() + max(exc.retry_after, 30)
                 continue
+
         if last:
             raise last
-        if skipped_until and attempted == 0:
-            retry_after = max(1, int(round(min(skipped_until) - time.time())))
-            raise AIProviderError(
-                f"All configured AI models are cooling down; retry in {retry_after}s",
-                retryable=True,
-                retry_after=retry_after,
-            )
-        raise AIProviderError("All configured AI models are temporarily unavailable", retryable=True, retry_after=30)
+        raise AIProviderError("No usable AI model is currently available", retryable=True, retry_after=60)
