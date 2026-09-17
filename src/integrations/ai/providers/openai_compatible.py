@@ -32,6 +32,23 @@ class OpenAICompatibleProvider(BaseAIProvider):
         )
         return text[:limit]
 
+    async def _check_discovery_auth(self, client: httpx.AsyncClient) -> str | None:
+        """Optionally verify provider auth through a separate health endpoint."""
+        health_url = str(self.extra_config.get("discovery_health_url", "")).strip()
+        if not health_url:
+            return None
+
+        try:
+            response = await client.get(health_url, headers=self._headers())
+        except httpx.HTTPError as exc:
+            return f"health-check request failed: {exc}"
+
+        if response.is_success:
+            return "authentication accepted by provider health endpoint"
+        if response.status_code in (401, 403):
+            return f"authentication rejected by provider health endpoint: HTTP {response.status_code}: {self._safe_error_body(response)}"
+        return f"provider health endpoint returned HTTP {response.status_code}: {self._safe_error_body(response)}"
+
     async def list_models(self) -> list[dict[str, Any]]:
         models_url = str(self.extra_config.get("models_url", "")).strip()
         if not models_url:
@@ -41,6 +58,10 @@ class OpenAICompatibleProvider(BaseAIProvider):
             response = await client.get(models_url, headers=self._headers())
             if response.is_error:
                 detail = self._safe_error_body(response)
+                if response.status_code >= 500:
+                    auth_status = await self._check_discovery_auth(client)
+                    if auth_status:
+                        detail = f"{detail}; discovery-auth check: {auth_status}"
                 raise RuntimeError(
                     f"AI model discovery failed: HTTP {response.status_code} "
                     f"from {models_url}: {detail}"
