@@ -30,12 +30,15 @@ from src.database.models.admin_log import AdminLog
 from src.database.models.online_course import OnlineCourse
 from src.database.models.online_enrollment import EnrollmentStatus, OnlineEnrollment
 from src.database.models.site_event import SiteEvent
+from src.database.models.reservation import Reservation, ReservationStatus
+from src.services.reservation_service import ReservationService
 from src.web.deps import get_db
 
 logger = get_logger("web.api_v1")
 settings = get_settings()
 order_service = WebOrderService()
 class_inquiry_service = ClassInquiryService()
+reservation_service = ReservationService()
 
 router = APIRouter(prefix="/api/v1", tags=["artistyar-api"])
 
@@ -140,6 +143,11 @@ class StudentAdminUpdate(BaseModel):
     experience_years: int = Field(default=0, ge=0, le=80)
 
 
+class ReservationReviewIn(BaseModel):
+    action: str = Field(pattern="^(confirm|reject)$")
+    notes: str | None = Field(default=None, max_length=500)
+
+
 def _student_out(user: User, profile: StudentProfile | None, account: TelegramAccount | None) -> StudentAdminOut:
     return StudentAdminOut(
         id=user.id,
@@ -228,6 +236,50 @@ async def admin_analytics_summary(db: Session = Depends(get_db), _admin: None = 
     active_classes = db.query(func.count(OnlineCourse.id)).filter(OnlineCourse.is_active.is_(True)).scalar() or 0
     students = db.query(func.count(User.id)).filter(User.role == UserRole.STUDENT).scalar() or 0
     return {"period_days": 30, "site": {"page_views_7d": int(visits_7), "page_views_30d": int(visits_30), "unique_visitors_30d": int(visitors_30), "top_paths": [{"path": path, "count": int(count)} for path, count in top_paths]}, "education": {"active_classes": int(active_classes), "active_enrollments": int(active_enrollments), "total_enrollments": int(total_enrollments), "students": int(students)}, "ai_agent": {"admin_ai_events_30d": int(ai_events), "website_chats_30d": int(ai_chats), "errors_30d": int(ai_errors), "source": "site_events+admin_logs"}}
+
+
+@router.get("/admin/reservations")
+async def admin_reservations(db: Session = Depends(get_db), _admin: None = Depends(require_web_admin)):
+    rows = (
+        db.query(Reservation, OnlineEnrollment.user_id, User.full_name, OnlineCourse.name)
+        .join(OnlineEnrollment)
+        .join(User, User.id == OnlineEnrollment.user_id)
+        .join(OnlineCourse, OnlineCourse.id == OnlineEnrollment.online_course_id)
+        .filter(Reservation.status.in_((ReservationStatus.PAYMENT_SUBMITTED, ReservationStatus.PENDING)))
+        .order_by(Reservation.requested_date.asc(), Reservation.requested_time.asc())
+        .all()
+    )
+    return [{
+        "id": row.id,
+        "student_id": user_id,
+        "student_name": student_name,
+        "course_name": course_name,
+        "requested_date": row.requested_date,
+        "requested_time": row.requested_time,
+        "status": row.status.value,
+        "payment_proof": row.payment_proof,
+        "admin_notes": row.admin_notes,
+        "created_at": row.created_at.isoformat() if row.created_at else "",
+    } for row, user_id, student_name, course_name in rows]
+
+
+@router.post("/admin/reservations/{reservation_id}/review")
+async def review_admin_reservation(
+    reservation_id: int,
+    body: ReservationReviewIn,
+    db: Session = Depends(get_db),
+    _admin: None = Depends(require_web_admin),
+):
+    reservation = reservation_service.get_by_id(db, reservation_id)
+    if not reservation:
+        raise HTTPException(status_code=404, detail="reservation_not_found")
+    if body.action == "confirm":
+        updated = reservation_service.confirm(db, reservation_id)
+        if updated and updated.status != ReservationStatus.CONFIRMED:
+            raise HTTPException(status_code=409, detail="reservation_payment_required")
+    else:
+        updated = reservation_service.reject(db, reservation_id, body.notes)
+    return {"ok": True, "id": updated.id, "status": updated.status.value, "message": "رزرو تأیید شد." if body.action == "confirm" else "رزرو رد شد."}
 
 
 @router.get("/admin/students", response_model=list[StudentAdminOut])
