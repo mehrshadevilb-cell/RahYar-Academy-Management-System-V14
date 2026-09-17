@@ -29,7 +29,17 @@ class OpenAICompatibleProvider(BaseAIProvider):
             payload = response.json()
 
         models_key = str(self.extra_config.get("models_key", "data"))
-        raw_models = payload.get(models_key, []) if isinstance(payload, dict) else []
+        raw_models: Any = payload.get(models_key, []) if isinstance(payload, dict) else []
+
+        # Bytez documents `output` as an array, but tolerate equivalent nested
+        # response shapes so discovery does not break when the API adds a wrapper.
+        if isinstance(raw_models, dict):
+            for key in ("models", "data", "items", "results", "output"):
+                candidate = raw_models.get(key)
+                if isinstance(candidate, list):
+                    raw_models = candidate
+                    break
+
         if not isinstance(raw_models, list):
             return []
 
@@ -37,13 +47,24 @@ class OpenAICompatibleProvider(BaseAIProvider):
         normalized: list[dict[str, Any]] = []
         for item in raw_models:
             if isinstance(item, str):
-                normalized.append({"model_id": item, "display_name": item, "raw_metadata": {}})
+                model_id = item.strip()
+                if model_id:
+                    normalized.append({"model_id": model_id, "display_name": model_id, "raw_metadata": {}})
                 continue
             if not isinstance(item, dict):
                 continue
-            model_id = item.get(model_id_key) or item.get("id") or item.get("model_id") or item.get("modelId")
+
+            model_id = (
+                item.get(model_id_key)
+                or item.get("modelId")
+                or item.get("model_id")
+                or item.get("id")
+                or item.get("model")
+                or item.get("name")
+            )
             if not model_id:
                 continue
+
             normalized.append(self._normalize_model({**item, "id": str(model_id)}))
         return normalized
 
