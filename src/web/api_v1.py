@@ -267,7 +267,12 @@ async def admin_update_student(
             raise HTTPException(status_code=409, detail="phone_already_linked")
     user.full_name = body.full_name.strip()
     user.phone = phone
-    user.email = body.email.strip() if body.email else None
+    email = body.email.strip().lower() if body.email else None
+    if email:
+        duplicate_email = db.query(User).filter(User.email == email, User.id != student_id).first()
+        if duplicate_email:
+            raise HTTPException(status_code=409, detail="email_already_linked")
+    user.email = email
     profile = user.student_profile
     if not profile:
         profile = StudentProfile(user_id=user.id)
