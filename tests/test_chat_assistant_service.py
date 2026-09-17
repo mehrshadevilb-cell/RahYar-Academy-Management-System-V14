@@ -8,6 +8,7 @@ from src.services.chat_assistant_service import (
     SYSTEM_PROMPT_FA,
     ChatAssistantError,
     ChatAssistantService,
+    is_multi_agent_request,
     _question_guidance,
 )
 
@@ -109,3 +110,39 @@ def test_question_guidance_prioritizes_catalog_for_purchase_questions():
 
 def test_question_guidance_structures_troubleshooting_questions():
     assert "تشخیص علت" in _question_guidance("این خطا چرا رخ می‌دهد؟")
+
+
+def test_design_and_seo_questions_use_parallel_team_intent():
+    assert is_multi_agent_request("برای صفحه اصلی سایت یک title سئو و طراحی بهتر می‌خواهم")
+    assert is_multi_agent_request("بهترین CTA برای landing page چیست؟")
+    assert not is_multi_agent_request("چطور وکال را تمیزتر ضبط کنم؟")
+
+
+def test_multi_agent_answer_keeps_specialists_parallel_and_synthesizes():
+    service = ChatAssistantService()
+    calls = []
+
+    def fake_request(messages, max_tokens=700):
+        system_text = "\n".join(
+            str(message.get("content", ""))
+            for message in messages
+            if message.get("role") == "system"
+        )
+        calls.append(max_tokens)
+        if "رهبر تیم چندمتخصصی" in system_text:
+            return "نتیجه ترکیبی\n- اقدام فوری"
+        if "SEO" in system_text:
+            return "گزارش سئو"
+        if "UX/UI" in system_text:
+            return "گزارش طراحی"
+        return "گزارش محتوا"
+
+    service._request_model = fake_request
+    result = service._multi_agent_answer(
+        [{"role": "system", "content": "زمینه ArtistYar"}],
+        "برای صفحه اصلی SEO و طراحی پیشنهاد بده",
+    )
+
+    assert result == "نتیجه ترکیبی\n- اقدام فوری"
+    assert calls.count(380) == 3
+    assert calls.count(850) == 1
