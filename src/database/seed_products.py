@@ -1,13 +1,12 @@
 """
-Seeds the four real academy products (RahYar, RahYar Pro, Theory, ArtistYar).
+Seeds the academy products (RahYar, RahYar Pro, Theory, RahYar Complete, ArtistYar).
 
-Product/course/channel data here is structural configuration (not a
-secret like an API key or card number), so it is safe to seed directly.
-Everything seeded here is meant to become editable from the future
-in-Telegram admin panel - this script only sets the initial values.
+Product/course/channel data here is structural configuration (not a secret like
+an API key or card number), so it is safe to seed directly. Everything seeded
+here is meant to become editable from the future in-Telegram admin panel.
 
-Safe to run multiple times: existing products (matched by title) are
-left untouched.
+Safe to run multiple times: existing products (matched by title) are updated
+without creating duplicate products or SpotPlayer course mappings.
 """
 
 from src.database.session import SessionLocal
@@ -21,18 +20,36 @@ RAHYAR_PRO_COVER = f"{SUPABASE_COVER_BASE}/RahYarPro%20Package.PNG"
 THEORY_COVER = f"{SUPABASE_COVER_BASE}/Theory%20Package.PNG"
 ARTISTYAR_COVER = f"{SUPABASE_COVER_BASE}/ArtistYar%20Package.JPG"
 
+RAHYAR_SPOTPLAYER_ID = "69752d413c6f2edac4b6ce71"
+RAHYAR_PRO_SPOTPLAYER_ID = "697475017e50673ccf9bd7aa"
+THEORY_SPOTPLAYER_ID = "69752bbf7e50673ccf9cb9a5"
+
 
 def seed_default_products():
-
     db = SessionLocal()
 
-    def product_exists(title: str) -> bool:
-        return (
-            db.query(Course)
-            .filter(Course.title == title)
+    def ensure_spotplayer_mapping(product: Course, spotplayer_id: str, course_name: str, sort_order: int):
+        mapping = (
+            db.query(SpotPlayerCourse)
+            .filter(
+                SpotPlayerCourse.product_id == product.id,
+                SpotPlayerCourse.spotplayer_course_id == spotplayer_id,
+            )
             .first()
-            is not None
         )
+        if mapping is None:
+            db.add(
+                SpotPlayerCourse(
+                    product_id=product.id,
+                    spotplayer_course_id=spotplayer_id,
+                    course_name=course_name,
+                    sort_order=sort_order,
+                )
+            )
+        else:
+            mapping.course_name = course_name
+            mapping.sort_order = sort_order
+            mapping.enabled = True
 
     # ---- Product 1: RahYar ----
     rahyar = db.query(Course).filter(Course.title == "راه‌یار").first()
@@ -54,11 +71,7 @@ def seed_default_products():
         rahyar.description = "بسته کامل آموزش تنظیم، میکس و مسترینگ راه‌یار"
         rahyar.thumbnail = RAHYAR_COVER
         rahyar.sort_order = 1
-
-    rahyar_courses = db.query(SpotPlayerCourse).filter(SpotPlayerCourse.product_id == rahyar.id).all()
-    rahyar_main = next((item for item in rahyar_courses if item.spotplayer_course_id == "69752d413c6f2edac4b6ce71"), None)
-    if not rahyar_main:
-        db.add(SpotPlayerCourse(product_id=rahyar.id, spotplayer_course_id="69752d413c6f2edac4b6ce71", course_name="راه‌یار", sort_order=1))
+    ensure_spotplayer_mapping(rahyar, RAHYAR_SPOTPLAYER_ID, "راه‌یار", 1)
 
     # ---- Product 2: RahYar Pro ----
     rahyar_pro = db.query(Course).filter(Course.title == "راه‌یار پرو").first()
@@ -78,18 +91,11 @@ def seed_default_products():
         rahyar_pro.description = "نسخه حرفه‌ای آموزش تنظیم، میکس و مسترینگ راه‌یار"
         rahyar_pro.thumbnail = RAHYAR_PRO_COVER
         rahyar_pro.sort_order = 2
+    ensure_spotplayer_mapping(rahyar_pro, RAHYAR_PRO_SPOTPLAYER_ID, "راه‌یار پرو", 1)
 
-    pro_course = db.query(SpotPlayerCourse).filter(SpotPlayerCourse.spotplayer_course_id == "697475017e50673ccf9bd7aa").first()
-    if pro_course:
-        pro_course.product_id = rahyar_pro.id
-        pro_course.course_name = "راه‌یار پرو"
-        pro_course.sort_order = 1
-    else:
-        db.add(SpotPlayerCourse(product_id=rahyar_pro.id, spotplayer_course_id="697475017e50673ccf9bd7aa", course_name="راه‌یار پرو", sort_order=1))
-
-    # ---- Product 2: Theory ----
-    if not product_exists("تئوری موسیقی"):
-
+    # ---- Product 3: Theory ----
+    theory = db.query(Course).filter(Course.title == "تئوری موسیقی").first()
+    if not theory:
         theory = Course(
             title="تئوری موسیقی",
             description="آموزش تئوری موسیقی",
@@ -98,64 +104,76 @@ def seed_default_products():
             delivery_type=ProductDeliveryType.SPOTPLAYER,
             sort_order=3,
         )
-
         db.add(theory)
         db.flush()
-
-        db.add(
-            SpotPlayerCourse(
-                product_id=theory.id,
-                spotplayer_course_id="69752bbf7e50673ccf9cb9a5",
-                course_name="تئوری موسیقی",
-                sort_order=1,
-            )
-        )
-
-        print("Product added: تئوری موسیقی")
     else:
-        theory = db.query(Course).filter(Course.title == "تئوری موسیقی").first()
         theory.thumbnail = THEORY_COVER
+        theory.sort_order = 3
+    ensure_spotplayer_mapping(theory, THEORY_SPOTPLAYER_ID, "تئوری موسیقی", 1)
 
-    # ---- Product 3: ArtistYar ----
-    if not product_exists("آرتیست‌یار"):
+    # ---- Product 4: RahYar Complete Bundle ----
+    # One purchasable product containing all three SpotPlayer course IDs.
+    # LicenseService sends every enabled mapping for this product in one
+    # SpotPlayer license, so one approved payment grants all three packages.
+    complete = db.query(Course).filter(Course.title == "پکیج کامل راه‌یار").first()
+    if not complete:
+        complete = Course(
+            title="پکیج کامل راه‌یار",
+            description="ترکیب کامل سه پکیج راه‌یار، راه‌یار پرو و تئوری موسیقی",
+            price=25_000_000,
+            thumbnail=RAHYAR_COVER,
+            delivery_type=ProductDeliveryType.SPOTPLAYER,
+            support_group_link="https://t.me/+TqZaRkAyD1JhNzJk",
+            support_username="@hi_all",
+            sort_order=4,
+        )
+        db.add(complete)
+        db.flush()
+    else:
+        complete.price = 25_000_000
+        complete.description = "ترکیب کامل سه پکیج راه‌یار، راه‌یار پرو و تئوری موسیقی"
+        complete.thumbnail = RAHYAR_COVER
+        complete.delivery_type = ProductDeliveryType.SPOTPLAYER
+        complete.support_group_link = "https://t.me/+TqZaRkAyD1JhNzJk"
+        complete.support_username = "@hi_all"
+        complete.sort_order = 4
 
+    ensure_spotplayer_mapping(complete, RAHYAR_SPOTPLAYER_ID, "راه‌یار", 1)
+    ensure_spotplayer_mapping(complete, RAHYAR_PRO_SPOTPLAYER_ID, "راه‌یار پرو", 2)
+    ensure_spotplayer_mapping(complete, THEORY_SPOTPLAYER_ID, "تئوری موسیقی", 3)
+
+    # ---- Product 5: ArtistYar ----
+    artistyar = db.query(Course).filter(Course.title == "آرتیست‌یار").first()
+    if not artistyar:
         artistyar = Course(
             title="آرتیست‌یار",
             description="دسترسی به کانال‌های ضبط، میکس و فایل آرتیست‌یار",
             price=1_500_000,
             thumbnail=ARTISTYAR_COVER,
             delivery_type=ProductDeliveryType.TELEGRAM,
-            sort_order=4,
+            sort_order=5,
         )
-
         db.add(artistyar)
         db.flush()
-
-        db.add_all([
-            TelegramChannel(
-                product_id=artistyar.id,
-                name="Record",
-                chat_id="-1002682858670",
-                sort_order=1,
-            ),
-            TelegramChannel(
-                product_id=artistyar.id,
-                name="Edit",
-                chat_id="-1002317658121",
-                sort_order=2,
-            ),
-            TelegramChannel(
-                product_id=artistyar.id,
-                name="Files",
-                chat_id="-1002505287920",
-                sort_order=3,
-            ),
-        ])
-
-        print("Product added: آرتیست‌یار")
     else:
-        artistyar = db.query(Course).filter(Course.title == "آرتیست‌یار").first()
         artistyar.thumbnail = ARTISTYAR_COVER
+        artistyar.sort_order = 5
+
+    existing_channels = {
+        channel.name: channel
+        for channel in db.query(TelegramChannel).filter(TelegramChannel.product_id == artistyar.id).all()
+    }
+    for name, chat_id, sort_order in [
+        ("Record", "-1002682858670", 1),
+        ("Edit", "-1002317658121", 2),
+        ("Files", "-1002505287920", 3),
+    ]:
+        channel = existing_channels.get(name)
+        if channel is None:
+            db.add(TelegramChannel(product_id=artistyar.id, name=name, chat_id=chat_id, sort_order=sort_order))
+        else:
+            channel.chat_id = chat_id
+            channel.sort_order = sort_order
 
     db.commit()
     db.close()
