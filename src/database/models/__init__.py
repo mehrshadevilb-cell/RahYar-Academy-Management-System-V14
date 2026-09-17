@@ -19,6 +19,7 @@ from .payment import Payment
 from .payment_card import PaymentCard
 from .referral import Referral, ReferralStatus
 from .reservation import Reservation, ReservationStatus
+from .site_event import SiteEvent
 from .spotplayer_course import SpotPlayerCourse
 from .student_profile import StudentProfile
 from .support_request import SupportRequest, SupportStatus
@@ -34,6 +35,6 @@ __all__ = [
     "TelegramInviteLink", "KnowledgeItem", "QuizQuestion", "License", "OnlineCourse",
     "EnrollmentStatus", "OnlineEnrollment", "PaymentModel", "OnlineTimeSlot", "Payment",
     "PaymentCard", "Referral", "ReferralStatus", "Reservation", "ReservationStatus",
-    "SpotPlayerCourse", "StudentProfile", "SupportRequest", "SupportStatus",
+    "SiteEvent", "SpotPlayerCourse", "StudentProfile", "SupportRequest", "SupportStatus",
     "TelegramAccount", "TelegramChannel", "User", "UserRole",
 ]

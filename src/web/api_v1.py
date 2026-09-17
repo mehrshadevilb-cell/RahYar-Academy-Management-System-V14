@@ -6,11 +6,14 @@ the owner approves in Telegram.
 """
 from __future__ import annotations
 
+import hashlib
 import secrets
+from datetime import datetime, timedelta, timezone
 
 from aiogram.types import BufferedInputFile
-from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel, Field
+from sqlalchemy import desc, func
 from sqlalchemy.orm import Session
 
 from src.bot.bot import bot
@@ -23,6 +26,10 @@ from src.database.models.free_lesson import FreeLesson
 from src.database.models.student_profile import StudentProfile
 from src.database.models.telegram_account import TelegramAccount
 from src.database.models.user import User, UserRole
+from src.database.models.admin_log import AdminLog
+from src.database.models.online_course import OnlineCourse
+from src.database.models.online_enrollment import EnrollmentStatus, OnlineEnrollment
+from src.database.models.site_event import SiteEvent
 from src.web.deps import get_db
 
 logger = get_logger("web.api_v1")
@@ -62,6 +69,12 @@ class InquiryIn(BaseModel):
     full_name: str = Field(min_length=2, max_length=100)
     phone: str = Field(min_length=10, max_length=20)
     message: str | None = Field(default=None, max_length=1000)
+
+
+class AnalyticsEventIn(BaseModel):
+    event_type: str = Field(default="page_view", pattern="^[a-z0-9_.-]{1,40}$")
+    path: str = Field(default="/", min_length=1, max_length=240)
+    metadata: dict[str, str] | None = None
 
 
 class OrderStatusOut(BaseModel):
@@ -165,6 +178,54 @@ def require_web_admin(x_admin_key: str | None = Header(default=None, alias="X-Ad
         raise HTTPException(status_code=503, detail="web_admin_api_key_not_configured")
     if not x_admin_key or not secrets.compare_digest(x_admin_key, expected):
         raise HTTPException(status_code=403, detail="admin_access_denied")
+
+
+@router.post("/analytics/events", status_code=202)
+async def collect_analytics_event(body: AnalyticsEventIn, request: Request, db: Session = Depends(get_db)):
+    forwarded = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+    client = forwarded or (request.client.host if request.client else "unknown")
+    user_agent = request.headers.get("user-agent", "")[:240]
+    secret = settings.ANALYTICS_HASH_SECRET or settings.SECRET_KEY or "artistyar-analytics"
+    visitor_hash = hashlib.sha256(f"{secret}:{client}:{user_agent}".encode()).hexdigest()
+    db.add(SiteEvent(event_type=body.event_type, path=body.path, visitor_hash=visitor_hash, event_metadata=body.metadata))
+    db.commit()
+    return {"ok": True}
+
+
+@router.get("/admin/classes")
+async def admin_active_classes(db: Session = Depends(get_db), _admin: None = Depends(require_web_admin)):
+    courses = db.query(OnlineCourse).filter(OnlineCourse.is_active.is_(True)).order_by(OnlineCourse.name.asc()).all()
+    rows = []
+    for course in courses:
+        active = db.query(func.count(OnlineEnrollment.id)).filter(OnlineEnrollment.online_course_id == course.id, OnlineEnrollment.status == EnrollmentStatus.ACTIVE).scalar() or 0
+        rows.append({"id": course.id, "name": course.name, "teacher": course.teacher, "duration_minutes": course.duration_minutes, "monthly_sessions": course.monthly_sessions, "active_students": int(active)})
+    return rows
+
+
+@router.get("/admin/students/{student_id}/enrollments")
+async def admin_student_enrollments(student_id: int, db: Session = Depends(get_db), _admin: None = Depends(require_web_admin)):
+    user = db.query(User).filter(User.id == student_id, User.role == UserRole.STUDENT).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="student_not_found")
+    enrollments = db.query(OnlineEnrollment).join(OnlineCourse).filter(OnlineEnrollment.user_id == student_id).order_by(desc(OnlineEnrollment.created_at)).all()
+    return [{"id": item.id, "course_id": item.online_course_id, "course_name": item.online_course.name, "status": item.status.value, "payment_model": item.payment_model.value, "remaining_sessions": item.remaining_sessions, "completed_sessions": item.completed_sessions, "created_at": item.created_at.isoformat() if item.created_at else ""} for item in enrollments]
+
+
+@router.get("/admin/analytics/summary")
+async def admin_analytics_summary(db: Session = Depends(get_db), _admin: None = Depends(require_web_admin)):
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    since_30 = now - timedelta(days=30)
+    since_7 = now - timedelta(days=7)
+    visits_30 = db.query(func.count(SiteEvent.id)).filter(SiteEvent.event_type == "page_view", SiteEvent.created_at >= since_30).scalar() or 0
+    visitors_30 = db.query(func.count(func.distinct(SiteEvent.visitor_hash))).filter(SiteEvent.event_type == "page_view", SiteEvent.created_at >= since_30).scalar() or 0
+    visits_7 = db.query(func.count(SiteEvent.id)).filter(SiteEvent.event_type == "page_view", SiteEvent.created_at >= since_7).scalar() or 0
+    top_paths = db.query(SiteEvent.path, func.count(SiteEvent.id).label("count")).filter(SiteEvent.event_type == "page_view", SiteEvent.created_at >= since_30).group_by(SiteEvent.path).order_by(desc("count")).limit(10).all()
+    ai_events = db.query(func.count(AdminLog.id)).filter(AdminLog.created_at >= since_30, AdminLog.action.ilike("%ai%")).scalar() or 0
+    active_enrollments = db.query(func.count(OnlineEnrollment.id)).filter(OnlineEnrollment.status == EnrollmentStatus.ACTIVE).scalar() or 0
+    total_enrollments = db.query(func.count(OnlineEnrollment.id)).scalar() or 0
+    active_classes = db.query(func.count(OnlineCourse.id)).filter(OnlineCourse.is_active.is_(True)).scalar() or 0
+    students = db.query(func.count(User.id)).filter(User.role == UserRole.STUDENT).scalar() or 0
+    return {"period_days": 30, "site": {"page_views_7d": int(visits_7), "page_views_30d": int(visits_30), "unique_visitors_30d": int(visitors_30), "top_paths": [{"path": path, "count": int(count)} for path, count in top_paths]}, "education": {"active_classes": int(active_classes), "active_enrollments": int(active_enrollments), "total_enrollments": int(total_enrollments), "students": int(students)}, "ai_agent": {"admin_ai_events_30d": int(ai_events), "source": "admin_logs"}}
 
 
 @router.get("/admin/students", response_model=list[StudentAdminOut])
