@@ -299,7 +299,12 @@ async def ai_consult_message(message: Message, state: FSMContext):
     try:
         result = await _run_with_optional_progress(
             message,
-            asyncio.to_thread(runtime.agent.analyze, prompt),
+            asyncio.to_thread(
+                lambda: runtime.agent.multi_agent_consult(
+                    runtime.agent._context() + "\n\nTASK:\n" + prompt,
+                    max_agents=4,
+                ).get("synthesis", "")
+            ),
         )
     except AIAgentError as exc:
         result = f"❌ {_safe_error(exc)}"
