@@ -24,6 +24,7 @@ from src.database.session import SessionLocal
 from src.services.ai.auto_configure import auto_configure_ai
 from src.services.ai.model_refresh_scheduler import AIModelRefreshScheduler
 from src.services.reminder_scheduler import InstallmentReminderScheduler
+from src.services.artistyar_practice_reminder_scheduler import ArtistYarPracticeReminderScheduler
 from src.web.api_ai import router as api_ai_router
 from src.web.api_v1 import router as api_v1_router
 from src.web.router import router as storefront_router
@@ -228,6 +229,8 @@ async def start_bot():
 
     installment_scheduler = InstallmentReminderScheduler(bot)
     installment_scheduler.start()
+    artistyar_practice_scheduler = ArtistYarPracticeReminderScheduler(bot)
+    artistyar_practice_scheduler.start()
     ai_model_refresh_scheduler = AIModelRefreshScheduler()
     ai_model_refresh_scheduler.start()
     ai_agent_knowledge.start()
@@ -239,6 +242,7 @@ async def start_bot():
         ai_model_refresh_scheduler.stop()
         if installment_scheduler._task:
             installment_scheduler._task.cancel()
+        artistyar_practice_scheduler.stop()
         await bot.session.close()
 
 
