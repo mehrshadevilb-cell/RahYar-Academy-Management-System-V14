@@ -2,6 +2,9 @@ import asyncio
 import os
 import threading
 import traceback
+import hashlib
+import hmac
+from urllib.parse import parse_qsl
 from pathlib import Path
 
 from aiogram.exceptions import TelegramConflictError, TelegramUnauthorizedError
@@ -82,6 +85,62 @@ async def health():
 @app.api_route("/", methods=["HEAD"])
 async def head_root():
     return Response(status_code=200)
+
+
+@app.post("/api/v1/telegram/webapp-auth")
+async def telegram_webapp_auth(request: Request):
+    body = await request.json().catch(() => ({})) if False else await request.json()
+    init_data = str(body.get("initData") or "").strip()
+    if not init_data:
+        return JSONResponse({"ok": False, "error": "telegram_init_data_required"}, status_code=400)
+
+    bot_token = (os.getenv("BOT_TOKEN") or "").strip()
+    if not bot_token:
+        return JSONResponse({"ok": False, "error": "bot_token_not_configured"}, status_code=503)
+
+    try:
+        pairs = dict(parse_qsl(init_data, keep_blank_values=True))
+        received_hash = pairs.pop("hash", "")
+        auth_date = int(pairs.get("auth_date", "0"))
+        if not received_hash or not auth_date:
+            raise ValueError("missing_hash_or_auth_date")
+        data_check_string = "\n".join(f"{key}={value}" for key, value in sorted(pairs.items()))
+        secret_key = hmac.new(b"WebAppData", bot_token.encode(), hashlib.sha256).digest()
+        calculated_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(calculated_hash, received_hash):
+            raise ValueError("invalid_hash")
+        import time
+        max_age = int(os.getenv("TELEGRAM_WEBAPP_AUTH_MAX_AGE_SECONDS", "86400"))
+        if int(time.time()) - auth_date > max_age:
+            raise ValueError("expired_init_data")
+        import json
+        tg_user = json.loads(pairs.get("user", "{}"))
+        telegram_id = str(tg_user.get("id") or "")
+        if not telegram_id:
+            raise ValueError("telegram_user_missing")
+
+        db = SessionLocal()
+        try:
+            account = db.query(TelegramAccount).filter(TelegramAccount.telegram_id == telegram_id).first()
+            if not account or not account.user or not account.user.is_active:
+                return JSONResponse({"ok": False, "error": "telegram_account_not_linked"}, status_code=403)
+            user = account.user
+            return JSONResponse({
+                "ok": True,
+                "user": {
+                    "id": str(user.id),
+                    "username": user.phone or account.username or f"tg_{telegram_id}",
+                    "fullName": user.full_name,
+                    "role": user.role.value if hasattr(user.role, "value") else str(user.role),
+                    "telegramLinked": True,
+                    "telegramId": telegram_id,
+                },
+            })
+        finally:
+            db.close()
+    except Exception as exc:
+        logger.warning("Telegram Mini App auth rejected: %s", exc)
+        return JSONResponse({"ok": False, "error": "invalid_telegram_init_data"}, status_code=401)
 
 
 @app.get("/api/status")
