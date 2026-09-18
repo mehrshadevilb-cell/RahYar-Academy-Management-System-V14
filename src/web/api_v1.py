@@ -37,6 +37,7 @@ from src.services.payment_service import PaymentReviewError, PaymentService
 from src.services.payment_delivery_service import PaymentDeliveryService
 from src.services.enrollment_service import EnrollmentService
 from src.services.reservation_service import ReservationService
+from src.services.website_analytics_analyzer import WebsiteAnalyticsAnalyzer
 from src.services.web_registration_service import WebRegistrationError, WebRegistrationService
 from src.web.deps import get_db
 from src.core.security.password import verify_password
@@ -50,6 +51,7 @@ payment_service = PaymentService()
 enrollment_service = EnrollmentService()
 payment_delivery_service = PaymentDeliveryService(payment_service=payment_service)
 registration_service = WebRegistrationService(order_service=order_service)
+analytics_analyzer = WebsiteAnalyticsAnalyzer()
 
 router = APIRouter(prefix="/api/v1", tags=["artistyar-api"])
 
@@ -299,6 +301,16 @@ async def admin_student_enrollments(student_id: int, db: Session = Depends(get_d
         raise HTTPException(status_code=404, detail="student_not_found")
     enrollments = db.query(OnlineEnrollment).join(OnlineCourse).filter(OnlineEnrollment.user_id == student_id).order_by(desc(OnlineEnrollment.created_at)).all()
     return [{"id": item.id, "course_id": item.online_course_id, "course_name": item.online_course.name, "status": item.status.value, "payment_model": item.payment_model.value, "remaining_sessions": item.remaining_sessions, "completed_sessions": item.completed_sessions, "created_at": item.created_at.isoformat() if item.created_at else ""} for item in enrollments]
+
+
+@router.get("/admin/analytics/ai")
+async def admin_analytics_ai(
+    days: int = Query(default=30, ge=1, le=365),
+    db: Session = Depends(get_db),
+    _admin: None = Depends(require_web_admin),
+):
+    """Run parallel traffic/conversion/reliability analysis through RahYar AI."""
+    return await __import__("asyncio").to_thread(analytics_analyzer.analyze, db, days)
 
 
 @router.get("/admin/analytics/summary")
