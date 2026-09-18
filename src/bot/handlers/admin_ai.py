@@ -225,7 +225,10 @@ async def ai_analyze(callback: CallbackQuery):
     try:
         # Legacy profiles (security/reliability/full) all use the unified prompt.
         profile = callback.data.rsplit(":", 1)[-1]
-        result = await asyncio.to_thread(runtime.agent.analyze, audit_request(profile))
+        def run_audit():
+            prompt = runtime.agent._context() + "\n\nTASK:\n" + audit_request(profile)
+            return runtime.agent.multi_agent_consult(prompt, max_agents=4).get("synthesis", "")
+        result = await asyncio.to_thread(run_audit)
     except AIAgentError as exc:
         result = f"❌ {_safe_error(exc)}"
     for index, part in enumerate(_chunk(result)):
