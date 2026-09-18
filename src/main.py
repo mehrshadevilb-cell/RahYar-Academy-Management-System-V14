@@ -89,7 +89,7 @@ async def head_root():
 
 @app.post("/api/v1/telegram/webapp-auth")
 async def telegram_webapp_auth(request: Request):
-    body = await request.json().catch(() => ({})) if False else await request.json()
+    body = await request.json()
     init_data = str(body.get("initData") or "").strip()
     if not init_data:
         return JSONResponse({"ok": False, "error": "telegram_init_data_required"}, status_code=400)
