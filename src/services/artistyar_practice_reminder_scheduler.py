@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import os
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import aiohttp
@@ -58,7 +58,7 @@ class ArtistYarPracticeReminderScheduler:
     def _in_reminder_window(self) -> bool:
         now = datetime.now(TEHRAN_TZ)
         target = now.replace(hour=self.reminder_hour, minute=self.reminder_minute, second=0, microsecond=0)
-        return target <= now < target.replace(minute=(self.reminder_minute + 15) % 60)
+        return target <= now < target + timedelta(minutes=15)
 
     def _ensure_log_table(self, db) -> None:
         db.execute(text("""
