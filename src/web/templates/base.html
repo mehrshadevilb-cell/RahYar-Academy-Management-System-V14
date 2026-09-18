@@ -138,6 +138,20 @@
     fetch(endpoint, {method:"POST", headers:{"Content-Type":"application/json"}, body, keepalive:true}).catch(()=>{});
   };
   send("page_view");
+  if (window.performance && performance.getEntriesByType) {
+    const nav = performance.getEntriesByType("navigation")[0];
+    if (nav) send("page_timing", {load_ms: Math.round(nav.loadEventEnd || nav.duration || 0), ttfb_ms: Math.round(nav.responseStart || 0), dom_ms: Math.round(nav.domContentLoadedEventEnd || 0)});
+  }
+  const milestones = [25, 50, 90];
+  const seenScroll = {};
+  window.addEventListener("scroll", function () {
+    const max = document.documentElement.scrollHeight - window.innerHeight;
+    if (max <= 0) return;
+    const depth = Math.round((window.scrollY / max) * 100);
+    milestones.forEach(function (m) {
+      if (depth >= m && !seenScroll[m]) { seenScroll[m] = true; send("scroll_depth", {depth: String(m)}); }
+    });
+  }, {passive:true});
   document.addEventListener("click", function (event) {
     const link = event.target.closest && event.target.closest("a");
     if (!link) return;
