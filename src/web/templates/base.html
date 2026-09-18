@@ -105,5 +105,47 @@
       {% if bot_link %} · <a href="{{ bot_link }}" target="_blank" rel="noopener">ورود به ربات</a>{% endif %}
     </footer>
   </div>
+
+<script>
+(function () {
+  const endpoint = "/api/v1/analytics/events";
+  const key = "rahyar_analytics_session";
+  let session = localStorage.getItem(key);
+  if (!session) {
+    session = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random());
+    localStorage.setItem(key, session);
+  }
+  const send = (eventType, extra) => {
+    const payload = {
+      event_type: eventType,
+      path: location.pathname.slice(0, 240) || "/",
+      metadata: Object.assign({
+        session: session.slice(0, 64),
+        referrer: document.referrer.slice(0, 300),
+        title: document.title.slice(0, 180),
+        language: navigator.language || "",
+        viewport: window.innerWidth + "x" + window.innerHeight,
+        device: /Mobi|Android/i.test(navigator.userAgent) ? "mobile" : "desktop",
+        utm_source: new URLSearchParams(location.search).get("utm_source") || "",
+        utm_medium: new URLSearchParams(location.search).get("utm_medium") || "",
+        utm_campaign: new URLSearchParams(location.search).get("utm_campaign") || ""
+      }, extra || {})
+    };
+    const body = JSON.stringify(payload);
+    if (navigator.sendBeacon) {
+      try { navigator.sendBeacon(endpoint, new Blob([body], {type: "application/json"})); return; } catch (_) {}
+    }
+    fetch(endpoint, {method:"POST", headers:{"Content-Type":"application/json"}, body, keepalive:true}).catch(()=>{});
+  };
+  send("page_view");
+  document.addEventListener("click", function (event) {
+    const link = event.target.closest && event.target.closest("a");
+    if (!link) return;
+    const href = link.getAttribute("href") || "";
+    if (href.includes("/products/") || href.includes("/classes/")) send("content_click", {href: href.slice(0, 240)});
+    if (href.includes("t.me/") || href === "/go-bot") send("bot_click", {href: href.slice(0, 240)});
+  }, {passive:true});
+})();
+</script>
 </body>
 </html>
