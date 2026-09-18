@@ -136,6 +136,42 @@ class AIProviderRouter:
         except Exception:
             return []
 
+    @staticmethod
+    def _env_provider_name(prefix: str) -> str:
+        return prefix.strip().lower().replace("_", "-") or "provider"
+
+    @classmethod
+    def _discover_all_env_providers(cls) -> list[AIProvider]:
+        providers: list[AIProvider] = []
+        # Generic convention: PREFIX_API_KEY + PREFIX_BASE_URL (or
+        # PREFIX_API_BASE_URL), with optional PREFIX_MODEL.
+        excluded_prefixes = {"MUSIC_AUDIO", "DATABASE", "SPOTPLAYER"}
+        priority = 10
+        for key_var, value in sorted(os.environ.items()):
+            if not key_var.endswith("_API_KEY") or key_var in {"AI_API_KEY", "AI2_API_KEY"}:
+                continue
+            prefix = key_var[:-len("_API_KEY")].strip()
+            if not prefix or prefix in excluded_prefixes:
+                continue
+            key = (value or "").strip()
+            if not key:
+                continue
+            base_url = (os.getenv(f"{prefix}_BASE_URL") or os.getenv(f"{prefix}_API_BASE_URL") or "").strip()
+            if not base_url:
+                continue
+            model = (os.getenv(f"{prefix}_MODEL") or "").strip()
+            normalized = cls._normalize_base_url(base_url)
+            providers.append(AIProvider(
+                name=cls._env_provider_name(prefix),
+                api_key=key,
+                base_url=normalized,
+                models=(model,) if model else (),
+                priority=priority,
+                provider_type=cls._infer_provider_type(prefix, normalized),
+            ))
+            priority += 1
+        return providers
+
     def _env_providers(self) -> list[AIProvider]:
         providers: list[AIProvider] = []
         primary = self._provider_from_env("primary", "AI_API_KEY", "AI_BASE_URL", "AI_MODEL", 10)
@@ -150,6 +186,10 @@ class AIProviderRouter:
             providers.append(anthropic)
         if xkiro:
             providers.append(xkiro)
+        known_names = {provider.name.lower() for provider in providers}
+        for provider in self._discover_all_env_providers():
+            if provider.name.lower() not in known_names:
+                providers.append(provider)
         if not providers and self.settings.effective_ai_api_key:
             base_url = self._normalize_base_url(self.settings.effective_ai_base_url)
             model = self.settings.effective_ai_model
@@ -166,7 +206,11 @@ class AIProviderRouter:
         if cached and cached[0] > now:
             return AIProvider(**{**provider.__dict__, "models": cached[1]})
         url = provider.base_url.rstrip("/") + "/models"
-        headers = self._anthropic_headers(provider) if provider.provider_type == "anthropic" else self._headers(provider)
+        if provider.provider_type == "google":
+            url += "?key=" + quote(provider.api_key, safe="")
+            headers = {"Content-Type": "application/json", "Accept": "application/json", "User-Agent": "RahYar-AIProviderRouter/1.7"}
+        else:
+            headers = self._anthropic_headers(provider) if provider.provider_type == "anthropic" else self._headers(provider)
         request = urllib.request.Request(url, headers=headers, method="GET")
         models: list[str] = []
         try:
