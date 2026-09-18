@@ -131,6 +131,85 @@ class RoutedAIAgentService(AIAgentService):
 
         raise AIAgentError("All configured AI models returned no usable output.")
 
+    def multi_agent_consult(self, prompt: str, *, max_agents: int = 4, temperature: float = 0.1) -> dict:
+        """Run independent agents concurrently, quarantine failed routes, then synthesize.
+
+        This is intentionally bounded: parallel specialists improve latency while the
+        router remains the single source of truth for provider/model selection.
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        candidates = self.router._ordered_candidates(self.router.providers())
+        candidates = candidates[: max(2, min(int(max_agents), 6))]
+        if not candidates:
+            raise AIAgentError("هیچ AI route فعالی برای Multi-Agent پیدا نشد.")
+
+        system = "You are a RahYar specialist agent. Analyze only supplied evidence. Never invent facts or secrets."
+        messages = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
+        results = []
+        failures = []
+
+        def run(candidate):
+            provider, model = candidate
+            started = time.perf_counter()
+            try:
+                data = self.router._request(
+                    provider,
+                    model,
+                    messages,
+                    {"temperature": temperature, "max_tokens": 1800},
+                    max(10, min(self.settings.AI_AGENT_TIMEOUT_SECONDS, 90)),
+                )
+                content = self.router._extract_text(data, provider.provider_type)
+                if not content:
+                    raise AIProviderError("empty specialist response", retryable=True, provider=provider.name)
+                return {"provider": provider.name, "model": model, "latency_ms": round((time.perf_counter()-started)*1000), "content": content}
+            except Exception as exc:
+                return {"provider": provider.name, "model": model, "error": f"{type(exc).__name__}: {str(exc)[:250]}"}
+
+        with ThreadPoolExecutor(max_workers=len(candidates), thread_name_prefix="ra-agent") as pool:
+            futures = [pool.submit(run, candidate) for candidate in candidates]
+            for future in as_completed(futures):
+                row = future.result()
+                if row.get("content"):
+                    results.append(row)
+                else:
+                    failures.append(row)
+
+        # Self-healing: if the parallel wave did not produce two useful agents,
+        # reset stale cooldowns and perform one bounded sequential recovery pass.
+        if len(results) < 2:
+            try:
+                self.router.reset_cooldowns()
+                recovery_candidates = self.router._ordered_candidates(self.router.providers())
+                seen = {(x["provider"], x["model"]) for x in results}
+                for candidate in recovery_candidates:
+                    if len(results) >= 2:
+                        break
+                    if candidate in seen:
+                        continue
+                    row = run(candidate)
+                    if row.get("content"):
+                        results.append(row)
+                    else:
+                        failures.append(row)
+            except Exception as exc:
+                failures.append({"error": f"recovery:{type(exc).__name__}"})
+
+        if not results:
+            raise AIAgentError("Multi-Agent نتوانست هیچ پاسخ قابل استفاده‌ای دریافت کند.")
+
+        synthesis_prompt = f"""You are the RahYar lead agent. Synthesize the independent specialist reports below.
+Use only evidence present in the reports. Resolve contradictions explicitly. Return a concise actionable answer.
+ORIGINAL TASK:\n{prompt}\n\nSPECIALIST REPORTS:\n{json.dumps(results, ensure_ascii=False)}"""
+        try:
+            synthesis = self._request_model(synthesis_prompt)
+        except Exception as exc:
+            synthesis = results[0]["content"]
+            failures.append({"error": f"lead_synthesis:{type(exc).__name__}"})
+
+        return {"synthesis": synthesis, "agents": results, "failures": failures, "agent_count": len(results)}
+
     def test_provider_models(self) -> str:
         """Discover and live-test every model in the same pool used by agent requests."""
         self._check_enabled(require_git=False)
