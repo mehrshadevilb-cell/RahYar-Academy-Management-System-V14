@@ -94,6 +94,24 @@ class WebsiteAnalyticsAnalyzer:
             .scalar() or 0
         )
 
+        attribution: dict[str, int] = {}
+        devices: dict[str, int] = {}
+        timing_rows = db.query(SiteEvent.event_metadata).filter(
+            SiteEvent.event_type.in_(("page_view", "page_timing")),
+            SiteEvent.created_at >= since,
+        ).limit(10000).all()
+        for (metadata,) in timing_rows:
+            if not isinstance(metadata, dict):
+                continue
+            for key in ("utm_source", "utm_medium", "utm_campaign", "referrer"):
+                value = str(metadata.get(key) or "").strip()[:120]
+                if value:
+                    bucket = f"{key}:{value}"
+                    attribution[bucket] = attribution.get(bucket, 0) + 1
+            device = str(metadata.get("device") or "").strip()
+            if device:
+                devices[device] = devices.get(device, 0) + 1
+
         growth = None
         if previous_views:
             growth = round((page_views - previous_views) / previous_views * 100, 2)
@@ -107,6 +125,8 @@ class WebsiteAnalyticsAnalyzer:
                 "previous_period_page_views": previous_views,
                 "page_view_change_percent": growth,
                 "top_paths": [{"path": str(path), "count": int(value)} for path, value in top_paths],
+                "top_attribution": [{"source": key, "count": value} for key, value in sorted(attribution.items(), key=lambda item: item[1], reverse=True)[:20]],
+                "devices": devices,
             },
             "events": [{"event": str(event_type), "count": int(value)} for event_type, value in event_rows],
             "conversion": conversions,
