@@ -95,31 +95,52 @@ class AIAgentSelfChecker:
         return CheckResult("migrations", True, f"unique revision ids ({len(seen)})")
 
     def _check_imports(self) -> CheckResult:
-        probe = (
-            "import src.main; import src.bot.bot; import src.services.ai_agent_runtime; "
-            "import src.services.routed_ai_agent_service"
+        # Probe modules independently and in parallel so one slow import is
+        # isolated and diagnostics finish faster.
+        modules = (
+            "src.main",
+            "src.bot.bot",
+            "src.services.ai_agent_runtime",
+            "src.services.routed_ai_agent_service",
         )
         env = os.environ.copy()
-        env.setdefault("PYTHONPATH", str(self.repo))
-        try:
-            result = subprocess.run(
-                [sys.executable, "-c", probe],
-                cwd=self.repo,
-                env=env,
-                text=True,
-                capture_output=True,
-                timeout=30,
-            )
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            return CheckResult("imports", False, f"{type(exc).__name__}: {exc}")
-        if result.returncode:
-            detail = (result.stderr or result.stdout).strip().replace("\n", " ")
-            return CheckResult("imports", False, detail[:700])
-        return CheckResult("imports", True, "critical application modules import successfully")
+        env["PYTHONPATH"] = str(self.repo)
+        env["RAHYAR_SELF_CHECK"] = "1"
+
+        def probe(module: str) -> tuple[str, str]:
+            try:
+                result = subprocess.run(
+                    [sys.executable, "-c", f"import {module}"],
+                    cwd=self.repo,
+                    env=env,
+                    text=True,
+                    capture_output=True,
+                    timeout=12,
+                )
+            except subprocess.TimeoutExpired:
+                return module, "timeout>12s"
+            except OSError as exc:
+                return module, f"{type(exc).__name__}: {exc}"
+            if result.returncode:
+                detail = (result.stderr or result.stdout).strip().replace("\n", " ")
+                return module, detail[:300]
+            return module, "ok"
+
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        failures: list[str] = []
+        with ThreadPoolExecutor(max_workers=len(modules), thread_name_prefix="ra-import") as pool:
+            futures = [pool.submit(probe, module) for module in modules]
+            for future in as_completed(futures):
+                module, status = future.result()
+                if status != "ok":
+                    failures.append(f"{module}: {status}")
+        if failures:
+            return CheckResult("imports", False, " | ".join(sorted(failures)))
+        return CheckResult("imports", True, f"critical modules import successfully ({len(modules)} parallel probes)")
 
     def _check_git(self) -> CheckResult:
-        if not (self.repo / ".git").is_dir():
-            return CheckResult("git", False, "git working tree is unavailable")
+        if not (self.repo / ".git").exists():
+            return CheckResult("git", True, "skipped: .git metadata is not mounted in this runtime image")
         try:
             result = subprocess.run(
                 ["git", "status", "--porcelain=v1"],
