@@ -84,13 +84,10 @@ class ArtistYarPracticeReminderScheduler:
     def _unsent_ids(self, db, telegram_ids: list[str], today: date) -> list[str]:
         if not telegram_ids:
             return []
-        rows = (
-            db.query(text("telegram_id"))
-            .select_from(text("artistyar_practice_reminder_log"))
-            .filter(text("reminder_date = :today"))
-            .params(today=today)
-            .all()
-        )
+        rows = db.execute(
+            text("select telegram_id from artistyar_practice_reminder_log where reminder_date = :today"),
+            {"today": today},
+        ).all()
         sent = {str(row[0]) for row in rows}
         return [telegram_id for telegram_id in telegram_ids if telegram_id not in sent]
 
