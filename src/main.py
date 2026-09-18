@@ -19,6 +19,7 @@ from src.core.config.settings import get_settings
 from src.core.logging.logger import get_logger
 from src.core.middleware.request_id import RequestIdMiddleware
 from src.core.diagnostics.health import build_health_report
+from src.database.models.telegram_account import TelegramAccount
 from src.database.schema_guard import ensure_critical_schema
 from src.database.seed_payment_card import seed_default_card
 from src.database.seed_products import seed_default_products
