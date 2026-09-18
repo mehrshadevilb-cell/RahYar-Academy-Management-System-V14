@@ -158,8 +158,8 @@ class AIProviderRouter:
         return providers
 
     def _discover_env_provider_models(self, provider: AIProvider, timeout_seconds: int = 10) -> AIProvider:
-        if provider.models:
-            return provider
+        # Even when ENV pins a model, also inspect the provider catalog so newly
+        # added/rotated models become available without another code change.
         cache_key = (provider.name.lower(), provider.base_url.rstrip("/"))
         now = time.time()
         cached = self._env_model_cache.get(cache_key)
@@ -190,7 +190,7 @@ class AIProviderRouter:
             models = []
         if not models and provider.models:
             models = list(provider.models)
-        unique = tuple(dict.fromkeys(models))
+        unique = tuple(dict.fromkeys([*provider.models, *models]))
         self._env_model_cache[cache_key] = (now + self._ENV_DISCOVERY_TTL_SECONDS, unique)
         return AIProvider(name=provider.name, api_key=provider.api_key, base_url=provider.base_url, models=unique, priority=provider.priority, enabled=provider.enabled, provider_type=provider.provider_type)
 
