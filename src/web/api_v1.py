@@ -103,6 +103,7 @@ class OrderStatusOut(BaseModel):
 
 class LicenseOut(BaseModel):
     id: int
+    product_id: int
     product_title: str
     status: str
     license_key: str | None = None
@@ -916,6 +917,7 @@ async def list_licenses(
     return [
         LicenseOut(
             id=license_.id,
+            product_id=license_.product_id,
             product_title=course.title,
             status=license_.status,
             license_key=license_.license_key,
