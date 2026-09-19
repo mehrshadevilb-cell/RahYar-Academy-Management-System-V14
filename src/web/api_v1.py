@@ -279,7 +279,30 @@ async def collect_analytics_event(body: AnalyticsEventIn, request: Request, db: 
     user_agent = request.headers.get("user-agent", "")[:240]
     secret = settings.ANALYTICS_HASH_SECRET or settings.SECRET_KEY or "artistyar-analytics"
     visitor_hash = hashlib.sha256(f"{secret}:{client}:{user_agent}".encode()).hexdigest()
-    db.add(SiteEvent(event_type=body.event_type, path=body.path, visitor_hash=visitor_hash, event_metadata=body.metadata))
+
+    # Keep analytics anonymous while preserving the dimensions needed by the
+    # admin dashboard (UTM/referrer/device). Never persist the raw IP or UA.
+    metadata = dict(body.metadata or {})
+    if not metadata.get("referrer"):
+        metadata["referrer"] = request.headers.get("referer", "")[:500]
+    if not metadata.get("device"):
+        ua = user_agent.lower()
+        if "mobile" in ua or "android" in ua or "iphone" in ua or "ipad" in ua:
+            metadata["device"] = "mobile"
+        else:
+            metadata["device"] = "desktop"
+    for key in ("utm_source", "utm_medium", "utm_campaign", "referrer", "device"):
+        if key in metadata:
+            metadata[key] = str(metadata[key])[:500]
+
+    db.add(
+        SiteEvent(
+            event_type=body.event_type,
+            path=body.path,
+            visitor_hash=visitor_hash,
+            event_metadata=metadata,
+        )
+    )
     db.commit()
     return {"ok": True}
 
@@ -314,22 +337,87 @@ async def admin_analytics_ai(
 
 
 @router.get("/admin/analytics/summary")
-async def admin_analytics_summary(db: Session = Depends(get_db), _admin: None = Depends(require_web_admin)):
+async def admin_analytics_summary(
+    days: int = Query(default=30, ge=1, le=365),
+    db: Session = Depends(get_db),
+    _admin: None = Depends(require_web_admin),
+):
+    """Return the same time window used by the admin analytics dashboard."""
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    since_30 = now - timedelta(days=30)
+    since = now - timedelta(days=days)
     since_7 = now - timedelta(days=7)
-    visits_30 = db.query(func.count(SiteEvent.id)).filter(SiteEvent.event_type == "page_view", SiteEvent.created_at >= since_30).scalar() or 0
-    visitors_30 = db.query(func.count(func.distinct(SiteEvent.visitor_hash))).filter(SiteEvent.event_type == "page_view", SiteEvent.created_at >= since_30).scalar() or 0
-    visits_7 = db.query(func.count(SiteEvent.id)).filter(SiteEvent.event_type == "page_view", SiteEvent.created_at >= since_7).scalar() or 0
-    top_paths = db.query(SiteEvent.path, func.count(SiteEvent.id).label("count")).filter(SiteEvent.event_type == "page_view", SiteEvent.created_at >= since_30).group_by(SiteEvent.path).order_by(desc("count")).limit(10).all()
-    ai_events = db.query(func.count(AdminLog.id)).filter(AdminLog.created_at >= since_30, AdminLog.action.ilike("%ai%")).scalar() or 0
-    ai_chats = db.query(func.count(SiteEvent.id)).filter(SiteEvent.event_type == "ai_chat", SiteEvent.created_at >= since_30).scalar() or 0
-    ai_errors = db.query(func.count(SiteEvent.id)).filter(SiteEvent.event_type == "ai_error", SiteEvent.created_at >= since_30).scalar() or 0
-    active_enrollments = db.query(func.count(OnlineEnrollment.id)).filter(OnlineEnrollment.status == EnrollmentStatus.ACTIVE).scalar() or 0
+
+    visits_period = db.query(func.count(SiteEvent.id)).filter(
+        SiteEvent.event_type == "page_view",
+        SiteEvent.created_at >= since,
+    ).scalar() or 0
+    visitors_period = db.query(func.count(func.distinct(SiteEvent.visitor_hash))).filter(
+        SiteEvent.event_type == "page_view",
+        SiteEvent.created_at >= since,
+    ).scalar() or 0
+    visits_7 = db.query(func.count(SiteEvent.id)).filter(
+        SiteEvent.event_type == "page_view",
+        SiteEvent.created_at >= since_7,
+    ).scalar() or 0
+    top_paths = db.query(
+        SiteEvent.path,
+        func.count(SiteEvent.id).label("count"),
+    ).filter(
+        SiteEvent.event_type == "page_view",
+        SiteEvent.created_at >= since,
+    ).group_by(SiteEvent.path).order_by(desc("count")).limit(10).all()
+    ai_events = db.query(func.count(AdminLog.id)).filter(
+        AdminLog.created_at >= since,
+        AdminLog.action.ilike("%ai%"),
+    ).scalar() or 0
+    ai_chats = db.query(func.count(SiteEvent.id)).filter(
+        SiteEvent.event_type == "ai_chat",
+        SiteEvent.created_at >= since,
+    ).scalar() or 0
+    ai_errors = db.query(func.count(SiteEvent.id)).filter(
+        SiteEvent.event_type == "ai_error",
+        SiteEvent.created_at >= since,
+    ).scalar() or 0
+    active_enrollments = db.query(func.count(OnlineEnrollment.id)).filter(
+        OnlineEnrollment.status == EnrollmentStatus.ACTIVE
+    ).scalar() or 0
     total_enrollments = db.query(func.count(OnlineEnrollment.id)).scalar() or 0
-    active_classes = db.query(func.count(OnlineCourse.id)).filter(OnlineCourse.is_active.is_(True)).scalar() or 0
-    students = db.query(func.count(User.id)).filter(User.role == UserRole.STUDENT).scalar() or 0
-    return {"period_days": 30, "site": {"page_views_7d": int(visits_7), "page_views_30d": int(visits_30), "unique_visitors_30d": int(visitors_30), "top_paths": [{"path": path, "count": int(count)} for path, count in top_paths]}, "education": {"active_classes": int(active_classes), "active_enrollments": int(active_enrollments), "total_enrollments": int(total_enrollments), "students": int(students)}, "ai_agent": {"admin_ai_events_30d": int(ai_events), "website_chats_30d": int(ai_chats), "errors_30d": int(ai_errors), "source": "site_events+admin_logs"}}
+    active_classes = db.query(func.count(OnlineCourse.id)).filter(
+        OnlineCourse.is_active.is_(True)
+    ).scalar() or 0
+    students = db.query(func.count(User.id)).filter(
+        User.role == UserRole.STUDENT
+    ).scalar() or 0
+
+    return {
+        "period_days": days,
+        "site": {
+            "page_views_7d": int(visits_7),
+            "page_views_period": int(visits_period),
+            "page_views_30d": int(visits_period if days == 30 else db.query(func.count(SiteEvent.id)).filter(
+                SiteEvent.event_type == "page_view",
+                SiteEvent.created_at >= now - timedelta(days=30),
+            ).scalar() or 0),
+            "unique_visitors_period": int(visitors_period),
+            "unique_visitors_30d": int(visitors_period if days == 30 else db.query(func.count(func.distinct(SiteEvent.visitor_hash))).filter(
+                SiteEvent.event_type == "page_view",
+                SiteEvent.created_at >= now - timedelta(days=30),
+            ).scalar() or 0),
+            "top_paths": [{"path": path, "count": int(count)} for path, count in top_paths],
+        },
+        "education": {
+            "active_classes": int(active_classes),
+            "active_enrollments": int(active_enrollments),
+            "total_enrollments": int(total_enrollments),
+            "students": int(students),
+        },
+        "ai_agent": {
+            "admin_ai_events_period": int(ai_events),
+            "website_chats_period": int(ai_chats),
+            "errors_period": int(ai_errors),
+            "source": "site_events+admin_logs",
+        },
+    }
 
 
 @router.get("/admin/reservations")
