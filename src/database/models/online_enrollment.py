@@ -5,6 +5,7 @@ from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.database.base import Base
+from src.core.utils.time import utcnow
 
 
 class PaymentModel(str, enum.Enum):
@@ -50,7 +51,7 @@ class OnlineEnrollment(Base):
 
     admin_notes: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     online_course = relationship("OnlineCourse", back_populates="enrollments")
 

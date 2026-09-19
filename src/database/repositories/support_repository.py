@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
@@ -47,14 +47,14 @@ class SupportRepository:
     def reply(self, db: Session, request: SupportRequest, reply_text: str) -> SupportRequest:
         request.admin_reply = reply_text
         request.status = SupportStatus.ANSWERED
-        request.answered_at = datetime.utcnow()
+        request.answered_at = datetime.now(timezone.utc)
         db.commit()
         db.refresh(request)
         return request
 
     def close(self, db: Session, request: SupportRequest) -> SupportRequest:
         request.status = SupportStatus.CLOSED
-        request.closed_at = datetime.utcnow()
+        request.closed_at = datetime.now(timezone.utc)
         db.commit()
         db.refresh(request)
         return request

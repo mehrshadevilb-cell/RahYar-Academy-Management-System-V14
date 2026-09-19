@@ -5,6 +5,7 @@ from sqlalchemy import DateTime, Enum, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.database.base import Base
+from src.core.utils.time import utcnow
 
 
 class ClassInquiryStatus(str, enum.Enum):
@@ -37,8 +38,8 @@ class ClassInquiry(Base):
     )
     reviewed_by_telegram_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
     review_note: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
     user = relationship("User", backref="class_inquiries")
     online_course = relationship("OnlineCourse", backref="class_inquiries")

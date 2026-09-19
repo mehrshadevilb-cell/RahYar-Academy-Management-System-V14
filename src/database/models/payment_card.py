@@ -4,6 +4,7 @@ from sqlalchemy import Boolean, DateTime, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.database.base import Base
+from src.core.utils.time import utcnow
 
 
 class PaymentCard(Base):
@@ -38,5 +39,5 @@ class PaymentCard(Base):
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
+        default=utcnow,
     )

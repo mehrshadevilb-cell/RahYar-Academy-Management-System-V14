@@ -4,6 +4,7 @@ from sqlalchemy import BigInteger, DateTime, Integer, String, Text, UniqueConstr
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.database.base import Base
+from src.core.utils.time import utcnow
 
 
 class KnowledgeItem(Base):
@@ -23,8 +24,8 @@ class KnowledgeItem(Base):
     quiz_ready: Mapped[bool] = mapped_column(default=False, index=True)
     source_chat_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
     source_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 
 class QuizQuestion(Base):
@@ -39,4 +40,4 @@ class QuizQuestion(Base):
     option_d: Mapped[str] = mapped_column(String(500), nullable=False)
     correct_option: Mapped[int] = mapped_column(Integer, nullable=False)
     explanation: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

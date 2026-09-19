@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
@@ -92,7 +92,7 @@ class AssignmentRepository:
         submission.admin_feedback = feedback
         submission.score = score
         submission.status = status
-        submission.reviewed_at = datetime.utcnow()
+        submission.reviewed_at = datetime.now(timezone.utc)
         db.commit()
         db.refresh(submission)
         return submission

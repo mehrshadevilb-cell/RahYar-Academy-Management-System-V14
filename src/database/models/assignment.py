@@ -5,6 +5,7 @@ from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, String, Tex
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.database.base import Base
+from src.core.utils.time import utcnow
 
 
 class SubmissionStatus(str, enum.Enum):
@@ -30,7 +31,7 @@ class Assignment(Base):
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     online_course = relationship("OnlineCourse", backref="assignments")
 
@@ -60,7 +61,7 @@ class AssignmentSubmission(Base):
 
     score: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 

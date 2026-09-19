@@ -4,6 +4,7 @@ from sqlalchemy import DateTime, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.database.base import Base
+from src.core.utils.time import utcnow
 
 
 class AdminLog(Base):
@@ -30,5 +31,5 @@ class AdminLog(Base):
     description: Mapped[str] = mapped_column(String(500), nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, index=True
+        DateTime, default=utcnow, index=True
     )

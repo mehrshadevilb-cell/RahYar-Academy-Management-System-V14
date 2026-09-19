@@ -4,6 +4,7 @@ from sqlalchemy import DateTime, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.database.base import Base
+from src.core.utils.time import utcnow
 
 
 class TelegramAccount(Base):
@@ -32,7 +33,7 @@ class TelegramAccount(Base):
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
+        default=utcnow,
     )
 
     user = relationship(

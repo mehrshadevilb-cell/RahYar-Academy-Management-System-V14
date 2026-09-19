@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
@@ -73,7 +73,7 @@ class PaymentService:
 
         payment.status = "approved"
         payment.approved_by_id = admin_telegram_id
-        payment.reviewed_at = datetime.utcnow()
+        payment.reviewed_at = datetime.now(timezone.utc)
 
         db.commit()
         db.refresh(payment)
@@ -100,7 +100,7 @@ class PaymentService:
 
         payment.status = "rejected"
         payment.approved_by_id = admin_telegram_id
-        payment.reviewed_at = datetime.utcnow()
+        payment.reviewed_at = datetime.now(timezone.utc)
         payment.admin_notes = reason
 
         db.commit()

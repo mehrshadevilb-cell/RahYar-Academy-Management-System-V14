@@ -5,6 +5,7 @@ from sqlalchemy import DateTime, Enum, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.database.base import Base
+from src.core.utils.time import utcnow
 
 
 class SupportStatus(str, enum.Enum):
@@ -36,7 +37,7 @@ class SupportRequest(Base):
 
     admin_reply: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
     answered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 

@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -107,7 +107,7 @@ def test_validate_rejects_expired_code():
     service.create_code(
         db, code="OLDCODE", discount_type=DiscountType.PERCENTAGE,
         value=10, max_uses=None,
-        expires_at=datetime.utcnow() - timedelta(days=1),
+        expires_at=datetime.now(timezone.utc) - timedelta(days=1),
     )
 
     result_code, _, _, error = service.validate(db, "OLDCODE", 50_000)

@@ -13,7 +13,7 @@ import json
 import re
 import urllib.error
 import urllib.request
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlparse
 
@@ -215,7 +215,7 @@ class AIAgentKnowledgeRuntime:
         return {x for x in AIAgentKnowledgeRuntime._normalize_quiz_text(value).split() if len(x) > 2}
 
     def _quiz_count_today(self, db: Session) -> int:
-        start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
         return len(db.scalars(select(QuizQuestion.id).where(QuizQuestion.created_at >= start)).all())
 
     def _quiz_corpus(self, db: Session) -> list[KnowledgeItem]:
@@ -396,7 +396,7 @@ class AIAgentKnowledgeRuntime:
                     pass
 
     async def run_once(self) -> None:
-        started = datetime.utcnow() - timedelta(seconds=5)
+        started = datetime.now(timezone.utc) - timedelta(seconds=5)
         new_items, quiz, groups = await asyncio.to_thread(self._sync_in_thread, started)
         await self._publish(new_items, quiz, groups)
 

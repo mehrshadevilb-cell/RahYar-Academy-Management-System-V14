@@ -5,6 +5,7 @@ from sqlalchemy import DateTime, Enum, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.database.base import Base
+from src.core.utils.time import utcnow
 
 
 class AttendanceStatus(str, enum.Enum):
@@ -41,6 +42,6 @@ class Attendance(Base):
 
     admin_note: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     enrollment = relationship("OnlineEnrollment", back_populates="attendances")

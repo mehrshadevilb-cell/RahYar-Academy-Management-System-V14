@@ -146,12 +146,18 @@ class AIProviderRouter:
         # Generic convention: PREFIX_API_KEY + PREFIX_BASE_URL (or
         # PREFIX_API_BASE_URL), with optional PREFIX_MODEL.
         excluded_prefixes = {"MUSIC_AUDIO", "DATABASE", "SPOTPLAYER"}
+        # AI_API_KEY/AI2_API_KEY are the explicit primary/secondary contracts.
+        # Do not duplicate them through ambient OPENAI_* variables injected by
+        # the hosting environment.
+        explicit_ai_keys = bool((os.getenv("AI_API_KEY") or "").strip() or (os.getenv("AI2_API_KEY") or "").strip())
         priority = 10
         for key_var, value in sorted(os.environ.items()):
             if not key_var.endswith("_API_KEY") or key_var in {"AI_API_KEY", "AI2_API_KEY"}:
                 continue
             prefix = key_var[:-len("_API_KEY")].strip()
             if not prefix or prefix in excluded_prefixes:
+                continue
+            if explicit_ai_keys and prefix == "OPENAI":
                 continue
             key = (value or "").strip()
             if not key:
@@ -198,6 +204,11 @@ class AIProviderRouter:
         return providers
 
     def _discover_env_provider_models(self, provider: AIProvider, timeout_seconds: int = 10) -> AIProvider:
+        # A configured model is an explicit routing contract. Catalog probing
+        # belongs to the health diagnostic path; probing here adds latency and
+        # makes normal chat depend on an optional /models endpoint.
+        if provider.models:
+            return provider
         # Even when ENV pins a model, also inspect the provider catalog so newly
         # added/rotated models become available without another code change.
         cache_key = (provider.name.lower(), provider.base_url.rstrip("/"))
@@ -282,7 +293,10 @@ class AIProviderRouter:
         # providers as an independent pool. Previously these were only added
         # when AI_PROVIDERS_JSON was empty, which silently ignored Anthropic/XKIRO
         # in production because the existing providers are already configured.
-        env_providers = self._env_providers()
+        # JSON configuration is authoritative. Mixing it with ambient process
+        # environment variables makes tests and production deployments pick up
+        # unrelated credentials unexpectedly.
+        env_providers = [] if configured else self._env_providers()
         candidates = configured + db_providers + env_providers
         if not candidates:
             raise AIProviderError("No AI provider is configured")
@@ -358,8 +372,6 @@ class AIProviderRouter:
                 if max(self._cooldown_until.get(provider.name, 0), self._model_cooldown_until.get(model_key, 0)) > now:
                     continue
                 candidates.append((provider, model))
-        if not candidates:
-            candidates = [(provider, model) for provider in providers for model in provider.models if not self._is_stale_model_id(model)]
         candidates.sort(key=lambda item: (not self._is_free_model(item[1]), item[0].priority, item[1]))
         return candidates
 
@@ -477,6 +489,22 @@ class AIProviderRouter:
         now = time.time()
         skipped_until: list[float] = []
         attempted = 0
+        if not candidates:
+            for provider in providers:
+                for model in provider.models:
+                    blocked_until = max(
+                        self._cooldown_until.get(provider.name, 0),
+                        self._model_cooldown_until.get(f"{provider.name}:{model}", 0),
+                    )
+                    if blocked_until > now:
+                        skipped_until.append(blocked_until)
+            if skipped_until:
+                retry_after = max(1, int(min(skipped_until) - time.time()))
+                raise AIProviderError(
+                    "All configured AI models are cooling down",
+                    retryable=True,
+                    retry_after=retry_after,
+                )
         for provider, model in candidates:
             model_key = f"{provider.name}:{model}"
             provider_until = self._cooldown_until.get(provider.name, 0)

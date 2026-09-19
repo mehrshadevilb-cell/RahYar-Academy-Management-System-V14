@@ -5,6 +5,7 @@ from sqlalchemy import Boolean, Date, DateTime, Enum, ForeignKey, Integer
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.database.base import Base
+from src.core.utils.time import utcnow
 
 
 class InstallmentStatus(str, enum.Enum):
@@ -46,6 +47,6 @@ class Installment(Base):
     reminder_1d_sent: Mapped[bool] = mapped_column(Boolean, default=False)
     reminder_due_sent: Mapped[bool] = mapped_column(Boolean, default=False)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     enrollment = relationship("OnlineEnrollment", back_populates="installments")

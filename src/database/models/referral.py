@@ -5,6 +5,7 @@ from sqlalchemy import DateTime, Enum, ForeignKey, BigInteger
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.database.base import Base
+from src.core.utils.time import utcnow
 
 
 class ReferralStatus(str, enum.Enum):
@@ -45,6 +46,6 @@ class Referral(Base):
         ForeignKey("discount_codes.id"), nullable=True
     )
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     rewarded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

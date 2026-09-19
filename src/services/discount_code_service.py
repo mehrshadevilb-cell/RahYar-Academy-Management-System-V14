@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
@@ -96,8 +96,14 @@ class DiscountCodeService:
         if not discount_code.is_active:
             return None, price, 0, "❌ این کد تخفیف غیرفعال شده است."
 
-        if discount_code.expires_at and discount_code.expires_at < datetime.utcnow():
-            return None, price, 0, "❌ مهلت استفاده از این کد تخفیف به پایان رسیده است."
+        if discount_code.expires_at:
+            expires_at = discount_code.expires_at
+            # SQLite and older rows may return naive UTC values even though
+            # production PostgreSQL stores timezone-aware timestamps.
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            if expires_at < datetime.now(timezone.utc):
+                return None, price, 0, "❌ مهلت استفاده از این کد تخفیف به پایان رسیده است."
 
         if (
             discount_code.max_uses is not None

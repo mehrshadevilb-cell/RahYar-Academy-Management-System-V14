@@ -1,5 +1,5 @@
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
@@ -84,7 +84,7 @@ class ReferralService:
 
         referral.reward_discount_code_id = code.id
         referral.status = ReferralStatus.REWARDED
-        referral.rewarded_at = datetime.utcnow()
+        referral.rewarded_at = datetime.now(timezone.utc)
 
         db.commit()
         db.refresh(referral)
@@ -105,7 +105,7 @@ class ReferralService:
                 discount_type=DiscountType.PERCENTAGE,
                 value=REFERRAL_REWARD_PERCENTAGE,
                 max_uses=1,
-                expires_at=datetime.utcnow() + timedelta(days=REFERRAL_REWARD_VALIDITY_DAYS),
+                expires_at=datetime.now(timezone.utc) + timedelta(days=REFERRAL_REWARD_VALIDITY_DAYS),
             )
 
             if code:

@@ -4,6 +4,7 @@ from sqlalchemy import DateTime, Index, JSON, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.database.base import Base
+from src.core.utils.time import utcnow
 
 
 class SiteEvent(Base):
@@ -18,4 +19,4 @@ class SiteEvent(Base):
     path: Mapped[str] = mapped_column(String(240), nullable=False, default="/")
     visitor_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     event_metadata: Mapped[dict | None] = mapped_column("metadata", JSON, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from aiogram import Router, F, Bot
 from aiogram.types import CallbackQuery, BufferedInputFile
@@ -21,7 +21,7 @@ def _is_owner(user_id: int) -> bool:
 
 
 def _filename(prefix: str) -> str:
-    return f"{prefix}_{datetime.utcnow().strftime('%Y%m%d_%H%M')}.csv"
+    return f"{prefix}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M')}.csv"
 
 
 @router.callback_query(F.data == "admin_reports")
