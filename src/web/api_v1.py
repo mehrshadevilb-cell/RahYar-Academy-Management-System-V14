@@ -695,6 +695,37 @@ async def admin_delete_free_lesson(
     db.commit()
 
 
+@router.get("/web/students/{user_id}/courses/{course_id}/access")
+async def web_student_course_access(
+    user_id: int,
+    course_id: int,
+    x_bridge_secret: str | None = Header(default=None, alias="X-Bridge-Secret"),
+    db: Session = Depends(get_db),
+):
+    expected = (settings.WEB_STUDENT_BRIDGE_SECRET or "").strip()
+    if not expected or not x_bridge_secret or not secrets.compare_digest(x_bridge_secret, expected):
+        raise HTTPException(status_code=403, detail="bridge_access_denied")
+    user = db.query(User).filter(User.id == user_id, User.role == UserRole.STUDENT, User.is_active.is_(True)).first()
+    course = db.query(Course).filter(Course.id == course_id, Course.is_active.is_(True)).first()
+    if not user or not course:
+        raise HTTPException(status_code=404, detail="course_access_not_found")
+    approved_payment = db.query(Payment).filter(
+        Payment.user_id == user_id,
+        Payment.course_id == course_id,
+        Payment.status.in_(["approved", "paid", "completed"]),
+    ).first()
+    if approved_payment:
+        return {"ok": True, "access": True, "source": "approved_payment", "course_id": course_id}
+    # A successfully issued license is also a valid access grant.
+    from src.database.models.license import License
+    license_row = db.query(License).filter(
+        License.user_id == user_id,
+        License.product_id == course_id,
+        License.status.in_(["approved", "active", "delivered", "issued"]),
+    ).first()
+    return {"ok": True, "access": bool(license_row), "source": "license" if license_row else None, "course_id": course_id}
+
+
 @router.get("/products/{product_id}", response_model=ProductOut)
 async def get_product(product_id: int, db: Session = Depends(get_db)):
     product = order_service.get_product(db, product_id)
