@@ -703,7 +703,7 @@ async def web_student_course_access(
     x_bridge_secret: str | None = Header(default=None, alias="X-Bridge-Secret"),
     db: Session = Depends(get_db),
 ):
-    expected = (settings.WEB_STUDENT_BRIDGE_SECRET or "").strip()
+    expected = (settings.WEB_STUDENT_BRIDGE_SECRET or settings.WEB_ADMIN_API_KEY or "").strip()
     if not expected or not x_bridge_secret or not secrets.compare_digest(x_bridge_secret, expected):
         raise HTTPException(status_code=403, detail="bridge_access_denied")
     user = db.query(User).filter(User.id == user_id, User.role == UserRole.STUDENT, User.is_active.is_(True)).first()
