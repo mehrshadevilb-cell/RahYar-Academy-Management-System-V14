@@ -53,6 +53,7 @@ class Settings(BaseSettings):
     SITE_NAME: str = "آکادمی راه‌یار"
     SITE_TAGLINE: str = "آموزش حرفه‌ای موسیقی — دوره‌های دیجیتال و کلاس آنلاین"
     WEB_ADMIN_API_KEY: str = ""
+    WEB_STUDENT_BRIDGE_SECRET: str = ""
     ANALYTICS_HASH_SECRET: str = ""
 
     AI_AGENT_ENABLED: bool = True
