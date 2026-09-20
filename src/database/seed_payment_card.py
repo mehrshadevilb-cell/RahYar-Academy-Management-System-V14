@@ -10,43 +10,45 @@ point on. Managing/replacing cards afterwards is an admin-panel task.
 from src.database.session import SessionLocal
 from src.database.models.payment_card import PaymentCard
 from src.core.config.settings import get_settings
+from src.core.logging.logger import get_logger
+
+logger = get_logger("rahyar.seed.payment_card")
 
 
-def seed_default_card():
-
+def seed_default_card() -> None:
     settings = get_settings()
 
     if not settings.DEFAULT_CARD_NUMBER or not settings.DEFAULT_CARD_HOLDER:
-        print(
-            "DEFAULT_CARD_NUMBER / DEFAULT_CARD_HOLDER not set in .env - "
-            "skipping card seed."
+        logger.info(
+            "DEFAULT_CARD_NUMBER / DEFAULT_CARD_HOLDER not set - skipping card seed."
         )
         return
 
     db = SessionLocal()
+    try:
+        existing = (
+            db.query(PaymentCard)
+            .filter(PaymentCard.card_number == settings.DEFAULT_CARD_NUMBER)
+            .first()
+        )
 
-    existing = (
-        db.query(PaymentCard)
-        .filter(PaymentCard.card_number == settings.DEFAULT_CARD_NUMBER)
-        .first()
-    )
+        if existing:
+            logger.info("Default card already exists - skipping.")
+            return
 
-    if existing:
-        print("Default card already exists - skipping.")
+        card = PaymentCard(
+            card_number=settings.DEFAULT_CARD_NUMBER,
+            card_holder=settings.DEFAULT_CARD_HOLDER,
+            is_active=True,
+        )
+        db.add(card)
+        db.commit()
+        logger.info("Default payment card added.")
+    except Exception:
+        db.rollback()
+        logger.exception("seed_default_card failed; continuing startup")
+    finally:
         db.close()
-        return
-
-    card = PaymentCard(
-        card_number=settings.DEFAULT_CARD_NUMBER,
-        card_holder=settings.DEFAULT_CARD_HOLDER,
-        is_active=True,
-    )
-
-    db.add(card)
-    db.commit()
-    db.close()
-
-    print("Default payment card added.")
 
 
 if __name__ == "__main__":

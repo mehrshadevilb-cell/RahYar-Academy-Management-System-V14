@@ -227,8 +227,6 @@ async def _prepare_telegram_polling() -> None:
             )
             logger.info("Telegram Mini App menu button configured")
         except Exception:
-            # Polling must remain available if Telegram rejects a URL before
-            # the owner completes BotFather domain configuration.
             logger.exception("Telegram Mini App menu setup failed")
     await bot.delete_webhook(drop_pending_updates=False)
     logger.info("Telegram webhook cleared; polling can start")
@@ -278,12 +276,21 @@ async def start_bot():
         return
     try:
         ensure_critical_schema()
-        logger.info("schema_guard: critical columns verified")
+        logger.info("schema_guard: critical schema verified")
     except Exception:
-        logger.exception("schema_guard failed; bot may hit UndefinedColumn errors")
-    seed_default_card()
-    seed_default_products()
-    seed_default_online_courses()
+        logger.exception("schema_guard failed; continuing startup")
+
+    # Seeds must never take down the whole process on a partial schema.
+    for name, fn in (
+        ("seed_default_card", seed_default_card),
+        ("seed_default_products", seed_default_products),
+        ("seed_default_online_courses", seed_default_online_courses),
+    ):
+        try:
+            fn()
+        except Exception:
+            logger.exception("%s failed; continuing startup", name)
+
     await _auto_configure_ai_at_startup()
     setup_handlers()
 
@@ -312,12 +319,14 @@ def run_web():
         ensure_critical_schema()
     except Exception:
         logger.exception("schema_guard failed before web startup")
+    logger.info("Starting web on 0.0.0.0:%s build=%s", port, _build_id())
     uvicorn.run(app, host="0.0.0.0", port=port)
 
 
 async def main():
     logger.info("Booting application... build=%s", _build_id())
-    web_thread = threading.Thread(target=run_web, daemon=True)
+    # Bind HTTP first so Render health checks pass even if bot seeding is slow.
+    web_thread = threading.Thread(target=run_web, daemon=True, name="rahyar-web")
     web_thread.start()
     await start_bot()
 
