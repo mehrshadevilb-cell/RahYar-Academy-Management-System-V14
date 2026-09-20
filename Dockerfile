@@ -14,6 +14,7 @@ COPY docker-build-id.txt /tmp/rahyar-build-id.txt
 COPY . .
 
 ENV RAHYAR_BUILD_ID=20260921-migrate-boot-v1
+ENV PYTHONPATH=/app
 
 # migrate_boot: if production DB already has schema but empty alembic_version,
 # stamp head first, then upgrade. Avoids DuplicateTable/DuplicateObject loops.
