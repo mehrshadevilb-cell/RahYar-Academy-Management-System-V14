@@ -3,10 +3,10 @@
 Revision ID: 0009
 Revises: 0008
 
-PostgreSQL requires ALTER TYPE ... ADD VALUE to be committed before a newly
-added enum value can be used. Therefore enum additions are executed in an
-Alembic autocommit block, followed by the data conversion in the normal
-transaction.
+PostgreSQL 12+ allows ALTER TYPE ... ADD VALUE inside a transaction and
+immediately using the new label. Avoid Alembic autocommit_block() which
+asserts on _transaction and crashes under our env.py + psycopg3 setup on
+Render (AssertionError: self._transaction is not None).
 """
 from typing import Sequence, Union
 
@@ -33,31 +33,28 @@ def upgrade() -> None:
         # SQLite stores this enum as text and cannot execute PostgreSQL DO/
         # ALTER TYPE statements. The labels are already representable there.
         return
-    # PostgreSQL does not allow a newly-added enum label to be used in the
-    # same transaction. Commit each ALTER TYPE block before converting rows.
+
     for label in _LABELS:
         escaped = label.replace("'", "''")
-        with op.get_context().autocommit_block():
-            op.execute(
-                f"""
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (
-                        SELECT 1
-                        FROM pg_enum e
-                        JOIN pg_type t ON t.oid = e.enumtypid
-                        WHERE t.typname = 'reservationstatus'
-                          AND e.enumlabel = '{escaped}'
-                    ) THEN
-                        ALTER TYPE reservationstatus ADD VALUE '{escaped}';
-                    END IF;
-                END
-                $$;
-                """
-            )
+        op.execute(
+            f"""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1
+                    FROM pg_enum e
+                    JOIN pg_type t ON t.oid = e.enumtypid
+                    WHERE t.typname = 'reservationstatus'
+                      AND e.enumlabel = '{escaped}'
+                ) THEN
+                    ALTER TYPE reservationstatus ADD VALUE '{escaped}';
+                END IF;
+            END
+            $$;
+            """
+        )
 
-    # Now that all canonical labels have been committed, normalize existing
-    # rows created with the previous lowercase labels.
+    # Canonical labels are available in this same transaction on PG 12+.
     op.execute(
         """
         UPDATE reservations
