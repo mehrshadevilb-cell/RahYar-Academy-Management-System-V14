@@ -13,6 +13,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY docker-build-id.txt /tmp/rahyar-build-id.txt
 COPY . .
 
-ENV RAHYAR_BUILD_ID=20260916-design-skills-v31
+ENV RAHYAR_BUILD_ID=20260921-migrate-boot-v1
 
-CMD ["sh", "-c", "alembic upgrade head && python -m src.main"]
+# migrate_boot: if production DB already has schema but empty alembic_version,
+# stamp head first, then upgrade. Avoids DuplicateTable/DuplicateObject loops.
+CMD ["sh", "-c", "python -m scripts.migrate_boot && python -m src.main"]
