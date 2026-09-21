@@ -289,20 +289,20 @@ class AIProviderRouter:
                 if key and base_url and models:
                     configured.append(AIProvider(name=name, api_key=key, base_url=base_url, models=tuple(models), priority=int(row.get("priority", 100)), provider_type=str(row.get("provider_type", "") or self._infer_provider_type(name, base_url))))
 
-        # Keep the existing DB/JSON providers, but always append dedicated ENV
-        # providers as an independent pool. Previously these were only added
-        # when AI_PROVIDERS_JSON was empty, which silently ignored Anthropic/XKIRO
-        # in production because the existing providers are already configured.
-        # JSON configuration is authoritative. Mixing it with ambient process
-        # environment variables makes tests and production deployments pick up
-        # unrelated credentials unexpectedly.
-        env_providers = [] if configured else self._env_providers()
-        candidates = configured + db_providers + env_providers
+        # Production AI routing is database-only. API credentials and base URLs
+        # are managed in the encrypted ai_providers table so Render environment
+        # variables cannot silently override or inject an unrelated AI route.
+        # AI_PROVIDERS_JSON / AI_* / provider-specific *_API_KEY variables are
+        # intentionally ignored by the runtime router.
+        candidates = db_providers
         if not candidates:
-            raise AIProviderError("No AI provider is configured")
+            raise AIProviderError("No active AI provider is configured in the database")
 
-        discovered_candidates = [self._discover_env_provider_models(provider) for provider in candidates]
-        return self._merge_providers(discovered_candidates)
+        # DB models are the explicit routing contract. Keep their stored order
+        # and let _ordered_candidates apply the deterministic Free -> paid /
+        # priority ordering. Catalog discovery is performed by the health/admin
+        # layer, not on every chat request.
+        return self._merge_providers(candidates)
 
     def providers(self) -> list[AIProvider]:
         return self._parse()
