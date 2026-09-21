@@ -31,18 +31,23 @@ class LatencyAwareAIProviderRouter(AIProviderRouter):
         candidates = [(provider, model) for provider in providers for model in provider.models]
         now = time.time()
 
-        def score(item: tuple[AIProvider, str]) -> tuple[int, int, float, int, str]:
+        def score(item: tuple[AIProvider, str]) -> tuple[int, int, int, int, float, str]:
             provider, model = item
             key = self._key(provider, model)
             latency = self._latency_ms.get(key)
             last_success = self._last_success.get(key, 0.0)
-            measured = 0 if latency is not None else 1
+            # Routing order is deterministic: free models first, then provider
+            # priority, then model priority. Latency is only a tie-breaker and
+            # must never cause a slower paid route to jump ahead of a free route.
+            free_rank = 0 if self._is_free_model(model) else 1
             stale_penalty = 0 if last_success and now - last_success <= 300 else 1
+            measured = 0 if latency is not None else 1
             return (
-                measured,
-                stale_penalty,
-                latency if latency is not None else 10_000.0,
+                free_rank,
                 provider.priority,
+                stale_penalty,
+                measured,
+                latency if latency is not None else 10_000.0,
                 model,
             )
 
