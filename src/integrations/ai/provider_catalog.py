@@ -63,7 +63,6 @@ PROVIDER_PRESETS: tuple[ProviderPreset, ...] = (
     ),
     ProviderPreset("dahl", "Dahl", "https://inference.dahl.global/v1", api_key_env="DAHL_API_KEY"),
 )
-)
 
 
 def get_provider_preset(name: str) -> ProviderPreset:
