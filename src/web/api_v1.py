@@ -337,7 +337,21 @@ async def admin_analytics_ai(
     _admin: None = Depends(require_web_admin),
 ):
     """Run parallel traffic/conversion/reliability analysis through RahYar AI."""
-    return await __import__("asyncio").to_thread(analytics_analyzer.analyze, db, days)
+    try:
+        return await __import__("asyncio").to_thread(analytics_analyzer.analyze, db, days)
+    except Exception as exc:
+        # AI diagnostics are optional; never turn the whole analytics page into a 500.
+        import logging
+        logging.getLogger("web.api_v1").exception("Analytics AI failed")
+        return {
+            "ok": False,
+            "error": "analytics_ai_unavailable",
+            "message": f"AI analytics unavailable: {type(exc).__name__}",
+            "snapshot": None,
+            "specialists": [],
+            "synthesis": "",
+            "mode": "unavailable",
+        }
 
 
 @router.get("/admin/analytics/summary")
