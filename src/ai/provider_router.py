@@ -146,6 +146,36 @@ class AIProviderRouter:
         # Generic convention: PREFIX_API_KEY + PREFIX_BASE_URL (or
         # PREFIX_API_BASE_URL), with optional PREFIX_MODEL.
         excluded_prefixes = {"MUSIC_AUDIO", "DATABASE", "SPOTPLAYER"}
+        # Known providers get safe default base URLs; any other PREFIX_API_KEY
+        # can still opt in by defining PREFIX_BASE_URL or PREFIX_API_BASE_URL.
+        default_base_urls = {
+            "OPENAI": "https://api.openai.com/v1",
+            "OPENROUTER": "https://openrouter.ai/api/v1",
+            "AGENTROUTER": "https://agentrouter.org/v1",
+            "ORCAROUTER": "https://api.orcarouter.ai/v1",
+            "GOOGLE": "https://generativelanguage.googleapis.com/v1beta",
+            "GEMINI": "https://generativelanguage.googleapis.com/v1beta",
+            "ANTHROPIC": "https://api.anthropic.com/v1",
+            "XKIRO": "https://api.xkiro.com/v1",
+            "GROQ": "https://api.groq.com/openai/v1",
+            "DEEPSEEK": "https://api.deepseek.com/v1",
+            "MISTRAL": "https://api.mistral.ai/v1",
+            "TOGETHER": "https://api.together.xyz/v1",
+            "FIREWORKS": "https://api.fireworks.ai/inference/v1",
+            "CEREBRAS": "https://api.cerebras.ai/v1",
+            "SAMBANOVA": "https://api.sambanova.ai/v1",
+            "DEEPINFRA": "https://api.deepinfra.com/v1/openai",
+            "NEBIUS": "https://api.tokenfactory.nebius.com/v1",
+            "NVIDIA": "https://integrate.api.nvidia.com/v1",
+            "PERPLEXITY": "https://api.perplexity.ai",
+            "COHERE": "https://api.cohere.com/compatibility/v1",
+            "HUGGINGFACE": "https://router.huggingface.co/v1",
+            "NOVITA": "https://api.novita.ai/openai",
+            "SILICONFLOW": "https://api.siliconflow.com/v1",
+            "CHUTES": "https://llm.chutes.ai/v1",
+            "XAI": "https://api.x.ai/v1",
+            "BYTEZ": "https://api.bytez.com/v1",
+        }
         # AI_API_KEY/AI2_API_KEY are the explicit primary/secondary contracts.
         # Do not duplicate them through ambient OPENAI_* variables injected by
         # the hosting environment.
@@ -162,7 +192,7 @@ class AIProviderRouter:
             key = (value or "").strip()
             if not key:
                 continue
-            base_url = (os.getenv(f"{prefix}_BASE_URL") or os.getenv(f"{prefix}_API_BASE_URL") or "").strip()
+            base_url = (os.getenv(f"{prefix}_BASE_URL") or os.getenv(f"{prefix}_API_BASE_URL") or default_base_urls.get(prefix) or "").strip()
             if not base_url:
                 continue
             model = (os.getenv(f"{prefix}_MODEL") or "").strip()
