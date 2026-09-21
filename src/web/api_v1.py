@@ -346,112 +346,143 @@ async def admin_analytics_summary(
     db: Session = Depends(get_db),
     _admin: None = Depends(require_web_admin),
 ):
-    """Return the same time window used by the admin analytics dashboard."""
+    """Return analytics without allowing an optional metric/table failure to blank the dashboard."""
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     since = now - timedelta(days=days)
     since_7 = now - timedelta(days=7)
 
-    visits_period = db.query(func.count(SiteEvent.id)).filter(
-        SiteEvent.event_type == "page_view",
-        SiteEvent.created_at >= since,
-    ).scalar() or 0
-    visitors_period = db.query(func.count(func.distinct(SiteEvent.visitor_hash))).filter(
-        SiteEvent.event_type == "page_view",
-        SiteEvent.created_at >= since,
-    ).scalar() or 0
-    visits_7 = db.query(func.count(SiteEvent.id)).filter(
-        SiteEvent.event_type == "page_view",
-        SiteEvent.created_at >= since_7,
-    ).scalar() or 0
-    top_paths = db.query(
-        SiteEvent.path,
-        func.count(SiteEvent.id).label("count"),
-    ).filter(
-        SiteEvent.event_type == "page_view",
-        SiteEvent.created_at >= since,
-    ).group_by(SiteEvent.path).order_by(desc("count")).limit(10).all()
-    page_rows = db.query(SiteEvent.event_type, SiteEvent.path, SiteEvent.event_metadata).filter(
-        SiteEvent.created_at >= since,
-    ).all()
+    def scalar_count(query) -> int:
+        try:
+            return int(query.scalar() or 0)
+        except Exception:
+            logger.exception("Analytics scalar query failed")
+            db.rollback()
+            return 0
+
+    # Core website traffic. If site_events itself is unavailable, return a valid
+    # empty snapshot instead of leaking a generic 500 to the admin UI.
+    try:
+        visits_period = scalar_count(db.query(func.count(SiteEvent.id)).filter(
+            SiteEvent.event_type == "page_view",
+            SiteEvent.created_at >= since,
+        ))
+        visitors_period = scalar_count(db.query(func.count(func.distinct(SiteEvent.visitor_hash))).filter(
+            SiteEvent.event_type == "page_view",
+            SiteEvent.created_at >= since,
+        ))
+        visits_7 = scalar_count(db.query(func.count(SiteEvent.id)).filter(
+            SiteEvent.event_type == "page_view",
+            SiteEvent.created_at >= since_7,
+        ))
+        top_paths = db.query(
+            SiteEvent.path,
+            func.count(SiteEvent.id).label("count"),
+        ).filter(
+            SiteEvent.event_type == "page_view",
+            SiteEvent.created_at >= since,
+        ).group_by(SiteEvent.path).order_by(desc("count")).limit(10).all()
+    except Exception:
+        logger.exception("Analytics traffic query failed")
+        db.rollback()
+        visits_period = visitors_period = visits_7 = 0
+        top_paths = []
+
+    # Event/attribution/device data is secondary; a schema/data problem here
+    # must not take down the traffic dashboard.
     event_counts: dict[str, int] = {}
     attribution_counts: dict[str, int] = {}
     device_counts: dict[str, int] = {}
-    for event_type, _path, metadata in page_rows:
-        event_counts[event_type] = event_counts.get(event_type, 0) + 1
-        meta = metadata or {}
-        if event_type == "page_view":
-            source = str(meta.get("utm_source") or "").strip() or "direct"
-            attribution_counts[source] = attribution_counts.get(source, 0) + 1
-            device = str(meta.get("device") or "unknown").strip() or "unknown"
-            device_counts[device] = device_counts.get(device, 0) + 1
+    try:
+        page_rows = db.query(
+            SiteEvent.event_type,
+            SiteEvent.path,
+            SiteEvent.event_metadata,
+        ).filter(SiteEvent.created_at >= since).all()
+        for event_type, _path, metadata in page_rows:
+            event_counts[event_type] = event_counts.get(event_type, 0) + 1
+            meta = metadata or {}
+            if event_type == "page_view":
+                source = str(meta.get("utm_source") or "").strip() or "direct"
+                attribution_counts[source] = attribution_counts.get(source, 0) + 1
+                device = str(meta.get("device") or "").strip() or "unknown"
+                device_counts[device] = device_counts.get(device, 0) + 1
+    except Exception:
+        logger.exception("Analytics event dimensions query failed")
+        db.rollback()
 
-    payments_period = db.query(func.count(Payment.id)).filter(
-        Payment.created_at >= since,
-    ).scalar() or 0
-
-    ai_events = db.query(func.count(AdminLog.id)).filter(
+    # Optional database metrics: independently guarded.
+    payments_period = scalar_count(db.query(func.count(Payment.id)).filter(Payment.created_at >= since))
+    ai_events = scalar_count(db.query(func.count(AdminLog.id)).filter(
         AdminLog.created_at >= since,
         AdminLog.action.ilike("%ai%"),
-    ).scalar() or 0
-    ai_chats = db.query(func.count(SiteEvent.id)).filter(
+    ))
+    ai_chats = scalar_count(db.query(func.count(SiteEvent.id)).filter(
         SiteEvent.event_type == "ai_chat",
         SiteEvent.created_at >= since,
-    ).scalar() or 0
-    ai_errors = db.query(func.count(SiteEvent.id)).filter(
+    ))
+    ai_errors = scalar_count(db.query(func.count(SiteEvent.id)).filter(
         SiteEvent.event_type == "ai_error",
         SiteEvent.created_at >= since,
-    ).scalar() or 0
-    active_enrollments = db.query(func.count(OnlineEnrollment.id)).filter(
+    ))
+    active_enrollments = scalar_count(db.query(func.count(OnlineEnrollment.id)).filter(
         OnlineEnrollment.status == EnrollmentStatus.ACTIVE
-    ).scalar() or 0
-    total_enrollments = db.query(func.count(OnlineEnrollment.id)).scalar() or 0
-    active_classes = db.query(func.count(OnlineCourse.id)).filter(
+    ))
+    total_enrollments = scalar_count(db.query(func.count(OnlineEnrollment.id)))
+    active_classes = scalar_count(db.query(func.count(OnlineCourse.id)).filter(
         OnlineCourse.is_active.is_(True)
-    ).scalar() or 0
-    students = db.query(func.count(User.id)).filter(
+    ))
+    students = scalar_count(db.query(func.count(User.id)).filter(
         User.role == UserRole.STUDENT
-    ).scalar() or 0
+    ))
 
+    top_path_items = [{"path": path, "count": int(count)} for path, count in top_paths]
+    snapshot = {
+        "traffic": {
+            "page_views": int(visits_period),
+            "unique_visitors": int(visitors_period),
+            "top_paths": top_path_items,
+            "top_attribution": [
+                {"source": source, "count": count}
+                for source, count in sorted(attribution_counts.items(), key=lambda item: item[1], reverse=True)[:10]
+            ],
+            "devices": device_counts,
+        },
+        "events": [
+            {"event": event_type, "count": int(count)}
+            for event_type, count in sorted(event_counts.items(), key=lambda item: item[1], reverse=True)[:20]
+        ],
+        "conversion": {
+            "orders_started": int(event_counts.get("order_start", 0)),
+            "orders_created": int(payments_period),
+            "orders_completed": int(event_counts.get("order_complete", 0)),
+            "checkout": int(event_counts.get("checkout_view", 0) + event_counts.get("checkout_start", 0)),
+            "class_inquiries": int(event_counts.get("class_inquiry", 0)),
+            "bot_clicks": int(event_counts.get("bot_click", 0)),
+        },
+        "ai": {"website_chats": int(ai_chats), "errors": int(ai_errors)},
+        "education": {
+            "students": int(students),
+            "active_classes": int(active_classes),
+            "active_enrollments": int(active_enrollments),
+        },
+    }
     return {
         "period_days": days,
         "site": {
             "page_views_7d": int(visits_7),
             "page_views_period": int(visits_period),
-            "page_views_30d": int(visits_period if days == 30 else db.query(func.count(SiteEvent.id)).filter(
+            "page_views_30d": int(visits_period if days == 30 else scalar_count(db.query(func.count(SiteEvent.id)).filter(
                 SiteEvent.event_type == "page_view",
                 SiteEvent.created_at >= now - timedelta(days=30),
-            ).scalar() or 0),
+            ))),
             "unique_visitors_period": int(visitors_period),
-            "unique_visitors_30d": int(visitors_period if days == 30 else db.query(func.count(func.distinct(SiteEvent.visitor_hash))).filter(
+            "unique_visitors_30d": int(visitors_period if days == 30 else scalar_count(db.query(func.count(func.distinct(SiteEvent.visitor_hash))).filter(
                 SiteEvent.event_type == "page_view",
                 SiteEvent.created_at >= now - timedelta(days=30),
-            ).scalar() or 0),
-            "top_paths": [{"path": path, "count": int(count)} for path, count in top_paths],
+            ))),
+            "top_paths": top_path_items,
         },
-        "snapshot": {
-            "traffic": {
-                "page_views": int(visits_period),
-                "unique_visitors": int(visitors_period),
-                "top_paths": [{"path": path, "count": int(count)} for path, count in top_paths],
-                "top_attribution": [{"source": source, "count": int(count)} for source, count in sorted(attribution_counts.items(), key=lambda item: item[1], reverse=True)[:10]],
-                "devices": device_counts,
-            },
-            "events": [{"event": event_type, "count": int(count)} for event_type, count in sorted(event_counts.items(), key=lambda item: item[1], reverse=True)[:20]],
-            "conversion": {
-                "orders_started": int(event_counts.get("order_start", 0)),
-                "orders_created": int(payments_period),
-                "orders_completed": int(event_counts.get("order_complete", 0)),
-                "checkout": int(event_counts.get("checkout_view", 0) + event_counts.get("checkout_start", 0)),
-                "class_inquiries": int(event_counts.get("class_inquiry", 0)),
-                "bot_clicks": int(event_counts.get("bot_click", 0)),
-            },
-            "ai": {"website_chats": int(ai_chats), "errors": int(ai_errors)},
-            "education": {
-                "students": int(students),
-                "active_classes": int(active_classes),
-                "active_enrollments": int(active_enrollments),
-            },
-        },
+        "snapshot": snapshot,
         "education": {
             "active_classes": int(active_classes),
             "active_enrollments": int(active_enrollments),
@@ -460,9 +491,10 @@ async def admin_analytics_summary(
         },
         "ai_agent": {
             "admin_ai_events_period": int(ai_events),
-            "website_chats_period": int(ai_chats),
-            "errors_period": int(ai_errors),
-            "source": "site_events+admin_logs",
+            "admin_ai_events_30d": int(ai_events if days == 30 else scalar_count(db.query(func.count(AdminLog.id)).filter(
+                AdminLog.created_at >= now - timedelta(days=30),
+                AdminLog.action.ilike("%ai%"),
+            ))),
         },
     }
 
