@@ -67,22 +67,29 @@ class WebsiteAnalyticsAnalyzer:
             func.count(SiteEvent.id).label("count"),
         ).filter(SiteEvent.created_at >= since).group_by(SiteEvent.event_type).order_by(desc("count")).limit(40).all()
 
-        conversions = {
-            "orders_started": count("order_start", since),
-            "orders_created": count("order_created", since),
-            "checkout": count("checkout", since),
-            "class_inquiries": count("class_inquiry", since),
-            "bot_clicks": count("bot_click", since),
-            "ai_chats": count("ai_chat", since),
-            "ai_errors": count("ai_error", since),
-        }
-        for event_name in ("order_start", "order_created", "checkout", "class_inquiry", "bot_click"):
-            if conversions[event_name] == 0:
+        # Map canonical conversion keys -> primary event_type prefixes.
+        conversion_specs = (
+            ("orders_started", "order_start"),
+            ("orders_created", "order_created"),
+            ("checkout", "checkout"),
+            ("class_inquiries", "class_inquiry"),
+            ("bot_clicks", "bot_click"),
+            ("ai_chats", "ai_chat"),
+            ("ai_errors", "ai_error"),
+        )
+        conversions: dict[str, int] = {}
+        for key, event_prefix in conversion_specs:
+            exact = count(event_prefix, since)
+            if exact > 0:
+                conversions[key] = exact
+            else:
                 # Existing deployments may use suffixed event names.
-                conversions[event_name] = sum(
+                conversions[key] = sum(
                     int(row.count)
                     for row in event_rows
-                    if str(row.event_type).startswith(event_name)
+                    if str(row.event_type) == event_prefix
+                    or str(row.event_type).startswith(f"{event_prefix}_")
+                    or str(row.event_type).startswith(f"{event_prefix}.")
                 )
 
         users = int(db.query(func.count(User.id)).filter(User.role == UserRole.STUDENT).scalar() or 0)
@@ -125,7 +132,10 @@ class WebsiteAnalyticsAnalyzer:
                 "previous_period_page_views": previous_views,
                 "page_view_change_percent": growth,
                 "top_paths": [{"path": str(path), "count": int(value)} for path, value in top_paths],
-                "top_attribution": [{"source": key, "count": value} for key, value in sorted(attribution.items(), key=lambda item: item[1], reverse=True)[:20]],
+                "top_attribution": [
+                    {"label": key, "source": key, "count": value}
+                    for key, value in sorted(attribution.items(), key=lambda item: item[1], reverse=True)[:20]
+                ],
                 "devices": devices,
             },
             "events": [{"event": str(event_type), "count": int(value)} for event_type, value in event_rows],
