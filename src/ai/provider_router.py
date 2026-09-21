@@ -359,7 +359,17 @@ class AIProviderRouter:
         if code == 429:
             return True
         lowered = body.lower()
-        return code in {402, 403} and any(x in lowered for x in ("rate", "capacity", "quota", "limit"))
+        # Payment/quota exhaustion is a route failure, not a fatal assistant
+        # failure. Quarantine this model briefly so the router can continue
+        # with another configured provider/model.
+        return code in {402, 403} and any(
+            x in lowered
+            for x in (
+                "rate", "capacity", "quota", "limit",
+                "credit", "credits", "insufficient", "billing",
+                "balance", "funds", "payment required",
+            )
+        )
 
     def _ordered_candidates(self, providers: list[AIProvider]) -> list[tuple[AIProvider, str]]:
         now = time.time()
@@ -532,7 +542,10 @@ class AIProviderRouter:
                     retry_after = self._retry_after(exc.headers, body)
                     lowered = body.lower()
                     if self._is_rate_limited(exc.code, body):
-                        cooldown = min(retry_after or 300, 86400)
+                        # 402/403 quota or credit exhaustion can persist for
+                        # hours, so avoid retrying the same paid route repeatedly.
+                        # Other providers still get a chance in this request.
+                        cooldown = min(retry_after or (3600 if exc.code == 402 else 300), 86400)
                         self._model_cooldown_until[model_key] = time.time() + cooldown
                         last = AIProviderError(f"model rate limited: {provider.name}/{model}", retryable=True, retry_after=cooldown, provider=provider.name, rate_limited=True)
                         break
