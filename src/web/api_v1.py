@@ -279,7 +279,9 @@ async def collect_analytics_event(body: AnalyticsEventIn, request: Request, db: 
     client = forwarded or (request.client.host if request.client else "unknown")
     user_agent = request.headers.get("user-agent", "")[:240]
     secret = settings.ANALYTICS_HASH_SECRET or settings.SECRET_KEY or "artistyar-analytics"
-    visitor_hash = hashlib.sha256(f"{secret}:{client}:{user_agent}".encode()).hexdigest()
+    browser_id = str((body.metadata or {}).get("visitor_id") or "").strip()[:120]
+    visitor_source = browser_id or f"{client}:{user_agent}"
+    visitor_hash = hashlib.sha256(f"{secret}:{visitor_source}".encode()).hexdigest()
 
     # Keep analytics anonymous while preserving the dimensions needed by the
     # admin dashboard (UTM/referrer/device). Never persist the raw IP or UA.
@@ -295,6 +297,7 @@ async def collect_analytics_event(body: AnalyticsEventIn, request: Request, db: 
     for key in ("utm_source", "utm_medium", "utm_campaign", "referrer", "device"):
         if key in metadata:
             metadata[key] = str(metadata[key])[:500]
+    metadata.pop("visitor_id", None)
 
     db.add(
         SiteEvent(
@@ -367,6 +370,25 @@ async def admin_analytics_summary(
         SiteEvent.event_type == "page_view",
         SiteEvent.created_at >= since,
     ).group_by(SiteEvent.path).order_by(desc("count")).limit(10).all()
+    page_rows = db.query(SiteEvent.event_type, SiteEvent.path, SiteEvent.event_metadata).filter(
+        SiteEvent.created_at >= since,
+    ).all()
+    event_counts: dict[str, int] = {}
+    attribution_counts: dict[str, int] = {}
+    device_counts: dict[str, int] = {}
+    for event_type, _path, metadata in page_rows:
+        event_counts[event_type] = event_counts.get(event_type, 0) + 1
+        meta = metadata or {}
+        if event_type == "page_view":
+            source = str(meta.get("utm_source") or "").strip() or "direct"
+            attribution_counts[source] = attribution_counts.get(source, 0) + 1
+            device = str(meta.get("device") or "unknown").strip() or "unknown"
+            device_counts[device] = device_counts.get(device, 0) + 1
+
+    payments_period = db.query(func.count(Payment.id)).filter(
+        Payment.created_at >= since,
+    ).scalar() or 0
+
     ai_events = db.query(func.count(AdminLog.id)).filter(
         AdminLog.created_at >= since,
         AdminLog.action.ilike("%ai%"),
@@ -405,6 +427,30 @@ async def admin_analytics_summary(
                 SiteEvent.created_at >= now - timedelta(days=30),
             ).scalar() or 0),
             "top_paths": [{"path": path, "count": int(count)} for path, count in top_paths],
+        },
+        "snapshot": {
+            "traffic": {
+                "page_views": int(visits_period),
+                "unique_visitors": int(visitors_period),
+                "top_paths": [{"path": path, "count": int(count)} for path, count in top_paths],
+                "top_attribution": [{"source": source, "count": int(count)} for source, count in sorted(attribution_counts.items(), key=lambda item: item[1], reverse=True)[:10]],
+                "devices": device_counts,
+            },
+            "events": [{"event": event_type, "count": int(count)} for event_type, count in sorted(event_counts.items(), key=lambda item: item[1], reverse=True)[:20]],
+            "conversion": {
+                "orders_started": int(event_counts.get("order_start", 0)),
+                "orders_created": int(payments_period),
+                "orders_completed": int(event_counts.get("order_complete", 0)),
+                "checkout": int(event_counts.get("checkout_view", 0) + event_counts.get("checkout_start", 0)),
+                "class_inquiries": int(event_counts.get("class_inquiry", 0)),
+                "bot_clicks": int(event_counts.get("bot_click", 0)),
+            },
+            "ai": {"website_chats": int(ai_chats), "errors": int(ai_errors)},
+            "education": {
+                "students": int(students),
+                "active_classes": int(active_classes),
+                "active_enrollments": int(active_enrollments),
+            },
         },
         "education": {
             "active_classes": int(active_classes),
