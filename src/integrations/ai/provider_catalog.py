@@ -20,6 +20,7 @@ class ProviderPreset:
 # Known gateways. API keys stay in environment variables and are encrypted
 # before being persisted to the database. Model IDs are intentionally not
 # hard-coded: every provider is discovered through its live models endpoint.
+# Render deployment marker: provider bootstrap catalog is deployed from main.
 PROVIDER_PRESETS: tuple[ProviderPreset, ...] = (
     ProviderPreset("orcarouter", "OrcaRouter", "https://api.orcarouter.ai/v1", api_key_env="ORCAROUTER_API_KEY"),
     ProviderPreset("kiraai", "KiraAI", "https://kiraai.vn/api/v1", api_key_env="KIRAAI_API_KEY"),
