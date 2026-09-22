@@ -19,7 +19,10 @@ class TelegramService:
         account = self.repository.get_by_telegram_id(db, telegram_id)
         if account:
             account.username = username
+            if full_name:
+                account.user.full_name = full_name[:100]
             db.commit()
+            db.refresh(account.user)
             return account.user, False
 
         user = self.identity_service.link_telegram_account(
