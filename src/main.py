@@ -266,11 +266,12 @@ def _initialize_application() -> None:
     setup_handlers()
     ensure_critical_schema()
 
+    seed_default_card()
+    seed_default_products()
+    seed_default_online_courses()
+
     db = SessionLocal()
     try:
-        seed_default_card(db)
-        seed_default_products(db)
-        seed_default_online_courses(db)
         try:
             result = auto_configure_ai(db)
             logger.info("AI auto-configuration completed: %s", result)
