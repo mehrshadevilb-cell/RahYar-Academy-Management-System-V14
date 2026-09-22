@@ -1,6 +1,6 @@
 """Canonical student identity and safe website-to-Telegram linking."""
 
-from sqlalchemy import inspect, select, update
+from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from src.database.base import Base
@@ -47,42 +47,46 @@ class CanonicalIdentityService:
 
         account = db.query(TelegramAccount).filter(TelegramAccount.telegram_id == telegram_id).first()
         if account:
+            user = account.user
             if username is not None:
                 account.username = username
-            if phone:
-                normalized = self.normalize_phone(phone)
-                if normalized and not account.user.phone:
-                    account.user.phone = normalized
-            if full_name and not account.user.full_name:
-                account.user.full_name = full_name[:100]
+            # Telegram is the authoritative identity source for the display
+            # name while the account is being synchronized.
+            if full_name:
+                user.full_name = full_name[:100]
+            normalized = self.normalize_phone(phone)
+            if normalized and not user.phone:
+                user.phone = normalized
             db.commit()
-            return account.user
+            db.refresh(user)
+            return user
 
         normalized_phone = self.normalize_phone(phone)
-        # Keep the new Telegram row phone-less until an existing website lead
-        # is merged; otherwise the unique phone constraint rejects the flush.
-        live_user = User(full_name=(full_name or "هنرجو")[:100], phone=None)
-        db.add(live_user)
-        db.flush()
-        from src.database.models.telegram_account import TelegramAccount
 
-        db.add(TelegramAccount(user_id=live_user.id, telegram_id=telegram_id, username=username))
-        db.flush()
-
+        # First try to attach to an existing website lead by phone. This is
+        # important when a student registered on the website before opening
+        # the Telegram Mini App.
+        legacy = None
         if normalized_phone:
-            legacy = (
-                db.query(User)
-                .filter(User.phone == normalized_phone, User.id != live_user.id)
-                .first()
-            )
-            if legacy and legacy.telegram_account is None:
-                self.merge_users(db, source=legacy, destination=live_user, commit=False)
+            legacy = db.query(User).filter(User.phone == normalized_phone).first()
+            if legacy and legacy.telegram_account is not None:
+                raise CanonicalIdentityError("telegram_phone_already_linked")
 
-        if normalized_phone:
-            live_user.phone = normalized_phone
+        if legacy is not None:
+            user = legacy
+            user.full_name = (full_name or user.full_name or "هنرجو")[:100]
+            db.add(TelegramAccount(user_id=user.id, telegram_id=telegram_id, username=username))
+            db.commit()
+            db.refresh(user)
+            return user
 
+        user = User(full_name=(full_name or "هنرجو")[:100], phone=normalized_phone)
+        db.add(user)
+        db.flush()
+        db.add(TelegramAccount(user_id=user.id, telegram_id=telegram_id, username=username))
         db.commit()
-        return live_user
+        db.refresh(user)
+        return user
 
     def merge_users(
         self,
@@ -100,9 +104,6 @@ class CanonicalIdentityService:
         if destination.telegram_account is None:
             raise CanonicalIdentityError("destination_must_be_telegram_linked")
 
-        # A verified destination profile wins; copy only missing identity data.
-        # Release the legacy unique phone first so the destination can claim it
-        # in the same transaction on PostgreSQL and SQLite.
         source_phone = source.phone
         if not destination.phone and source_phone:
             source.phone = None
@@ -113,7 +114,6 @@ class CanonicalIdentityService:
         if not destination.full_name and source.full_name:
             destination.full_name = source.full_name
 
-        # Referral has two user foreign keys and needs collision handling.
         for referral in db.query(Referral).filter(Referral.referrer_id == source.id).all():
             referral.referrer_id = destination.id
         existing_referred = db.query(Referral).filter(Referral.referred_id == destination.id).first()
@@ -124,9 +124,6 @@ class CanonicalIdentityService:
                 {Referral.referred_id: destination.id}, synchronize_session=False
             )
 
-        # Update every mapped table that has a user_id column. This makes future
-        # student-owned tables part of the merge by default instead of silently
-        # stranding records when a new feature is added.
         for table in Base.metadata.tables.values():
             if table.name in {"users", "telegram_accounts", "referrals"} or "user_id" not in table.c:
                 continue
