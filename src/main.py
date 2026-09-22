@@ -244,3 +244,92 @@ async def api_status():
         "api_v1": True,
         "ai_bridge": True,
     })
+
+
+async def _run_bot_polling() -> None:
+    if not bot_enabled:
+        logger.warning("Telegram polling disabled; web/API will continue running")
+        return
+    try:
+        logger.info("Starting Telegram polling")
+        await dp.start_polling(bot)
+    except asyncio.CancelledError:
+        raise
+    except (TelegramConflictError, TelegramUnauthorizedError):
+        logger.exception("Telegram polling stopped because the bot token/session is unavailable")
+    except Exception:
+        logger.exception("Telegram polling stopped unexpectedly")
+
+
+def _initialize_application() -> None:
+    """Run synchronous bootstrapping before the async web/bot loops start."""
+    setup_handlers()
+    ensure_critical_schema()
+
+    db = SessionLocal()
+    try:
+        seed_default_card(db)
+        seed_default_products(db)
+        seed_default_online_courses(db)
+        try:
+            result = auto_configure_ai(db)
+            logger.info("AI auto-configuration completed: %s", result)
+        except Exception:
+            db.rollback()
+            logger.exception("AI auto-configuration failed; application will continue")
+    finally:
+        db.close()
+
+
+async def _serve() -> None:
+    host = os.getenv("HOST", "0.0.0.0")
+    port = int(os.getenv("PORT", "8000"))
+    config = uvicorn.Config(
+        app,
+        host=host,
+        port=port,
+        log_level=os.getenv("LOG_LEVEL", "info").lower(),
+        proxy_headers=True,
+        forwarded_allow_ips="*",
+    )
+    server = uvicorn.Server(config)
+
+    reminder_scheduler = InstallmentReminderScheduler(bot)
+    artistyar_scheduler = ArtistYarPracticeReminderScheduler(bot)
+    model_refresh_scheduler = AIModelRefreshScheduler()
+
+    reminder_scheduler.start()
+    artistyar_scheduler.start()
+    model_refresh_scheduler.start()
+    bot_task = asyncio.create_task(_run_bot_polling(), name="telegram-polling")
+
+    try:
+        logger.info("Starting RahYar web server on %s:%s", host, port)
+        await server.serve()
+    finally:
+        for scheduler in (
+            reminder_scheduler,
+            artistyar_scheduler,
+            model_refresh_scheduler,
+        ):
+            scheduler.stop()
+
+        bot_task.cancel()
+        try:
+            await bot_task
+        except asyncio.CancelledError:
+            pass
+
+        try:
+            await bot.session.close()
+        except Exception:
+            logger.exception("Failed to close Telegram bot session")
+
+
+def main() -> None:
+    _initialize_application()
+    asyncio.run(_serve())
+
+
+if __name__ == "__main__":
+    main()
