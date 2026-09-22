@@ -13,6 +13,7 @@ from pathlib import Path
 from aiogram.exceptions import TelegramConflictError, TelegramUnauthorizedError
 from aiogram.types import MenuButtonWebApp, WebAppInfo
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 import uvicorn
 
@@ -128,8 +129,7 @@ def _validate_telegram_init_data(init_data: str) -> dict:
     auth_date = int(pairs.get("auth_date", "0"))
     if not received_hash or not auth_date:
         raise ValueError("missing_hash_or_auth_date")
-    data_check_string = "
-".join(f"{key}={value}" for key, value in sorted(pairs.items()))
+    data_check_string = "\n".join(f"{key}={value}" for key, value in sorted(pairs.items()))
     calculated_hash = hmac.new(
         _telegram_webapp_secret(bot_token),
         data_check_string.encode(),
