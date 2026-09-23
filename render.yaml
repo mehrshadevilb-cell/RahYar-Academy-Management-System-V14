@@ -48,6 +48,8 @@ services:
       # AI_AGENT_MODEL=...     (or AI_MODEL)
       - key: AI_AGENT_ENABLED
         value: "false"
+      - key: AI_DB_ONLY
+        value: "true"
 
 databases:
   - name: rahyar-db

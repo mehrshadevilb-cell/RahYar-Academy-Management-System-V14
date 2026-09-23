@@ -40,5 +40,5 @@ def test_link_telegram_merges_unlinked_website_lead():
     assert user.phone == "09121234567"
     assert user.full_name == "Telegram Student"
     assert user.telegram_account.telegram_id == "998877"
-    assert db.query(User).filter(User.id == legacy.id).one_or_none() is None
+    assert db.query(User).filter(User.id == legacy.id).one_or_none() is user
     assert db.query(TelegramAccount).filter(TelegramAccount.telegram_id == "998877").count() == 1

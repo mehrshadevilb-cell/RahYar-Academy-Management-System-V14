@@ -319,12 +319,11 @@ class AIProviderRouter:
                 if key and base_url and models:
                     configured.append(AIProvider(name=name, api_key=key, base_url=base_url, models=tuple(models), priority=int(row.get("priority", 100)), provider_type=str(row.get("provider_type", "") or self._infer_provider_type(name, base_url))))
 
-        # Production AI routing is database-only. API credentials and base URLs
-        # are managed in the encrypted ai_providers table so Render environment
-        # variables cannot silently override or inject an unrelated AI route.
-        # AI_PROVIDERS_JSON / AI_* / provider-specific *_API_KEY variables are
-        # intentionally ignored by the runtime router.
-        candidates = db_providers
+        # Production AI routing is database-only. Local and test deployments
+        # may explicitly opt into the environment pool for development parity.
+        # Render sets AI_DB_ONLY=true so environment variables cannot silently
+        # override or inject an unrelated production AI route.
+        candidates = db_providers if self.settings.AI_DB_ONLY else self._merge_providers(db_providers + configured + self._env_providers())
         if not candidates:
             raise AIProviderError("No active AI provider is configured in the database")
 

@@ -56,6 +56,9 @@ def _build_id() -> str:
 app = FastAPI(
     title="RahYar Academy Management System",
     description="Telegram bot + Web + JSON API + AI bridge sharing one database",
+    docs_url="/docs" if settings.DEBUG else None,
+    redoc_url="/redoc" if settings.DEBUG else None,
+    openapi_url="/openapi.json" if settings.DEBUG else None,
 )
 
 app.add_middleware(RequestIdMiddleware)
