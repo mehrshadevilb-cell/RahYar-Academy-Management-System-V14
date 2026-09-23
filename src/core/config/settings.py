@@ -71,6 +71,7 @@ class Settings(BaseSettings):
     AI2_MODEL: str | None = None
     AI_FALLBACK_MODEL: str = "gpt-5.5"
     AI_PROVIDERS_JSON: str = ""
+    AI_DB_ONLY: bool = True
 
     # Broad provider env catalog. Secrets stay in Render; never commit values.
     OPENAI_API_KEY: str | None = None
