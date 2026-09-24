@@ -77,6 +77,13 @@ app.include_router(api_v1_router)
 app.include_router(api_ai_router)
 
 
+# Keep the bare Render/root probe intentionally tiny. The storefront is served
+# by /products, /classes and /go-bot; / is a lightweight service entrypoint.
+@app.get("/", include_in_schema=False)
+async def root_entrypoint():
+    return Response(content="RahYar OK", media_type="text/plain", status_code=200)
+
+
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
     logger.exception("Unhandled error on %s %s", request.method, request.url.path)
@@ -88,10 +95,6 @@ async def health():
     report = await build_health_report(_build_id())
     return JSONResponse(report)
 
-
-@app.api_route("/", methods=["HEAD"])
-async def head_root():
-    return Response(status_code=200)
 
 
 def _telegram_webapp_secret(bot_token: str) -> bytes:
