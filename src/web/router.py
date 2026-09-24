@@ -77,27 +77,28 @@ def _safe_list_classes(db: Session):
 
 
 @router.get("/", response_class=HTMLResponse)
-async def home(request: Request, db: Session = Depends(get_db)):
-    try:
-        products = _safe_list_products(db)
-        classes = _safe_list_classes(db)
-        return _render(request, "home.html", products=products, classes=classes)
-    except Exception:
-        logger.exception("Storefront home failed; serving minimal fallback")
-        bot_link = _bot_link() or "#"
-        html = f"""<!DOCTYPE html>
-<html lang="fa" dir="rtl">
-<head><meta charset="utf-8"/><title>{settings.SITE_NAME}</title>
-<style>body{{font-family:Tahoma,sans-serif;background:#0f1419;color:#f2f5f8;padding:2rem;line-height:1.8}}
-a{{color:#3d9cf0}}</style></head>
-<body>
-<h1>{settings.SITE_NAME}</h1>
-<p>{settings.SITE_TAGLINE}</p>
-<p><a href="/products">دوره‌ها</a> · <a href="/classes">کلاس آنلاین</a>
-· <a href="{bot_link}" target="_blank" rel="noopener">ربات تلگرام</a></p>
-<p style="color:#9aa8b8">فهرست موقتاً در دسترس نیست؛ از ربات استفاده کنید.</p>
-</body></html>"""
-        return HTMLResponse(content=html, status_code=200)
+async def home(request: Request):
+    """Serve a deliberately small landing page.
+
+    Full storefront data remains available at /products and /classes.
+    """
+    bot_link = _bot_link() or "/go-bot"
+    site_name = settings.SITE_NAME
+    tagline = settings.SITE_TAGLINE
+    html = f"""<!doctype html>
+<html lang="fa" dir="rtl"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{site_name}</title>
+<style>body{{font-family:Tahoma,sans-serif;background:#0f1419;color:#f2f5f8;max-width:720px;margin:auto;padding:24px;line-height:1.8}}a{{display:inline-block;margin:.35rem;padding:.55rem .8rem;color:#fff;background:#246fa8;border-radius:8px;text-decoration:none}}</style>
+</head><body><h1>{site_name}</h1><p>{tagline}</p>
+<nav><a href="/products">دوره‌ها</a><a href="/classes">کلاس آنلاین</a><a href="{bot_link}" target="_blank" rel="noopener">تلگرام</a></nav>
+<div id="telegram-user"></div>
+<script>
+(()=>{{const t=window.Telegram&&window.Telegram.WebApp;if(!t||!t.initData)return;
+t.ready();t.expand();fetch("/api/v1/telegram/webapp-auth",{{method:"POST",credentials:"include",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{initData:t.initData}})}}).then(r=>r.json()).then(x=>{{if(x.ok&&x.user)document.getElementById("telegram-user").textContent="👤 "+x.user.fullName+" · "+x.user.studentNumber}}).catch(()=>{{}});
+}})();
+</script></body></html>"""
+    return HTMLResponse(content=html, status_code=200)
 
 
 @router.get("/products", response_class=HTMLResponse)
