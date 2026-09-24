@@ -254,6 +254,26 @@ async def _run_bot_polling() -> None:
         logger.warning("Telegram polling disabled; web/API will continue running")
         return
     try:
+        # Polling and webhook are mutually exclusive on a single bot token.
+        # ArtistYar channel-ingest may have registered a webhook on the same
+        # token; clear it so private-message replies work again. Prefer a
+        # dedicated TELEGRAM_PLUGIN_BOT_TOKEN on ArtistYar when both services
+        # must run.
+        try:
+            info = await bot.get_webhook_info()
+            if info and getattr(info, "url", None):
+                logger.warning(
+                    "Telegram webhook was set to %s (pending_update_count=%s); deleting so polling can start",
+                    info.url,
+                    getattr(info, "pending_update_count", None),
+                )
+                await bot.delete_webhook(drop_pending_updates=False)
+                logger.info("Telegram webhook deleted; starting long polling")
+            else:
+                logger.info("Telegram webhook empty; starting long polling")
+        except Exception:
+            logger.exception("Failed to inspect/delete Telegram webhook; attempting polling anyway")
+
         logger.info("Starting Telegram polling")
         await dp.start_polling(bot)
     except asyncio.CancelledError:
