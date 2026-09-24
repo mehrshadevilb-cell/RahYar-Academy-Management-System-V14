@@ -1,6 +1,8 @@
 import json
 import urllib.error
 
+import pytest
+
 from src.ai.provider_router import AIProvider, AIProviderRouter
 from src.core.config.provider_url_safety import looks_like_api_key, validate_provider_base_url
 from src.services.provider_model_health_service import ProviderModelHealthService
