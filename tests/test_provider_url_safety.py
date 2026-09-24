@@ -19,47 +19,45 @@ def test_missing_and_invalid_base_urls_are_non_throwing():
 
 
 def test_models_discovery_failure_is_isolated_and_does_not_raise(monkeypatch):
-    router = AIProviderRouter()
-    service = ProviderModelHealthService(router)
+    router = AIProviderRouter(); service = ProviderModelHealthService(router)
     provider = AIProvider("broken", "secret", "gsk_bad/models", ("model",), priority=1)
     models, status = service.discover(provider, timeout_seconds=5)
-    assert models == []
-    assert status["status"] == "invalid_base_url"
+    assert models == [] and status["status"] == "invalid_base_url"
 
 
 def test_discovery_timeout_is_isolated(monkeypatch):
-    router = AIProviderRouter()
-    service = ProviderModelHealthService(router)
+    router = AIProviderRouter(); service = ProviderModelHealthService(router)
     provider = AIProvider("slow", "secret", "https://slow.example/v1", (), priority=1)
-    def fail(*args, **kwargs):
-        raise TimeoutError("timed out")
-    monkeypatch.setattr("urllib.request.urlopen", fail)
+    monkeypatch.setattr("urllib.request.urlopen", lambda *args, **kwargs: (_ for _ in ()).throw(TimeoutError("timed out")))
     models, status = service.discover(provider, timeout_seconds=5)
-    assert models == []
-    assert status["status"].startswith("discovery_failed:")
+    assert models == [] and status["status"].startswith("discovery_failed:")
 
 
 def test_http_failures_are_quarantined(monkeypatch):
-    router = AIProviderRouter()
-    service = ProviderModelHealthService(router)
+    router = AIProviderRouter(); service = ProviderModelHealthService(router)
     provider = AIProvider("broken", "secret-key", "https://broken.example/v1", ("model",), priority=1)
     def fail(*args, **kwargs):
         raise urllib.error.HTTPError("https://broken.example/v1/models", 429, "rate", {"Retry-After": "12"}, None)
     monkeypatch.setattr("urllib.request.urlopen", fail)
     models, status = service.discover(provider, timeout_seconds=5)
-    assert models == []
-    assert status["status"] == "http_429"
+    assert models == [] and status["status"] == "http_429"
     assert router.cooldown_snapshot()["broken:__discovery__"] > 0
 
 
+@pytest.mark.parametrize("code", [401, 429, 500, 502, 503])
+def test_discovery_http_401_429_and_5xx_are_isolated(monkeypatch, code):
+    router = AIProviderRouter(); service = ProviderModelHealthService(router)
+    provider = AIProvider("broken", "secret", "https://broken.example/v1", (), priority=1)
+    monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: (_ for _ in ()).throw(urllib.error.HTTPError("https://broken.example/v1/models", code, "failure", {}, None)))
+    models, status = service.discover(provider, timeout_seconds=5)
+    assert models == [] and status["http_status"] == code
+
+
 def test_no_api_key_leak_in_discovery_errors(monkeypatch):
-    router = AIProviderRouter()
-    service = ProviderModelHealthService(router)
+    router = AIProviderRouter(); service = ProviderModelHealthService(router)
     secret = "gsk_super_secret_value_123456789"
     provider = AIProvider("broken", secret, "https://broken.example/v1", (), priority=1)
-    def fail(*args, **kwargs):
-        raise urllib.error.URLError(f"request failed with {secret}")
-    monkeypatch.setattr("urllib.request.urlopen", fail)
+    monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: (_ for _ in ()).throw(urllib.error.URLError(f"request failed with {secret}")))
     _, status = service.discover(provider, timeout_seconds=5)
     assert secret not in json.dumps(status)
 
@@ -72,6 +70,5 @@ def test_invalid_provider_is_skipped_before_network(monkeypatch):
     from src.core.config.settings import get_settings
     get_settings.cache_clear()
     providers = AIProviderRouter().providers()
-    assert all(p.name != "bad" for p in providers)
-    assert any(p.name == "good" for p in providers)
+    assert all(p.name != "bad" for p in providers) and any(p.name == "good" for p in providers)
     get_settings.cache_clear()
