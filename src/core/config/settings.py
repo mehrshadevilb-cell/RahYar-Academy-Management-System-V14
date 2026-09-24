@@ -4,6 +4,8 @@ from urllib.parse import urlparse
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from src.core.config.provider_url_safety import validate_provider_base_url
+
 
 def normalize_database_url(url: str) -> str:
     if not url:
@@ -18,9 +20,9 @@ def normalize_database_url(url: str) -> str:
 
 
 def normalize_openai_compatible_base_url(url: str) -> str:
-    raw = (url or "").strip().rstrip("/")
+    raw = validate_provider_base_url((url or "").strip())
     if not raw:
-        return "https://api.openai.com/v1"
+        return ""
     for suffix in ("/chat/completions", "/v1/chat/completions", "/completions"):
         if raw.lower().endswith(suffix):
             raw = raw[: -len(suffix)].rstrip("/")
@@ -75,9 +77,6 @@ class Settings(BaseSettings):
     GOOGLE_API_KEY: str | None = None
     BYTEZ_API_KEY: str | None = None
     DAHL_API_KEY: str | None = None
-
-    # Dedicated provider environment variables. Model names are intentionally
-    # configurable so the router never guesses a provider-specific model id.
     ANTHROPIC_API_KEY: str | None = None
     ANTHROPIC_BASE_URL: str = "https://api.anthropic.com/v1"
     ANTHROPIC_MODEL: str | None = None
@@ -130,7 +129,8 @@ class Settings(BaseSettings):
 
     @property
     def effective_ai_base_url(self) -> str:
-        return normalize_openai_compatible_base_url(self.AI_BASE_URL or self.AI_AGENT_BASE_URL or "https://api.openai.com/v1")
+        candidate = normalize_openai_compatible_base_url(self.AI_BASE_URL or self.AI_AGENT_BASE_URL or "")
+        return candidate or "https://api.openai.com/v1"
 
     @property
     def effective_ai_model(self) -> str:
@@ -147,13 +147,12 @@ class Settings(BaseSettings):
 
     @property
     def effective_chat_base_url(self) -> str:
-        chat = (self.CHAT_ASSISTANT_BASE_URL or "").strip()
-        default_openai = {"https://api.openai.com/v1", "https://api.openai.com", ""}
-        if chat.rstrip("/") not in default_openai:
-            return normalize_openai_compatible_base_url(chat)
+        chat = normalize_openai_compatible_base_url(self.CHAT_ASSISTANT_BASE_URL or "")
+        if chat and chat.rstrip("/") != "https://api.openai.com/v1":
+            return chat
         if self.AI_BASE_URL or self.AI_AGENT_BASE_URL:
             return self.effective_ai_base_url
-        return normalize_openai_compatible_base_url(chat or "https://api.openai.com/v1")
+        return chat or "https://api.openai.com/v1"
 
     @property
     def effective_chat_model(self) -> str:
