@@ -10,7 +10,7 @@ from src.services.ai.provider_bootstrap import AIProviderBootstrapService
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_INTERVAL_SECONDS = 6 * 60 * 60
+DEFAULT_INTERVAL_SECONDS = 30 * 60
 
 
 class AIModelRefreshScheduler:
