@@ -112,8 +112,13 @@ async def _group_message_targets_bot(message: Message) -> bool:
                 except Exception:
                     _BOT_USERNAME = ""
             username = _BOT_USERNAME
-            if username and text[entity.offset:entity.offset + entity.length].casefold() == f"@{username}":
-                return True
+            if username:
+                encoded = text.encode("utf-16-le")
+                start = entity.offset * 2
+                end = start + entity.length * 2
+                mentioned = encoded[start:end].decode("utf-16-le", errors="ignore").casefold()
+                if mentioned == f"@{username}":
+                    return True
 
     return False
 
