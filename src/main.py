@@ -7,7 +7,6 @@ import hmac
 import base64
 import json
 import time
-import uuid
 from urllib.parse import parse_qsl
 from pathlib import Path
 
