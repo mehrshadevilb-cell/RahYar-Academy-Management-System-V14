@@ -7,6 +7,7 @@ import hmac
 import base64
 import json
 import time
+import uuid
 from urllib.parse import parse_qsl
 from pathlib import Path
 
@@ -259,39 +260,116 @@ async def api_status():
     })
 
 
+
+async def _acquire_telegram_polling_lock():
+    """Ensure only one RahYar process owns Telegram long polling at a time."""
+    redis_url = (settings.REDIS_URL or "").strip()
+    if not redis_url:
+        logger.warning("REDIS_URL is not configured; Telegram polling cannot use a distributed lock")
+        return None
+    try:
+        from redis.asyncio import Redis
+    except Exception:
+        logger.exception("Redis client is unavailable; Telegram polling disabled")
+        return None
+    redis = Redis.from_url(redis_url, decode_responses=True)
+    lock = redis.lock("rahyar:telegram:polling", timeout=45, blocking=False)
+    try:
+        acquired = await lock.acquire()
+    except Exception:
+        await redis.aclose()
+        logger.exception("Could not acquire Telegram polling lock; polling will remain disabled")
+        return None
+    if not acquired:
+        await redis.aclose()
+        logger.warning("Another RahYar instance owns Telegram polling; this instance will wait")
+        return None
+    return redis, lock
+
+
+async def _release_telegram_polling_lock(lock_state) -> None:
+    if not lock_state:
+        return
+    redis, lock = lock_state
+    try:
+        await lock.release()
+    except Exception:
+        logger.exception("Failed to release Telegram polling lock")
+    finally:
+        try:
+            await redis.aclose()
+        except Exception:
+            logger.exception("Failed to close Telegram polling lock Redis connection")
+
+
+async def _renew_telegram_polling_lock(lock_state) -> None:
+    if not lock_state:
+        return
+    _, lock = lock_state
+    while True:
+        try:
+            await asyncio.sleep(15)
+            await lock.extend(45, replace_ttl=True)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Telegram polling lock renewal failed; polling will stop")
+            return
+
+
 async def _run_bot_polling() -> None:
     if not bot_enabled:
         logger.warning("Telegram polling disabled; web/API will continue running")
         return
-    try:
-        # Polling and webhook are mutually exclusive on a single bot token.
-        # ArtistYar channel-ingest may have registered a webhook on the same
-        # token; clear it so private-message replies work again. Prefer a
-        # dedicated TELEGRAM_PLUGIN_BOT_TOKEN on ArtistYar when both services
-        # must run.
-        try:
-            info = await bot.get_webhook_info()
-            if info and getattr(info, "url", None):
-                logger.warning(
-                    "Telegram webhook was set to %s (pending_update_count=%s); deleting so polling can start",
-                    info.url,
-                    getattr(info, "pending_update_count", None),
-                )
-                await bot.delete_webhook(drop_pending_updates=False)
-                logger.info("Telegram webhook deleted; starting long polling")
-            else:
-                logger.info("Telegram webhook empty; starting long polling")
-        except Exception:
-            logger.exception("Failed to inspect/delete Telegram webhook; attempting polling anyway")
 
-        logger.info("Starting Telegram polling")
-        await dp.start_polling(bot)
-    except asyncio.CancelledError:
-        raise
-    except (TelegramConflictError, TelegramUnauthorizedError):
-        logger.exception("Telegram polling stopped because the bot token/session is unavailable")
-    except Exception:
-        logger.exception("Telegram polling stopped unexpectedly")
+    while True:
+        lock_state = await _acquire_telegram_polling_lock()
+        if not lock_state:
+            await asyncio.sleep(15)
+            continue
+
+        renew_task = asyncio.create_task(
+            _renew_telegram_polling_lock(lock_state),
+            name="telegram-polling-lock-renewal",
+        )
+        try:
+            try:
+                info = await bot.get_webhook_info()
+                if info and getattr(info, "url", None):
+                    logger.warning(
+                        "Telegram webhook was set to %s (pending_update_count=%s); deleting so polling can start",
+                        info.url,
+                        getattr(info, "pending_update_count", None),
+                    )
+                    await bot.delete_webhook(drop_pending_updates=False)
+                    logger.info("Telegram webhook deleted; starting long polling")
+                else:
+                    logger.info("Telegram webhook empty; starting long polling")
+            except Exception:
+                logger.exception("Failed to inspect/delete Telegram webhook; attempting polling anyway")
+
+            logger.info("Starting Telegram polling")
+            await dp.start_polling(bot)
+            return
+        except asyncio.CancelledError:
+            raise
+        except TelegramUnauthorizedError:
+            logger.exception("Telegram token is invalid; polling will not retry")
+            return
+        except TelegramConflictError:
+            logger.exception("Telegram polling conflict; another process owns this bot token")
+            await asyncio.sleep(30)
+        except Exception:
+            logger.exception("Telegram polling stopped unexpectedly; retrying")
+            await asyncio.sleep(5)
+        finally:
+            renew_task.cancel()
+            try:
+                await renew_task
+            except asyncio.CancelledError:
+                pass
+            await _release_telegram_polling_lock(lock_state)
+
 
 
 def _initialize_application() -> None:
