@@ -4,7 +4,7 @@ import asyncio
 
 from aiogram import F, Router
 from aiogram.filters import StateFilter
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, ReplyKeyboardMarkup, KeyboardButton, MessageEntityType
 
 from src.services.chat_assistant_service import ChatAssistantError, ChatAssistantService
 from src.services.profile_service import ProfileService
@@ -30,6 +30,7 @@ _MAX_RECENT_QUESTIONS = 200
 # Show the visible "analyzing" line only when the model is truly slow.
 _SLOW_RESPONSE_SECONDS = 1.5
 _MAX_ANSWER_CHUNK = 3900
+_BOT_USERNAME: str | None = None
 _CASUAL_MESSAGES = {
     "سلام", "درود", "خوبی", "مرسی", "ممنون", "خداحافظ", "bye", "hi", "hello", "thanks",
 }
@@ -86,6 +87,37 @@ def _chunk_answer(text: str, size: int = _MAX_ANSWER_CHUNK) -> list[str]:
     return [text[i : i + size] for i in range(0, len(text), size)]
 
 
+async def _group_message_targets_bot(message: Message) -> bool:
+    """Only let the AI assistant answer group messages when explicitly addressed."""
+    chat_type = getattr(message.chat, "type", "")
+    if chat_type not in {"group", "supergroup"}:
+        return True
+
+    bot_id = getattr(message.bot, "id", None)
+    reply = message.reply_to_message
+    if reply and reply.from_user and bot_id and reply.from_user.id == bot_id:
+        return True
+
+    text = message.text or ""
+    for entity in message.entities or []:
+        if entity.type == MessageEntityType.TEXT_MENTION and entity.user:
+            if bot_id and entity.user.id == bot_id:
+                return True
+        if entity.type == MessageEntityType.MENTION:
+            global _BOT_USERNAME
+            if _BOT_USERNAME is None:
+                try:
+                    me = await message.bot.get_me()
+                    _BOT_USERNAME = (me.username or "").casefold()
+                except Exception:
+                    _BOT_USERNAME = ""
+            username = _BOT_USERNAME
+            if username and text[entity.offset:entity.offset + entity.length].casefold() == f"@{username}":
+                return True
+
+    return False
+
+
 def _remember_question(sent_message: Message | None, telegram_id: str, question: str) -> None:
     message_id = getattr(sent_message, "message_id", None)
     if message_id is None:
@@ -137,6 +169,9 @@ async def chat_intro(message: Message):
 
 @router.message(StateFilter(None), F.text)
 async def chat_fallback(message: Message, db):
+    if not await _group_message_targets_bot(message):
+        return
+
     user = profile_service.get_profile(db=db, telegram_id=str(message.from_user.id))
     if not user:
         await message.answer("❌ اول /start رو بزن.")
