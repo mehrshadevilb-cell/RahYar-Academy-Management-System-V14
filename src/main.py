@@ -94,7 +94,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 @app.api_route("/health", methods=["GET", "HEAD"])
 async def health():
     report = await build_health_report(_build_id())
-    return JSONResponse(report)
+    return JSONResponse(report, status_code=200 if report.get("ok") else 503)
 
 
 
