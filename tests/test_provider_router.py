@@ -143,3 +143,45 @@ def test_anthropic_chat_uses_messages_api(monkeypatch):
     assert captured["body"]["max_tokens"] == 20
     assert captured["body"]["system"] == "system"
     assert data["content"][0]["text"] == "hello"
+
+
+def test_db_provider_key_is_never_used_as_base_url_and_groq_is_repaired(monkeypatch):
+    monkeypatch.setenv("AI_PROVIDERS_JSON", "[]")
+    _clear_settings()
+    router = AIProviderRouter()
+
+    class Model:
+        model_id = "llama-3.1-8b-instant"
+        is_active = True
+        is_default = True
+        context_window = 8192
+
+    class Provider:
+        name = "Groq"
+        base_url = "gsk_secret-value"
+        provider_type = "openai_compatible"
+        api_key_encrypted = "encrypted"
+        is_active = True
+        models = [Model()]
+
+    class DB:
+        def query(self, model):
+            class Query:
+                def filter(self, *args):
+                    return self
+                def all(self):
+                    return [Provider()]
+            return Query()
+        def commit(self):
+            pass
+        def rollback(self):
+            pass
+        def close(self):
+            pass
+
+    monkeypatch.setattr("src.database.session.SessionLocal", lambda: DB())
+    monkeypatch.setattr("src.services.ai.credential_crypto.decrypt_api_key", lambda _: "gsk_real-secret")
+    providers = router._from_database()
+    assert providers[0].base_url == "https://api.groq.com/openai/v1"
+    assert not providers[0].base_url.startswith("gsk_")
+    _clear_settings()
