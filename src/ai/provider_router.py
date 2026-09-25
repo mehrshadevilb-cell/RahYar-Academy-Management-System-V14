@@ -52,6 +52,36 @@ class AIProviderRouter:
     def _normalize_base_url(value: str) -> str:
         return normalize_openai_compatible_base_url((value or "").strip())
 
+    @classmethod
+    def _repairable_base_url(cls, name: str, api_key: str, provider_type: str, base_url: str) -> str:
+        """Validate persisted endpoint and repair known key-as-URL corruption."""
+        raw = (base_url or "").strip()
+        parsed = urlparse(raw)
+        if parsed.scheme in {"http", "https"} and parsed.netloc:
+            return cls._normalize_base_url(raw)
+
+        lowered = f"{name} {provider_type} {api_key[:12]}".lower()
+        known = (
+            ("gsk_", "https://api.groq.com/openai/v1"),
+            ("sk-ant-", "https://api.anthropic.com/v1"),
+            ("AIza", "https://generativelanguage.googleapis.com/v1beta"),
+            ("groq", "https://api.groq.com/openai/v1"),
+            ("anthropic", "https://api.anthropic.com/v1"),
+            ("google", "https://generativelanguage.googleapis.com/v1beta"),
+            ("gemini", "https://generativelanguage.googleapis.com/v1beta"),
+            ("openrouter", "https://openrouter.ai/api/v1"),
+            ("deepseek", "https://api.deepseek.com/v1"),
+            ("mistral", "https://api.mistral.ai/v1"),
+            ("cerebras", "https://api.cerebras.ai/v1"),
+            ("together", "https://api.together.xyz/v1"),
+            ("fireworks", "https://api.fireworks.ai/inference/v1"),
+            ("xai", "https://api.x.ai/v1"),
+        )
+        for marker, endpoint in known:
+            if marker.lower() in lowered:
+                return endpoint
+        return ""
+
     @staticmethod
     def _infer_provider_type(name: str, base_url: str) -> str:
         host = (urlparse(base_url).hostname or "").lower()
@@ -126,10 +156,23 @@ class AIProviderRouter:
                         api_key = decrypt_api_key(provider.api_key_encrypted)
                     except Exception:
                         continue
+
+                    provider_type = provider.provider_type or self._infer_provider_type(provider.name, provider.base_url)
+                    base_url = self._repairable_base_url(provider.name, api_key, provider_type, provider.base_url)
+                    if not base_url:
+                        continue
+                    normalized_stored = self._normalize_base_url(provider.base_url)
+                    if base_url != normalized_stored:
+                        try:
+                            provider.base_url = base_url
+                            db.commit()
+                        except Exception:
+                            db.rollback()
+
                     models = tuple(m.model_id for m in active_models if not self._is_stale_model_id(m.model_id))
                     if not models:
                         continue
-                    result.append(AIProvider(name=provider.name, api_key=api_key, base_url=self._normalize_base_url(provider.base_url), models=models, priority=index, provider_type=provider.provider_type or self._infer_provider_type(provider.name, provider.base_url)))
+                    result.append(AIProvider(name=provider.name, api_key=api_key, base_url=base_url, models=models, priority=index, provider_type=provider_type))
                 return result
             finally:
                 db.close()
@@ -603,6 +646,47 @@ class AIProviderRouter:
                         continue
                     self._model_cooldown_until[model_key] = time.time() + max(exc.retry_after, 30)
                     break
+
+        if attempted:
+            try:
+                from src.database.session import SessionLocal
+                from src.services.ai.model_service import AIModelService
+                refresh_db = SessionLocal()
+                try:
+                    AIModelService(refresh_db).sync_all_active_providers()
+                finally:
+                    refresh_db.close()
+                refreshed = self._ordered_candidates(self.providers())
+                for provider, model in refreshed:
+                    model_key = f"{provider.name}:{model}"
+                    if max(self._cooldown_until.get(provider.name, 0), self._model_cooldown_until.get(model_key, 0)) > time.time():
+                        continue
+                    try:
+                        data = self._request(provider, model, messages, dict(kwargs), timeout_seconds)
+                        self._model_cooldown_until.pop(model_key, None)
+                        data["_rahyar_provider"] = provider.name
+                        data["_rahyar_model"] = model
+                        data["_rahyar_is_free"] = self._is_free_model(model)
+                        return data
+                    except urllib.error.HTTPError as exc:
+                        body = ""
+                        try:
+                            body = exc.read().decode("utf-8", errors="replace")[:1000]
+                        except Exception:
+                            pass
+                        retry_after = self._retry_after(exc.headers, body)
+                        if self._is_rate_limited(exc.code, body):
+                            self._model_cooldown_until[model_key] = time.time() + min(retry_after or 300, 86400)
+                        elif exc.code in {400, 404}:
+                            self._model_cooldown_until[model_key] = time.time() + 3600
+                        elif exc.code >= 500:
+                            self._model_cooldown_until[model_key] = time.time() + 60
+                    except (urllib.error.URLError, TimeoutError, OSError):
+                        self._model_cooldown_until[model_key] = time.time() + 30
+                    except AIProviderError as exc:
+                        self._model_cooldown_until[model_key] = time.time() + max(exc.retry_after, 30)
+            except Exception:
+                pass
 
         if last:
             raise last
