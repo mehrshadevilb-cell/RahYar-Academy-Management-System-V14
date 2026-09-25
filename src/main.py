@@ -152,7 +152,10 @@ def _validate_telegram_init_data(init_data: str) -> dict:
 
 @app.post("/api/v1/telegram/webapp-auth")
 async def telegram_webapp_auth(request: Request):
-    content_length = int(request.headers.get("content-length") or 0)
+    try:
+        content_length = int(request.headers.get("content-length") or 0)
+    except (TypeError, ValueError):
+        content_length = 0
     if content_length > MAX_TELEGRAM_WEBAPP_AUTH_BODY_BYTES:
         return JSONResponse({"ok": False, "error": "telegram_init_data_too_large"}, status_code=413)
     body = await request.json()
