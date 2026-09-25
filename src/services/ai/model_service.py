@@ -8,6 +8,7 @@ from src.database.models.ai_model import AIModel
 from src.database.models.ai_provider import AIProvider
 from src.integrations.ai.registry import ProviderRegistry
 from src.services.ai.credential_crypto import decrypt_api_key
+from src.core.config.settings import get_settings
 
 
 class AIModelService:
@@ -55,9 +56,32 @@ class AIModelService:
         if not provider.is_active:
             raise ValueError("AI provider is inactive")
         client = ProviderRegistry.get_client(provider, decrypt_api_key(provider.api_key_encrypted))
-        discovered = self._run_async(client.list_models())
+        discovery_error: Exception | None = None
+        try:
+            discovered = self._run_async(client.list_models())
+        except Exception as exc:
+            discovery_error = exc
+            discovered = []
+
         if not isinstance(discovered, list):
-            raise ValueError("AI provider returned an invalid model discovery payload")
+            discovered = []
+
+        # Some gateways (notably Bytez) can reject their catalog endpoint even
+        # while a configured model is callable. Keep that explicit model as a
+        # temporary runtime candidate; the normal health probe/router will still
+        # reject it immediately if the credential or model is actually unusable.
+        if not discovered:
+            configured_model = str(
+                getattr(get_settings(), f"{provider.name.upper().replace('-', '_')}_MODEL", "") or ""
+            ).strip()
+            if configured_model:
+                discovered = [{
+                    "model_id": configured_model,
+                    "display_name": configured_model,
+                    "raw_metadata": {"discovery_fallback": True},
+                }]
+            elif discovery_error is not None:
+                raise discovery_error
 
         valid_items: list[dict] = []
         for item in discovered:
