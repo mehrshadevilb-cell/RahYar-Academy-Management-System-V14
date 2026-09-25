@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import hmac
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -42,9 +43,11 @@ def _require_ai_bridge_key(x_rahyar_ai_key: str | None = Header(default=None)) -
     secret = (os.getenv("RAHYAR_AI_BRIDGE_SECRET") or "").strip()
     if not secret:
         raise HTTPException(status_code=503, detail="ai_bridge_not_configured")
-    if not x_rahyar_ai_key or x_rahyar_ai_key != secret:
+    if not x_rahyar_ai_key or not hmac.compare_digest(x_rahyar_ai_key, secret):
         raise HTTPException(status_code=401, detail="invalid_ai_bridge_key")
 
+
+MAX_ASSISTANT_BODY_BYTES = 256 * 1024
 
 class AssistantIn(BaseModel):
     message: str = Field(min_length=1, max_length=1000)
@@ -89,6 +92,9 @@ async def assistant_chat(
     _: None = Depends(_require_ai_bridge_key),
 ):
     """ArtistYar website chat using the exact Telegram read-only assistant stack."""
+    content_length = int(request.headers.get("content-length") or 0)
+    if content_length > MAX_ASSISTANT_BODY_BYTES:
+        raise HTTPException(status_code=413, detail="assistant_request_too_large")
     if not settings.CHAT_ASSISTANT_ENABLED:
         raise HTTPException(status_code=503, detail="assistant_disabled")
 
