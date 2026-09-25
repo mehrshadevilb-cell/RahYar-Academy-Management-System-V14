@@ -38,6 +38,7 @@ from src.web.router import router as storefront_router
 
 settings = get_settings()
 logger = get_logger("rahyar.main")
+MAX_TELEGRAM_WEBAPP_AUTH_BODY_BYTES = 32 * 1024
 
 
 def _build_id() -> str:
@@ -151,6 +152,9 @@ def _validate_telegram_init_data(init_data: str) -> dict:
 
 @app.post("/api/v1/telegram/webapp-auth")
 async def telegram_webapp_auth(request: Request):
+    content_length = int(request.headers.get("content-length") or 0)
+    if content_length > MAX_TELEGRAM_WEBAPP_AUTH_BODY_BYTES:
+        return JSONResponse({"ok": False, "error": "telegram_init_data_too_large"}, status_code=413)
     body = await request.json()
     init_data = str(body.get("initData") or "").strip()
     if not init_data:
