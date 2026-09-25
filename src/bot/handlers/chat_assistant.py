@@ -4,7 +4,7 @@ import asyncio
 
 from aiogram import F, Router
 from aiogram.filters import StateFilter
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, ReplyKeyboardMarkup, KeyboardButton, MessageEntityType
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, ReplyKeyboardMarkup, KeyboardButton
 
 from src.services.chat_assistant_service import ChatAssistantError, ChatAssistantService
 from src.services.profile_service import ProfileService
@@ -100,10 +100,10 @@ async def _group_message_targets_bot(message: Message) -> bool:
 
     text = message.text or ""
     for entity in message.entities or []:
-        if entity.type == MessageEntityType.TEXT_MENTION and entity.user:
+        if entity.type == "text_mention" and entity.user:
             if bot_id and entity.user.id == bot_id:
                 return True
-        if entity.type == MessageEntityType.MENTION:
+        if entity.type == "mention":
             global _BOT_USERNAME
             if _BOT_USERNAME is None:
                 try:
