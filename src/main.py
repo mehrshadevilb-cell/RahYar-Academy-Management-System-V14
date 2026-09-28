@@ -412,6 +412,7 @@ async def _serve() -> None:
     reminder_scheduler.start()
     artistyar_scheduler.start()
     model_refresh_scheduler.start()
+    ai_agent_knowledge.start()
     bot_task = asyncio.create_task(_run_bot_polling(), name="telegram-polling")
 
     try:
@@ -424,6 +425,8 @@ async def _serve() -> None:
             model_refresh_scheduler,
         ):
             scheduler.stop()
+
+        await ai_agent_knowledge.stop()
 
         bot_task.cancel()
         try:
