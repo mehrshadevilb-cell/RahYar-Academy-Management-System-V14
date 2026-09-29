@@ -30,11 +30,11 @@ assistant = ChatAssistantService()
 
 
 def _require_api_key(x_rahyar_key: str | None = Header(default=None)) -> None:
-    """Protect diagnostics when WEB_API_SECRET is configured."""
-    secret = (os.getenv("WEB_API_SECRET") or "").strip()
+    """Protect AI diagnostics with the documented admin key; fail closed when unset."""
+    secret = (os.getenv("WEB_API_SECRET") or os.getenv("WEB_ADMIN_API_KEY") or "").strip()
     if not secret:
-        return
-    if not x_rahyar_key or x_rahyar_key != secret:
+        raise HTTPException(status_code=503, detail="web_admin_api_key_not_configured")
+    if not x_rahyar_key or not hmac.compare_digest(x_rahyar_key, secret):
         raise HTTPException(status_code=401, detail="invalid_api_key")
 
 
