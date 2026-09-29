@@ -1,6 +1,6 @@
 import pytest
 
-from aiogram.types import MessageEntity, MessageEntityType
+from aiogram.types import MessageEntity
 
 from src.bot.handlers.chat_assistant import _group_message_targets_bot
 
@@ -53,7 +53,7 @@ async def test_group_message_answers_when_replied_to_bot():
 async def test_group_message_answers_on_username_mention():
     message = _Message(
         text="سلام @RahYarBot اینو توضیح بده",
-        entities=[MessageEntity(type=MessageEntityType.MENTION, offset=5, length=9)],
+        entities=[MessageEntity(type="mention", offset=5, length=10)],
     )
     assert await _group_message_targets_bot(message) is True
 
