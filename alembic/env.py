@@ -33,7 +33,9 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-config.set_main_option("sqlalchemy.url", get_settings().DATABASE_URL)
+# ConfigParser treats percent signs as interpolation markers. Escape URL-encoded
+# percent signs here; ConfigParser restores them when sqlalchemy.url is read.
+config.set_main_option("sqlalchemy.url", get_settings().DATABASE_URL.replace("%", "%%"))
 target_metadata = Base.metadata
 
 # PostgreSQL advisory locks are connection-scoped. A fixed application-specific
